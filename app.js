@@ -223,8 +223,15 @@ async function fetchLeadsFromServer(silent = false) {
         // Kanban 100% compartilhado e sincronizado entre todos os atendentes
         const res = await fetch('/api/leads');
         const rows = await res.json();
-        const newLeads = (rows || []).map(r => ({ ...r, column: r.column_id || 'col-entrada' }));
-        
+        const newLeads = (rows || []).map(r => {
+            const column = r.column_id || 'col-entrada';
+            // Mantém a coluna local se esse lead tem um PUT de mudança de coluna ainda em
+            // andamento — essa resposta do GET pode ter sido disparada antes do drag-and-drop
+            // e chegar depois, com dado desatualizado.
+            const pending = pendingColumnUpdates[r.id];
+            return { ...r, column: pending !== undefined ? pending : column };
+        });
+
         if (silent && JSON.stringify(leads) === JSON.stringify(newLeads)) {
             return;
         }
@@ -263,7 +270,14 @@ async function saveLeadToServer(lead) {
     }
 }
 
+// Colunas com PUT em andamento — o polling do Kanban (a cada 5s) busca o board
+// inteiro do servidor e substitui o array "leads" local. Sem essa proteção, uma
+// requisição de polling que já estava em voo antes do drag-and-drop podia responder
+// logo depois com a coluna antiga e "devolver" o card pro lugar de onde ele saiu.
+const pendingColumnUpdates = {};
+
 async function updateLeadColumnOnServer(id, column) {
+    pendingColumnUpdates[id] = column;
     try {
         const res = await fetch(`/api/leads/${id}`, {
             method: 'PUT',
@@ -274,6 +288,9 @@ async function updateLeadColumnOnServer(id, column) {
         if (json.error) console.error(json.error);
     } catch (e) {
         console.error('Erro ao mover lead no servidor', e);
+    } finally {
+        // Só libera se ninguém arrastou o mesmo card de novo enquanto esse PUT rodava.
+        if (pendingColumnUpdates[id] === column) delete pendingColumnUpdates[id];
     }
 }
 
