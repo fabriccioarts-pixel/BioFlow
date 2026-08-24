@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BioFlow - Histórico Financeiro</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Flatpickr -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
+    
+    <link rel="stylesheet" href="style.css?v=3">
+    <style>
+        .table-container {
+            padding: 1.5rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .data-table th, .data-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-main);
+            font-size: 0.9rem;
+        }
+        .data-table th {
+            background: rgba(0,0,0,0.2);
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+        .data-table tbody tr:hover {
+            background: rgba(255,255,255,0.02);
+        }
+        .badge-status {
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .status-pago { background: var(--accent-success); color: white; }
+        .status-pendente { background: var(--accent-danger); color: white; }
+        .status-50 { background: var(--accent-warning); color: black; }
+    </style>
+</head>
+<body>
+    <!-- LOGIN OVERLAY -->
+    <div id="login-overlay" class="modal-overlay active" style="z-index: 9999; background: var(--bg-color); display: flex; align-items: center; justify-content: center;">
+        <div class="modal" style="max-width: 400px; text-align: center;">
+            <h2 style="margin-bottom: 1rem;"><i class="fa-solid fa-lock"></i> Acesso Restrito</h2>
+            <p style="color: var(--text-muted); margin-bottom: 2rem;">Faça login para acessar o CRM</p>
+            
+            <div class="form-group" style="text-align: left;">
+                <label>Usuário</label>
+                <input type="text" id="login-username" placeholder="ex: carol" />
+            </div>
+            <div class="form-group" style="text-align: left;">
+                <label>Senha</label>
+                <input type="password" id="login-password" placeholder="***" />
+            </div>
+            
+            <button class="btn-primary" onclick="performLogin()" style="width: 100%; justify-content: center; margin-top: 1rem;">
+                Entrar
+            </button>
+            <p id="login-error" style="color: var(--accent-danger); margin-top: 1rem; display: none;">Usuário ou senha inválidos.</p>
+        </div>
+    </div>
+
+    <header>
+        <div class="sb-logo">
+            <i class="fa-solid fa-dna"></i>
+            <span style="font-weight: 700; font-size: 15px; color: var(--header-text); margin-left: 8px; letter-spacing: -0.01em;">BioFlow</span>
+        </div>
+        <nav class="tabs-container sb-nav">
+            <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;">
+                <i class="fa-solid fa-briefcase"></i> CRM Vendas
+                <span id="kanban-entrada-badge"
+                    style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('agenda')" id="tab-agenda">
+                <i class="fa-regular fa-calendar-days"></i> Agenda Completa
+            </button>
+            <button class="tab-btn" onclick="switchTab('chat')" id="tab-chat" style="position: relative;">
+                <i class="fa-regular fa-comment-dots"></i> Atendimento
+                <span id="chat-unread-badge"
+                    style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard">
+                <i class="fa-solid fa-chart-line"></i> Dashboard
+            </button>
+            <button class="tab-btn" onclick="switchTab('campanhas')" id="tab-campanhas">
+                <i class="fa-solid fa-bullhorn"></i> Campanhas
+            </button>
+
+            <div class="dropdown">
+                <button class="tab-btn" id="tab-relacionamento-main">
+                    <i class="fa-regular fa-heart"></i> Relacionamento
+                    <i class="fa-solid fa-chevron-down" style="font-size: 0.7rem; margin-left: auto; opacity: 0.6;"></i>
+                </button>
+                <div class="dropdown-content">
+                    <button class="tab-btn" onclick="switchTab('posvenda')" id="tab-posvenda">
+                        <i class="fa-solid fa-star"></i> Pós-Venda
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('faltantes')" id="tab-faltantes">
+                        <i class="fa-solid fa-user-xmark"></i> Faltantes
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('sumidos')" id="tab-sumidos">
+                        <i class="fa-solid fa-user-clock"></i> Sumidos
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('aniversariantes')" id="tab-aniversariantes">
+                        <i class="fa-solid fa-cake-candles"></i> Aniversariantes
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="sb-section-label">Ferramentas</div>
+        <div class="sb-tools">
+            <button class="sb-tool-btn" onclick="window.location.href='index.html'" title="Ver quem está online">
+                <i class="fa-solid fa-circle-nodes"></i> Equipe
+            </button>
+            <button class="sb-tool-btn active" onclick="switchTab('historico')" title="Visualizar Histórico Agendamento">
+                <i class="fa-regular fa-rectangle-list"></i> Histórico Agendamento
+            </button>
+            <button class="sb-tool-btn" onclick="exportarCSVFinanceiro()" title="Baixar Planilha Financeira">
+                <i class="fa-solid fa-file-csv"></i> Baixar Planilha
+            </button>
+            <button class="sb-tool-btn" onclick="switchTab('origem-leads')" title="Origem de Leads (UTMs)">
+                <i class="fa-solid fa-bullseye"></i> Origem de Leads
+            </button>
+            <button class="sb-tool-btn" onclick="window.location.href='index.html'" title="Configurações do CRM">
+                <i class="fa-solid fa-gear"></i> Configurações
+            </button>
+        </div>
+
+        <div class="sb-bottom">
+            <div class="sb-bottom-row">
+                <button class="sb-icon-btn" id="theme-toggle" onclick="toggleTheme()" title="Mudar Tema">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <div class="app-content">
+
+    <!-- Barra superior minimalista — sino de notificações + badge da conta -->
+    <div class="topbar-user" style="justify-content: flex-end; gap: 14px;">
+        <div style="position: relative; flex: 1 1 auto; min-width: 100px; max-width: 320px;">
+            <i class="fa-solid fa-magnifying-glass"
+                style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.8rem;"></i>
+            <input type="text" id="topbar-patient-search" placeholder="Buscar paciente pelo nome..." autocomplete="off"
+                oninput="buscarPacienteTopbar(this.value)"
+                style="width: 100%; background: var(--header-btn-bg); border: 1px solid var(--header-btn-border); color: var(--header-text); padding: 0.5rem 0.75rem 0.5rem 2.1rem; border-radius: 8px; font-size: 0.85rem; outline: none;">
+            <div id="topbar-patient-dropdown"
+                style="display: none; position: absolute; top: calc(100% + 6px); left: 0; width: 100%; max-height: 320px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); z-index: 9999;">
+            </div>
+        </div>
+
+        <div style="position: relative; flex-shrink: 0;">
+            <button class="sb-icon-btn" title="Notificações" onclick="toggleNotificationsMenu(event)">
+                <i class="fa-regular fa-bell"></i>
+                <span id="nav-notification-badge" class="sb-badge" style="display: none;">0</span>
+            </button>
+            <!-- Menu expansível -->
+            <div id="notifications-dropdown" class="dropdown-content"
+                style="display: none; position: absolute; left: auto; right: 0; transform: none; top: calc(100% + 8px); width: 320px; max-height: 400px; overflow-y: auto; padding: 0.5rem; border-radius: 8px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 9999; border: 1px solid var(--border-color);">
+                <div style="padding: 0.5rem; font-weight: bold; border-bottom: 1px solid var(--border-color); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: var(--text-main);">Notificações</span>
+                    <div>
+                        <i class="fa-solid fa-check-double" style="cursor: pointer; color: var(--text-muted); margin-right: 0.75rem;" title="Marcar tudo como lido" onclick="clearNotificationsBadge()"></i>
+                        <i class="fa-solid fa-trash-can" style="cursor: pointer; color: var(--accent-danger);" title="Limpar todas as notificações" onclick="clearAllNotifications()"></i>
+                    </div>
+                </div>
+                <div id="notifications-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Nenhuma notificação ainda.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="user-menu" style="flex-shrink: 0;">
+            <button class="user-chip" onclick="toggleUserMenu(event)" title="Minha conta">
+                <span id="topbar-display-name" class="user-chip-name">Carregando...</span>
+                <span class="user-badge">
+                    <img id="header-avatar-img" src="" alt="" style="display: none;">
+                    <i id="header-avatar-fallback" class="fa-solid fa-user fallback"></i>
+                </span>
+            </button>
+            <div id="user-flyout-menu" class="user-flyout">
+                <div class="user-flyout-header">
+                    <span id="header-display-name">Minha conta</span>
+                </div>
+                <button id="flyout-gestao-acessos" class="user-flyout-item" onclick="openUsuariosModal(); closeUserMenu();" style="display: none;">
+                    <i class="fa-solid fa-lock"></i> Gestão de Acessos
+                </button>
+                <div class="user-flyout-divider"></div>
+                <button class="user-flyout-item danger" onclick="logout()">
+                    <i class="fa-solid fa-right-from-bracket"></i> Sair
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h2><i class="fa-solid fa-list-check" style="color: var(--accent-primary); margin-right: 0.5rem;"></i> Histórico de Agendamentos</h2>
+            <button class="btn-secondary" onclick="carregarHistorico()" title="Atualizar">
+                <i class="fa-solid fa-rotate-right"></i> Atualizar
+            </button>
+        </div>
+
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 220px;">
+                <label style="font-size: 0.8rem;">Período</label>
+                <div style="position: relative; display: flex; align-items: center; gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem 0.75rem;">
+                    <i class="fa-regular fa-calendar" style="color: var(--text-muted); font-size: 0.9rem;"></i>
+                    <input type="text" id="filtro-periodo" placeholder="Últimos 90 dias" readonly
+                        style="background: transparent; border: none; outline: none; color: var(--text-main); font-size: 0.85rem; cursor: pointer; min-width: 150px; font-family: inherit; flex: 1;"
+                        onclick="openHistoricoDatepicker(this)">
+                    <i id="filtro-periodo-clear" class="fa-solid fa-xmark" onclick="clearHistoricoRange()"
+                        style="color: var(--text-muted); font-size: 0.8rem; cursor: pointer; display: none;"></i>
+                </div>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 140px;">
+                <label style="font-size: 0.8rem;">Quem Agendou</label>
+                <select id="filtro-agendado" class="form-control" onchange="aplicarFiltros()">
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 140px;">
+                <label style="font-size: 0.8rem;">Origem</label>
+                <select id="filtro-origem" class="form-control" onchange="aplicarFiltros()">
+                    <option value="">Todas</option>
+                    <option value="Orgânico">Orgânico</option>
+                    <option value="Tráfego">Tráfego</option>
+                    <option value="Indicação">Indicação</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 140px;">
+                <label style="font-size: 0.8rem;">Unidade</label>
+                <select id="filtro-unidade" class="form-control" onchange="aplicarFiltros()">
+                    <option value="">Todas</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 150px;">
+                <label style="font-size: 0.8rem;">Nome do Paciente</label>
+                <input type="text" id="filtro-nome" class="form-control" placeholder="Buscar..." oninput="aplicarFiltros()">
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 150px;">
+                <label style="font-size: 0.8rem;">Procedimento</label>
+                <input type="text" id="filtro-procedimento" class="form-control" placeholder="Buscar..." oninput="aplicarFiltros()">
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 160px;">
+                <label style="font-size: 0.8rem;">Ordenar Valor</label>
+                <select id="ordem-valor" class="form-control" onchange="aplicarFiltros()">
+                    <option value="">Padrão (Mais Recente)</option>
+                    <option value="desc">Maior para Menor</option>
+                    <option value="asc">Menor para Maior</option>
+                </select>
+            </div>
+            <button class="btn-secondary" onclick="limparFiltros()" style="height: 38px; padding: 0 1rem;" title="Limpar Filtros">
+                <i class="fa-solid fa-eraser"></i>
+            </button>
+        </div>
+
+        
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Data Agendada</th>
+                    <th>Nome do Paciente</th>
+                    <th>Procedimento</th>
+                    <th>Unidade</th>
+                    <th>Origem</th>
+                    <th>Valor Primário</th>
+                    <th>Valor Secundário</th>
+                    <th>Status Pagamento</th>
+                    <th>Agendado Por</th>
+                    <th id="th-acoes" style="display: none; text-align: center; width: 100px;">Ações</th>
+                </tr>
+            </thead>
+            <tbody id="historico-tbody">
+                <tr><td colspan="9" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    </div>
+    <!-- fim .app-content -->
+
+    <!-- Modal Gestão de Usuários (necessário para a função de gestão de acessos no header) -->
+    <div class="modal-overlay" id="modalUsuarios">
+        <div class="modal" style="max-width: 600px; width: 90%;">
+            <h2><i class="fa-solid fa-users-gear" style="color: var(--accent-warning)"></i> Gestão de Acessos</h2>
+            
+            <div style="background: var(--bg-column); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">
+                <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--text-main);">Criar Novo Acesso</h3>
+                <div style="display: flex; gap: 1rem; align-items: flex-end;">
+                    <div class="form-group" style="flex: 1; margin: 0;">
+                        <label>Usuário</label>
+                        <input type="text" id="nu-user" class="form-control" placeholder="Login">
+                    </div>
+                    <div class="form-group" style="flex: 1; margin: 0;">
+                        <label>Senha</label>
+                        <input type="password" id="nu-pass" class="form-control" placeholder="Senha">
+                    </div>
+                    <div class="form-group" style="flex: 1; margin: 0;">
+                        <label>Cargo</label>
+                        <select id="nu-role" class="form-control">
+                            <option value="user">Comum (user)</option>
+                            <option value="admin">Administrador (admin)</option>
+                        </select>
+                    </div>
+                    <button class="btn-save" onclick="createUser()" style="height: 38px;">Criar</button>
+                </div>
+            </div>
+
+            <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--text-main);">Acessos Atuais</h3>
+            <div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden;">
+                <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: rgba(0,0,0,0.1); border-bottom: 1px solid var(--border-color);">
+                            <th style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted);">Usuário</th>
+                            <th style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted);">Cargo</th>
+                            <th style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted); text-align: right;">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usuarios-tbody">
+                        <!-- Renderizado via JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 1.5rem;">
+                <button class="btn-cancel" onclick="document.getElementById('modalUsuarios').classList.remove('active')">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Editar Registro de Histórico -->
+    <div class="modal-overlay" id="modalEditarHistorico">
+        <div class="modal" style="max-width: 500px; width: 90%;">
+            <h2><i class="fa-solid fa-pen-to-square" style="color: var(--accent-warning)"></i> Editar Agendamento</h2>
+            
+            <input type="hidden" id="edit-hist-id">
+            <input type="hidden" id="edit-hist-attendance-id">
+
+            <div class="form-group">
+                <label>Data e Hora do Agendamento (Formato: AAAA-MM-DD HH:MM)</label>
+                <input type="text" id="edit-hist-data" class="form-control" placeholder="ex: 2026-08-22 14:30">
+            </div>
+            <div class="form-group">
+                <label>Nome do Paciente</label>
+                <input type="text" id="edit-hist-nome" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>Procedimento</label>
+                <input type="text" id="edit-hist-procedimento" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>Unidade</label>
+                <input type="text" id="edit-hist-unidade" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>Origem</label>
+                <select id="edit-hist-origem" class="form-control">
+                    <option value="Orgânico">Orgânico</option>
+                    <option value="Tráfego">Tráfego</option>
+                    <option value="Indicação">Indicação</option>
+                    <option value="Meta Ads">Meta Ads</option>
+                    <option value="WhatsApp Orgânico">WhatsApp Orgânico</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Valor Primário (R$)</label>
+                <input type="text" id="edit-edit-valor1" class="form-control" placeholder="0.00">
+            </div>
+            <div class="form-group">
+                <label>Valor Secundário (R$)</label>
+                <input type="text" id="edit-edit-valor2" class="form-control" placeholder="0.00">
+            </div>
+            
+            <div class="modal-actions" style="margin-top: 1.5rem;">
+                <button class="btn-cancel" onclick="document.getElementById('modalEditarHistorico').classList.remove('active')">Cancelar</button>
+                <button class="btn-save" onclick="salvarEdicaoHistorico()">Salvar Alterações</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts compartilhados -->
+    <script src="app.js"></script>
+    
+    <!-- Script específico desta página -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (loggedUser) {
+                atualizarVisibilidadeAdmin();
+                carregarHistorico();
+            } else {
+                // Se não estiver logado, o login-overlay aparece por causa do CSS default ativo.
+                // Mas quando logar (performLogin() no app.js), a gente precisa carregar os dados.
+                // Como performLogin não sabe do carregarHistorico(), usamos um pequeno truque:
+                const originalPerformLogin = window.performLogin;
+                window.performLogin = async function() {
+                    await originalPerformLogin();
+                    if(loggedUser) {
+                        atualizarVisibilidadeAdmin();
+                        carregarHistorico();
+                    }
+                };
+            }
+        });
+
+        function atualizarVisibilidadeAdmin() {
+            const isAdmin = loggedUser && loggedUser.role === 'admin';
+            
+            // Mostrar ou ocultar header de Ações
+            const thAcoes = document.getElementById('th-acoes');
+            if (thAcoes) {
+                thAcoes.style.display = isAdmin ? 'table-cell' : 'none';
+            }
+            
+            // Mostrar botão de gestão de acessos se for admin
+            const btnGestao = document.getElementById('btn-gestao-acessos');
+            if (btnGestao) {
+                btnGestao.style.display = isAdmin ? 'flex' : 'none';
+            }
+        }
+
+        window.historicoData = [];
+
+        // Estado do filtro de período (range) — quando null, o servidor usa o padrão dele (90 dias).
+        let historicoFpInstance = null;
+        let historicoCustomRange = null;
+
+        async function carregarHistorico() {
+            const isAdmin = loggedUser && loggedUser.role === 'admin';
+            const colspanVal = isAdmin ? 10 : 9;
+            const tbody = document.getElementById('historico-tbody');
+            tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>`;
+
+            try {
+                let url = '/api/historico-financeiro';
+                if (historicoCustomRange) {
+                    const toIso = (d) => d.toISOString().split('T')[0];
+                    url += `?start=${toIso(historicoCustomRange.start)}&end=${toIso(historicoCustomRange.end)}`;
+                }
+
+                const res = await fetch(url);
+                window.historicoData = await res.json();
+
+                // Popular opções dinâmicas dos selects (Quem Agendou, Unidade)
+                popularFiltrosDinamicos();
+
+                // Renderizar a tabela inicial (sem filtros aplicados)
+                aplicarFiltros();
+            } catch (error) {
+                console.error(error);
+                tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center; color: var(--accent-danger);">Erro ao carregar dados.</td></tr>`;
+            }
+        }
+
+        function openHistoricoDatepicker(inputEl) {
+            if (historicoFpInstance) { historicoFpInstance.open(); return; }
+            historicoFpInstance = flatpickr(inputEl, {
+                mode: 'range',
+                dateFormat: 'd/m/Y',
+                locale: 'pt',
+                allowInput: false,
+                disableMobile: true,
+                onChange: function(selectedDates) {
+                    if (selectedDates.length === 2) {
+                        historicoCustomRange = { start: selectedDates[0], end: selectedDates[1] };
+
+                        const clearBtn = document.getElementById('filtro-periodo-clear');
+                        if (clearBtn) clearBtn.style.display = '';
+
+                        carregarHistorico();
+                    }
+                }
+            });
+            historicoFpInstance.open();
+        }
+
+        function clearHistoricoRange() {
+            historicoCustomRange = null;
+            if (historicoFpInstance) historicoFpInstance.clear();
+            const input = document.getElementById('filtro-periodo');
+            const clearBtn = document.getElementById('filtro-periodo-clear');
+            if (input) input.value = '';
+            if (clearBtn) clearBtn.style.display = 'none';
+            carregarHistorico();
+        }
+
+        function popularFiltrosDinamicos() {
+            const agendados = [...new Set(window.historicoData.map(d => d.agendado_por || 'Sistema'))].filter(Boolean);
+            const selAgendado = document.getElementById('filtro-agendado');
+            selAgendado.innerHTML = '<option value="">Todos</option>';
+            agendados.forEach(a => selAgendado.innerHTML += `<option value="${a}">${a}</option>`);
+
+            const unidades = [...new Set(window.historicoData.map(d => d.unidade))].filter(Boolean);
+            const selUnidade = document.getElementById('filtro-unidade');
+            selUnidade.innerHTML = '<option value="">Todas</option>';
+            unidades.forEach(u => selUnidade.innerHTML += `<option value="${u}">${u}</option>`);
+        }
+
+        function aplicarFiltros() {
+            const fAgendado = document.getElementById('filtro-agendado').value;
+            const fOrigem = document.getElementById('filtro-origem').value;
+            const fUnidade = document.getElementById('filtro-unidade').value;
+            const fNome = document.getElementById('filtro-nome').value.toLowerCase();
+            const fProcedimento = document.getElementById('filtro-procedimento').value.toLowerCase();
+            const fOrdem = document.getElementById('ordem-valor').value;
+
+            let filtrados = window.historicoData.filter(row => {
+                // O filtro de período já é aplicado no servidor (carregarHistorico manda start/end
+                // pro /api/historico-financeiro) — aqui só sobram os filtros client-side.
+
+                // Filtro Quem Agendou
+                const ag = row.agendado_por || 'Sistema';
+                if (fAgendado && ag !== fAgendado) return false;
+
+                // Filtro Origem
+                if (fOrigem && row.origem !== fOrigem) return false;
+
+                // Filtro Unidade
+                if (fUnidade && row.unidade !== fUnidade) return false;
+
+                // Filtro Nome do Paciente (Busca por texto livre)
+                if (fNome && !(row.nome_paciente || '').toLowerCase().includes(fNome)) return false;
+
+                // Filtro Procedimento (Busca por texto livre)
+                if (fProcedimento && !(row.procedimento || '').toLowerCase().includes(fProcedimento)) return false;
+
+                return true;
+            });
+
+            // Ordenação por Valor Primário
+            if (fOrdem === 'desc') {
+                filtrados.sort((a, b) => (parseFloat(b.valor_primario) || 0) - (parseFloat(a.valor_primario) || 0));
+            } else if (fOrdem === 'asc') {
+                filtrados.sort((a, b) => (parseFloat(a.valor_primario) || 0) - (parseFloat(b.valor_primario) || 0));
+            }
+
+            renderTabelaHistorico(filtrados);
+        }
+
+        function limparFiltros() {
+            document.getElementById('filtro-agendado').value = '';
+            document.getElementById('filtro-origem').value = '';
+            document.getElementById('filtro-unidade').value = '';
+            document.getElementById('filtro-nome').value = '';
+            document.getElementById('filtro-procedimento').value = '';
+            document.getElementById('ordem-valor').value = '';
+
+            if (historicoCustomRange) {
+                clearHistoricoRange(); // já reseta o período pro padrão do servidor e recarrega
+            } else {
+                aplicarFiltros();
+            }
+        }
+
+        function renderTabelaHistorico(dataToRender) {
+            const tbody = document.getElementById('historico-tbody');
+            tbody.innerHTML = '';
+            
+            const isAdmin = loggedUser && loggedUser.role === 'admin';
+            const colspanVal = isAdmin ? 10 : 9;
+            
+            if(!dataToRender || dataToRender.length === 0) {
+                let emptyRows = '';
+                for(let i=0; i<15; i++) {
+                    emptyRows += `<tr>
+                        <td style="color: var(--text-muted); opacity: 0.3;">--/--/----</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">R$ 0.00</td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">R$ 0.00</td>
+                        <td><span class="badge-status" style="background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3);">-</span></td>
+                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
+                        ${isAdmin ? `<td style="color: var(--text-muted); opacity: 0.3;">-</td>` : ''}
+                    </tr>`;
+                }
+                tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); padding: 1.5rem;">Nenhum agendamento encontrado para os filtros selecionados.</td></tr>` + emptyRows;
+                return;
+            }
+            
+            dataToRender.forEach(row => {
+                const tr = document.createElement('tr');
+                
+                let statusClass = '';
+                let statusText = row.status_pagamento || 'Pendente';
+                if (statusText === 'Pago') statusClass = 'status-pago';
+                else if (statusText === 'Pendente') statusClass = 'status-pendente';
+                else if (statusText === '50%') statusClass = 'status-50';
+                
+                const parts = (row.data_agendamento || '').split(' ');
+                const datePart = parts[0] || '';
+                const timePart = parts[1] || '';
+                const dParts = datePart.split('-');
+                const dataFormatada = dParts.length === 3 ? `${dParts[2]}/${dParts[1]}/${dParts[0]}` : datePart;
+                const exibicaoCompleta = timePart ? `${dataFormatada} às ${timePart.slice(0, 5)}` : dataFormatada;
+
+                tr.innerHTML = `
+                    <td style="font-weight: 500;">${exibicaoCompleta}</td>
+                    <td style="font-weight: 600; color: var(--accent-primary);">${row.nome_paciente || ''}</td>
+                    <td>${row.procedimento || ''}</td>
+                    <td>${row.unidade || ''}</td>
+                    <td>${row.origem || ''}</td>
+                    <td style="color: var(--accent-success); font-weight: 500;">${row.valor_primario ? 'R$ '+row.valor_primario : '-'}</td>
+                    <td style="color: var(--accent-success); font-weight: 500;">${row.valor_secundario ? 'R$ '+row.valor_secundario : '-'}</td>
+                    <td>
+                        <select onchange="atualizarStatusPagamento(${row.id || 'null'}, '${row.attendance_id}', this.value)" class="badge-status ${statusClass}" style="border: none; outline: none; cursor: pointer; font-family: inherit; font-size: 0.8rem; font-weight: 600; padding: 0.25rem 0.4rem; border-radius: 4px; text-align-last: center;">
+                            <option value="Pendente" ${statusText === 'Pendente' ? 'selected' : ''} style="background: var(--bg-card); color: var(--text-main);">Pendente</option>
+                            <option value="50%" ${statusText === '50%' ? 'selected' : ''} style="background: var(--bg-card); color: var(--text-main);">50%</option>
+                            <option value="Pago" ${statusText === 'Pago' ? 'selected' : ''} style="background: var(--bg-card); color: var(--text-main);">Pago</option>
+                        </select>
+                    </td>
+                    <td><span style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">${row.agendado_por || 'Sistema'}</span></td>
+                    ${isAdmin ? `
+                    <td>
+                        <div style="display: flex; gap: 0.5rem; justify-content: center;">
+                            <button class="btn-secondary" onclick="abrirModalEditarHistorico(${row.id || 'null'}, '${row.attendance_id}')" title="Editar Agendamento" style="padding: 0.3rem 0.5rem; background: var(--accent-warning); color: black; border: none; font-size: 0.8rem;">
+                                <i class="fa-solid fa-pen-to-square"></i>
+                            </button>
+                            ${row.id ? `
+                            <button class="btn-danger" onclick="deletarRegistroHistorico(${row.id})" title="Excluir Dados Financeiros" style="padding: 0.3rem 0.5rem; font-size: 0.8rem; border: none;">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                    ` : ''}
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function atualizarStatusPagamento(id, attendanceId, novoStatus) {
+            try {
+                let res;
+                if (id) {
+                    res = await fetch(`/api/historico-financeiro/${id}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status_pagamento: novoStatus })
+                    });
+                } else {
+                    // Agendamento veio direto do Amigo App e ainda não tem registro financeiro local: cria um.
+                    const row = window.historicoData.find(d => d.attendance_id == attendanceId);
+                    res = await fetch('/api/historico-financeiro', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            attendance_id: attendanceId,
+                            data_agendamento: row ? row.data_agendamento : '',
+                            nome_paciente: row ? row.nome_paciente : '',
+                            procedimento: row ? row.procedimento : '',
+                            unidade: row ? row.unidade : '',
+                            origem: row ? row.origem : 'Orgânico',
+                            status_pagamento: novoStatus
+                        })
+                    });
+                }
+
+                if (res.ok) {
+                    carregarHistorico();
+                } else {
+                    const err = await res.json();
+                    alert("Erro ao atualizar status: " + (err.error || 'Erro desconhecido'));
+                    carregarHistorico();
+                }
+            } catch (error) {
+                console.error(error);
+                alert("Erro de conexão ao atualizar status.");
+                carregarHistorico();
+            }
+        }
+
+        function abrirModalEditarHistorico(id, attendanceId) {
+            const row = id
+                ? window.historicoData.find(d => d.id === id)
+                : window.historicoData.find(d => d.attendance_id == attendanceId);
+            if (!row) return;
+
+            document.getElementById('edit-hist-id').value = row.id || '';
+            document.getElementById('edit-hist-attendance-id').value = row.attendance_id || '';
+            document.getElementById('edit-hist-data').value = row.data_agendamento || '';
+            document.getElementById('edit-hist-nome').value = row.nome_paciente || '';
+            document.getElementById('edit-hist-procedimento').value = row.procedimento || '';
+            document.getElementById('edit-hist-unidade').value = row.unidade || '';
+            document.getElementById('edit-hist-origem').value = row.origem || 'Orgânico';
+            document.getElementById('edit-edit-valor1').value = row.valor_primario || '0.00';
+            document.getElementById('edit-edit-valor2').value = row.valor_secundario || '0.00';
+
+            document.getElementById('modalEditarHistorico').classList.add('active');
+        }
+
+        async function salvarEdicaoHistorico() {
+            const id = document.getElementById('edit-hist-id').value;
+            const attendanceId = document.getElementById('edit-hist-attendance-id').value;
+            const payload = {
+                data_agendamento: document.getElementById('edit-hist-data').value,
+                nome_paciente: document.getElementById('edit-hist-nome').value,
+                procedimento: document.getElementById('edit-hist-procedimento').value,
+                unidade: document.getElementById('edit-hist-unidade').value,
+                origem: document.getElementById('edit-hist-origem').value,
+                valor_primario: document.getElementById('edit-edit-valor1').value,
+                valor_secundario: document.getElementById('edit-edit-valor2').value
+            };
+
+            try {
+                let res;
+                if (id) {
+                    res = await fetch(`/api/historico-financeiro/${id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                } else {
+                    // Agendamento veio direto do Amigo App: cria o registro financeiro local vinculado a ele.
+                    res = await fetch('/api/historico-financeiro', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ...payload, attendance_id: attendanceId })
+                    });
+                }
+
+                if (res.ok) {
+                    document.getElementById('modalEditarHistorico').classList.remove('active');
+                    carregarHistorico();
+                } else {
+                    const err = await res.json();
+                    alert("Erro ao editar: " + (err.error || 'Erro desconhecido'));
+                }
+            } catch (error) {
+                console.error(error);
+                alert("Erro ao conectar ao servidor.");
+            }
+        }
+
+        async function deletarRegistroHistorico(id) {
+            if (!await customConfirm("Deseja realmente apagar este agendamento do histórico?", "Excluir Agendamento")) return;
+            
+            try {
+                const res = await fetch(`/api/historico-financeiro/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (res.ok) {
+                    carregarHistorico();
+                } else {
+                    const err = await res.json();
+                    alert("Erro ao excluir: " + (err.error || 'Erro desconhecido'));
+                }
+            } catch (error) {
+                console.error(error);
+                alert("Erro ao conectar ao servidor.");
+            }
+        }
+    </script>
+</body>
+</html>

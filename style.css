@@ -1,0 +1,3005 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+    color-scheme: dark;
+    --bg-dark: #0F1115;
+    --bg-agenda: #0F1115;
+    /* Cinza muito escuro para o fundo da Agenda */
+    --agenda-header-bg: #171A20;
+    /* Cinza para os cabeçalhos e horários da agenda */
+    --bg-card: #171A20;
+    /* Cinza escuro para cards e header da agenda */
+    --bg-column: #171A20;
+    --text-main: #F3F4F6;
+    --text-muted: #9A9DA5;
+    --header-bg: #15171D;
+    --header-text: #E8E9EC;
+    --header-btn-bg: rgba(255, 255, 255, 0.05);
+    --header-btn-hover: #24272E;
+    --header-btn-border: rgba(255, 255, 255, 0.08);
+    --nav-active-bg: #2A2C32;
+    --nav-active-border: rgba(255, 255, 255, 0.08);
+    --nav-arrow: #6B6E76;
+    --sb-card-bg: #1C1F25;
+    --sb-danger: #E5837A;
+    --accent-primary: #a78bfa;
+    /* Lilás/Roxo premium */
+    --accent-success: #10b981;
+    --accent-warning: #fbbf24;
+    --accent-danger: #f87171;
+    --border-color: #292E36;
+    --btn-secondary-bg: #2a2a2a;
+    --btn-secondary-hover: #3a3a3a;
+    --btn-secondary-text: #ffffff;
+
+    /* Agenda Colors - Dark Mode (paleta reaproveitando as cores de destaque do restante do site) */
+    --agenda-c1-bg: #2e1065;
+    --agenda-c1-border: #a78bfa;
+    --agenda-c1-text: #ede9fe;
+    /* Roxo - var(--accent-primary) */
+    --agenda-c2-bg: #022c22;
+    --agenda-c2-border: #10b981;
+    --agenda-c2-text: #d1fae5;
+    /* Verde-esmeralda - var(--accent-success) */
+    --agenda-c3-bg: #451a03;
+    --agenda-c3-border: #fbbf24;
+    --agenda-c3-text: #fef3c7;
+    /* Âmbar - var(--accent-warning) */
+    --agenda-c4-bg: #450a0a;
+    --agenda-c4-border: #f87171;
+    --agenda-c4-text: #fee2e2;
+    /* Coral - var(--accent-danger) */
+    --agenda-c5-bg: #0c1e3d;
+    --agenda-c5-border: #60a5fa;
+    --agenda-c5-text: #dbeafe;
+    /* Azul - usado nos badges de Meta Ads */
+    --agenda-c6-bg: #042f2e;
+    --agenda-c6-border: #2dd4bf;
+    --agenda-c6-text: #ccfbf1;
+    /* Turquesa - usado no ícone de Agendado */
+    --agenda-c7-bg: #1e1b4b;
+    --agenda-c7-border: #818cf8;
+    --agenda-c7-text: #e0e7ff;
+    /* Índigo - usado no badge de estágio "Em Atendimento" */
+    --agenda-block-bg: #262626;
+    --agenda-block-border: #525252;
+    --agenda-block-text: #d4d4d4;
+}
+
+[data-theme="light"] {
+    color-scheme: light;
+    --bg-dark: #f8fafc;
+    --bg-agenda: #f8fafc;
+    /* Cinza clarinho para o fundo da Agenda */
+    --agenda-header-bg: #ffffff;
+    --bg-card: #ffffff;
+    --bg-column: #ffffff;
+    --text-main: #334155;
+    --text-muted: #64748b;
+    --header-bg: #ffffff;
+    --header-text: #334155;
+    --header-btn-bg: #f1f5f9;
+    --header-btn-hover: #e2e8f0;
+    --header-btn-border: #d1d5db;
+    --nav-active-bg: #e2e8f0;
+    --nav-active-border: #cbd5e1;
+    --nav-arrow: #94a3b8;
+    --sb-card-bg: #f8fafc;
+    --sb-danger: #dc2626;
+    --accent-primary: #7c3aed;
+    /* Violeta-600, para consistência de marca com o modo escuro (#a78bfa) */
+    --accent-success: #059669;
+    --accent-warning: #d97706;
+    --accent-danger: #dc2626;
+    --border-color: #d1d5db;
+    --btn-secondary-bg: #f1f5f9;
+    --btn-secondary-hover: #e2e8f0;
+    --btn-secondary-text: #475569;
+
+    /* Agenda Colors - Light Mode (paleta reaproveitando as cores de destaque do restante do site) */
+    --agenda-c1-bg: #f5f3ff;
+    --agenda-c1-border: #c4b5fd;
+    --agenda-c1-text: #5b21b6;
+    /* Roxo - var(--accent-primary) */
+    --agenda-c2-bg: #ecfdf5;
+    --agenda-c2-border: #6ee7b7;
+    --agenda-c2-text: #065f46;
+    /* Verde-esmeralda - var(--accent-success) */
+    --agenda-c3-bg: #fffbeb;
+    --agenda-c3-border: #fcd34d;
+    --agenda-c3-text: #92400e;
+    /* Âmbar - var(--accent-warning) */
+    --agenda-c4-bg: #fef2f2;
+    --agenda-c4-border: #fca5a5;
+    --agenda-c4-text: #991b1b;
+    /* Coral - var(--accent-danger) */
+    --agenda-c5-bg: #eff6ff;
+    --agenda-c5-border: #93c5fd;
+    --agenda-c5-text: #1e40af;
+    /* Azul - usado nos badges de Meta Ads */
+    --agenda-c6-bg: #f0fdfa;
+    --agenda-c6-border: #5eead4;
+    --agenda-c6-text: #115e59;
+    /* Turquesa - usado no ícone de Agendado */
+    --agenda-c7-bg: #eef2ff;
+    --agenda-c7-border: #a5b4fc;
+    --agenda-c7-text: #3730a3;
+    /* Índigo - usado no badge de estágio "Em Atendimento" */
+    --agenda-block-bg: #e5e5e5;
+    --agenda-block-border: #737373;
+    --agenda-block-text: #171717;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Inter', sans-serif;
+}
+
+html {
+    font-size: 13px;
+    /* Aumenta a "DPI", deixando tudo proporcionalmente menor */
+}
+
+/* ==========================================
+   ESCALA TIPOGRÁFICA — Dossiê de Design System
+   Classes utilitárias opcionais; nada abaixo é aplicado
+   automaticamente aos elementos existentes.
+   ========================================== */
+.text-display {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.text-heading {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.text-subheading {
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.text-body {
+    font-size: 0.85rem;
+    font-weight: 400;
+}
+
+.text-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.text-caption {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* Fonte utilitária para dados: valores em R$, telefones, datas, IDs, hex.
+   Números tabulares para colunas de valor alinharem certinho. */
+.font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    height: 100vh;
+    display: flex;
+    flex-direction: row;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    overflow-x: hidden;
+    overflow-y: hidden;
+}
+
+/* Qualquer conteúdo de página (fora da barra lateral) ocupa o espaço restante.
+   Elementos com position:fixed (modais) ignoram isso normalmente. */
+body > *:not(header) {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.header,
+.column,
+.card,
+.agenda-block,
+.grid-col-header,
+.time-slot,
+.modal-content {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+
+
+/* Header — agora é a barra lateral esquerda, não mais uma barra horizontal no topo */
+header {
+    background: var(--header-bg);
+    color: var(--header-text);
+    padding: 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1.5rem;
+    border-bottom: none;
+    border-right: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 232px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    z-index: 100;
+}
+
+header .actions {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0.5rem !important;
+    margin-top: auto;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+header .btn-primary,
+header .btn-secondary,
+header .btn-danger {
+    width: 100%;
+    justify-content: flex-start;
+}
+
+/* Ações do rodapé da barra lateral — visual neutro, sem as cores fortes originais,
+   pra combinar com o resto do menu (referência de UI clean/dark). */
+header .actions button {
+    background: var(--header-btn-bg) !important;
+    color: var(--header-text) !important;
+    border: 1px solid var(--border-color) !important;
+    box-shadow: none !important;
+    font-weight: 500 !important;
+    background-image: none !important;
+}
+
+header .actions button:hover {
+    background: var(--header-btn-hover) !important;
+}
+
+header .actions button i {
+    color: var(--text-muted) !important;
+}
+
+header .actions .btn-primary {
+    background: var(--nav-active-bg) !important;
+    border: 1px solid var(--accent-primary) !important;
+    color: var(--text-main) !important;
+}
+
+header .actions .btn-primary i {
+    color: var(--accent-primary) !important;
+}
+
+header .actions .btn-danger {
+    color: var(--accent-danger) !important;
+}
+
+header .actions .btn-danger i {
+    color: var(--accent-danger) !important;
+}
+
+header .actions .btn-danger:hover {
+    background: rgba(248, 113, 113, 0.1) !important;
+    border-color: var(--accent-danger) !important;
+}
+
+/* ==========================================
+   SIDEBAR PREMIUM — index.html
+   Sistema de espaçamento em base 4px.
+   ========================================== */
+header {
+    padding: 16px 14px;
+    gap: 0;
+}
+
+.sb-logo {
+    display: flex;
+    align-items: center;
+    height: 34px;
+    margin-bottom: 20px;
+    padding-left: 2px;
+    flex-shrink: 0;
+}
+
+.sb-logo i {
+    font-size: 22px;
+    color: var(--accent-primary);
+}
+
+.sb-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    border-radius: 11px;
+    padding: 6px;
+    flex-shrink: 0;
+}
+
+.sb-nav>.tab-btn,
+.sb-nav>.dropdown>.tab-btn {
+    height: 40px;
+    padding: 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    gap: 10px;
+    border-radius: 8px;
+}
+
+.sb-nav>.tab-btn i,
+.sb-nav>.dropdown>.tab-btn i {
+    font-size: 17px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.sb-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--nav-arrow);
+    padding: 0 8px;
+    margin: 20px 0 8px;
+    flex-shrink: 0;
+}
+
+.sb-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    flex-shrink: 0;
+}
+
+.sb-tool-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    text-align: left;
+    width: 100%;
+    text-decoration: none;
+}
+
+.sb-tool-btn i {
+    font-size: 15px;
+    width: 16px;
+    text-align: center;
+    color: var(--nav-arrow);
+    transition: color 0.15s ease;
+    flex-shrink: 0;
+}
+
+.sb-tool-btn:hover {
+    background: var(--header-btn-hover);
+    color: var(--header-text);
+}
+
+.sb-tool-btn:hover i {
+    color: var(--header-text);
+}
+
+.sb-bottom {
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid var(--header-btn-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sb-bottom-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.sb-icon-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 7px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    flex-shrink: 0;
+}
+
+.sb-icon-btn:hover {
+    background: var(--header-btn-hover);
+    color: var(--header-text);
+}
+
+.sb-icon-btn i {
+    font-size: 16px;
+}
+
+.sb-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--sb-danger);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    border: 2px solid var(--header-bg);
+}
+
+.sb-cta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    height: 38px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--accent-primary);
+    color: var(--header-text);
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.sb-cta:hover {
+    background: rgba(167, 139, 250, 0.12);
+}
+
+.sb-cta i {
+    color: var(--accent-primary);
+    font-size: 13px;
+}
+
+.sb-profile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--header-text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: background-color 0.15s ease;
+}
+
+.sb-profile:hover {
+    background: var(--header-btn-hover);
+}
+
+.sb-profile img {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.sb-profile .fallback {
+    font-size: 20px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.sb-logout {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--sb-danger);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.sb-logout:hover {
+    background: rgba(229, 131, 122, 0.1);
+    border-color: rgba(229, 131, 122, 0.25);
+}
+
+.sb-logout i {
+    font-size: 15px;
+    color: var(--sb-danger);
+    flex-shrink: 0;
+}
+
+/* ==========================================
+   PAINEL "INFORMAÇÕES DO LEAD" (chat) — mesmo visual flat/clean da sidebar
+   ========================================== */
+.lead-panel-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--nav-arrow);
+    margin-bottom: 8px;
+}
+
+.lead-panel-label i {
+    font-size: 11px;
+}
+
+.lead-panel-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.lead-panel-btn:hover {
+    background: var(--header-btn-hover);
+    border-color: var(--header-btn-border);
+}
+
+.lead-panel-btn i:first-child {
+    color: var(--nav-arrow);
+    font-size: 13px;
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.lead-panel-stage-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    color: var(--text-main);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.lead-panel-card {
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.lead-panel-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    color: var(--text-main);
+}
+
+.lead-panel-empty {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
+.lead-panel-textarea {
+    width: 100%;
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    color: var(--text-main);
+    padding: 8px 10px;
+    border-radius: 7px;
+    outline: none;
+    resize: vertical;
+    font-family: inherit;
+    font-size: 12.5px;
+    box-sizing: border-box;
+}
+
+.lead-panel-textarea:focus {
+    border-color: var(--accent-primary);
+}
+
+/* ==========================================
+   TOPBAR — badge de usuário no canto superior direito
+   ========================================== */
+/* Envolve a topbar + a view ativa numa coluna só, ao lado da sidebar.
+   Sem isso a topbar (fixed) sobrepunha o conteúdo em vez de empurrá-lo. */
+.app-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+.app-content>*:not(.topbar-user) {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+}
+
+.topbar-user {
+    flex-shrink: 0;
+    width: 100%;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 20px;
+    z-index: 90;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--header-btn-border);
+}
+
+.user-menu {
+    position: relative;
+    pointer-events: auto;
+}
+
+.user-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    padding: 3px 12px 3px 14px;
+    border-radius: 999px;
+    background: var(--sb-card-bg);
+    border: 1px solid var(--header-btn-border);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.user-chip:hover {
+    background: var(--header-btn-hover);
+    border-color: var(--accent-primary);
+}
+
+.user-chip-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--header-text);
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--header-btn-bg);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.user-badge img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.user-badge .fallback {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.user-flyout {
+    display: none;
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    min-width: 220px;
+    background: var(--bg-card);
+    border: 1px solid var(--header-btn-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+    padding: 6px;
+    z-index: 200;
+}
+
+.user-flyout.open {
+    display: block;
+}
+
+.user-flyout-header {
+    padding: 8px 10px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--header-btn-border);
+}
+
+.user-flyout-header span {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--header-text);
+}
+
+.user-flyout-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: transparent;
+    border: none;
+    color: var(--header-text);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.user-flyout-item i {
+    font-size: 14px;
+    width: 15px;
+    text-align: center;
+    color: var(--nav-arrow);
+    flex-shrink: 0;
+}
+
+.user-flyout-item:hover {
+    background: var(--header-btn-hover);
+}
+
+.user-flyout-item.danger {
+    color: var(--sb-danger);
+}
+
+.user-flyout-item.danger i {
+    color: var(--sb-danger);
+}
+
+.user-flyout-item.danger:hover {
+    background: rgba(229, 131, 122, 0.1);
+}
+
+.user-flyout-divider {
+    height: 1px;
+    background: var(--header-btn-border);
+    margin: 6px 4px;
+}
+
+header h1,
+header .logo-text {
+    color: var(--header-text);
+}
+
+header .btn-secondary {
+    color: var(--header-text);
+    border-color: var(--header-btn-border);
+    background: var(--header-btn-bg);
+}
+
+header .btn-secondary:hover {
+    background: var(--header-btn-hover);
+}
+
+/* Diminuir os botões dentro do header */
+header .btn-primary,
+header .btn-secondary {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+    border-radius: 6px;
+}
+
+.table-container {
+    overflow-x: auto;
+    width: 100%;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+th {
+    background-color: var(--secondary-color);
+    font-weight: 500;
+}
+
+.status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.status-hoje {
+    background-color: #fef3c7;
+    color: #d97706;
+}
+
+.status-mes {
+    background-color: #e0e7ff;
+    color: #4338ca;
+}
+
+/* Custom Dropdown Items */
+.ag-dropdown-item {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.1s;
+    font-size: 0.9rem;
+    color: var(--text-main);
+}
+
+.ag-dropdown-item:hover {
+    background-color: var(--bg-column);
+}
+
+.ag-dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.tabs-container {
+    display: flex;
+    flex-direction: column;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 0.35rem;
+    border: 1px solid var(--border-color);
+    gap: 0.15rem;
+}
+
+.tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    padding: 0.55rem 0.7rem;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+/* Abas na barra principal */
+.tabs-container>.tab-btn,
+.tabs-container>.dropdown>.tab-btn {
+    color: var(--header-text);
+    opacity: 0.85;
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.tabs-container>.tab-btn:hover,
+.tabs-container>.dropdown>.tab-btn:hover {
+    opacity: 1;
+    background: var(--header-btn-hover);
+}
+
+.dropdown-content .tab-btn:hover {
+    color: var(--text-main);
+    background: var(--header-btn-hover);
+}
+
+/* Seta à direita — só nos itens simples de primeiro nível. O trigger do
+   dropdown (Relacionamento) já tem seu próprio chevron de "expansível". */
+.tabs-container>.tab-btn::after {
+    content: "\f061";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
+    font-size: 0.7rem;
+    color: var(--nav-arrow);
+    margin-left: auto;
+    opacity: 0;
+    transform: translateX(-3px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.tabs-container>.tab-btn:hover::after,
+.tabs-container>.tab-btn.active::after {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.tab-btn.active {
+    background: var(--nav-active-bg);
+    border: 1px solid var(--nav-active-border);
+    color: var(--text-main) !important;
+    opacity: 1;
+    box-shadow: none;
+}
+
+.tab-btn.active i {
+    color: var(--text-main) !important;
+}
+
+.logo h1 {
+    font-size: 1.2rem;
+    /* Fonte reduzida (antes 1.5rem) */
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    /* Gap reduzido */
+}
+
+.logo h1 i {
+    color: var(--accent-primary);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-primary), #6d28d9);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    box-shadow: 0 4px 12px rgba(167, 139, 250, 0.3);
+}
+
+.btn-primary:hover {
+    box-shadow: 0 6px 16px rgba(167, 139, 250, 0.4);
+}
+
+#cm-confirm-btn {
+    box-shadow: 0 4px 12px rgba(248, 113, 113, 0.3);
+}
+
+#cm-confirm-btn:hover {
+    box-shadow: 0 6px 16px rgba(248, 113, 113, 0.4);
+}
+
+.btn-secondary {
+    background: var(--btn-secondary-bg);
+    color: var(--btn-secondary-text);
+    border: 1px solid var(--border-color);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.btn-secondary:hover {
+    background: var(--btn-secondary-hover);
+}
+
+/* Kanban Board */
+.board {
+    display: flex;
+    gap: 1.5rem;
+    padding: 2rem;
+    flex-grow: 1;
+    overflow-x: auto;
+    align-items: flex-start;
+}
+
+.column {
+    background: transparent;
+    border: none;
+    width: 310px;
+    min-width: 310px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 120px);
+    box-shadow: none;
+}
+
+.column-header {
+    padding: 0 0.2rem 0.65rem 0.2rem;
+    border-bottom: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: transparent;
+}
+
+.column-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.col-leads .card-list {
+    border-top: 3px solid var(--accent-primary);
+}
+
+.col-atendimento .card-list {
+    border-top: 3px solid var(--accent-warning);
+}
+
+.col-agendado .card-list {
+    border-top: 3px solid var(--accent-success);
+}
+
+.col-perdido .card-list {
+    border-top: 3px solid var(--accent-danger);
+}
+
+.card-count {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.card-list {
+    padding: 1rem;
+    flex-grow: 1;
+    overflow-y: auto;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* Scrollbar styles */
+.card-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.card-list::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 10px;
+}
+
+/* Cards - Metallic Titanium Style */
+.card {
+    background: linear-gradient(145deg, #3f3f46, #18181b) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+    border-radius: 8px !important;
+    padding: 0.85rem !important;
+    cursor: grab;
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    position: relative;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+    color: #ffffff !important;
+}
+
+.card:active {
+    cursor: grabbing;
+}
+
+.card:hover {
+    border-color: rgba(255, 255, 255, 0.35) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.card.dragging {
+    opacity: 0.5;
+    background: rgba(30, 41, 59, 0.9) !important;
+}
+
+.card-title {
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    margin-bottom: 0.2rem;
+    color: #ffffff !important;
+}
+
+.card-info {
+    font-size: 0.82rem !important;
+    color: #e4e4e7 !important;
+    opacity: 0.95;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.74rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #d4d4d8 !important;
+    margin-top: 0.35rem;
+}
+
+.card .tag {
+    background: rgba(255, 255, 255, 0.06) !important;
+    padding: 0.2rem 0.55rem !important;
+    border-radius: 6px !important;
+    color: #d4d4d8 !important;
+    /* CINZA CLARO! */
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.5rem;
+}
+
+.delete-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.notes-btn {
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.card:hover .delete-btn,
+.card:hover .notes-btn {
+    opacity: 1;
+}
+
+.notes-btn.has-notes {
+    opacity: 1;
+}
+
+.delete-btn:hover {
+    color: var(--accent-danger);
+}
+
+/* Modal Base */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.modal-overlay.active {
+    opacity: 1;
+    pointer-events: all;
+}
+
+.modal {
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 450px;
+    padding: 2rem;
+    transform: translateY(20px);
+    transition: transform 0.3s ease;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-overlay.active .modal {
+    transform: translateY(0);
+}
+
+.modal h2 {
+    margin-bottom: 1.5rem;
+    font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea,
+.form-control {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--bg-main, #141414);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-main);
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.form-group input::placeholder,
+.form-group select::placeholder {
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.form-group input:focus,
+.form-control:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(77, 124, 15, 0.25);
+    outline: none;
+}
+
+/* Fix para as opções do select no tema escuro */
+select.form-control option {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+.btn-cancel {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+.btn-save {
+    background: var(--accent-success);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-save:hover {
+    filter: brightness(1.1);
+}
+
+.integration-loader {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--accent-primary);
+    font-size: 0.9rem;
+    margin-top: 1rem;
+}
+
+.integration-loader.active {
+    display: flex;
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Agenda Grid Completa (Nova) */
+.agenda-grid-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 0;
+    min-height: 0;
+    background: var(--bg-agenda);
+}
+
+.agenda-grid-header {
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-card);
+}
+
+.agenda-filters,
+.agenda-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.agenda-grid-wrapper {
+    flex-grow: 1;
+    overflow: auto;
+    padding: 1rem;
+    background: var(--bg-agenda);
+}
+
+.agenda-grid-layout {
+    display: grid;
+    grid-template-columns: 80px repeat(var(--col-count, 5), 1fr);
+    width: 100%;
+    min-width: max(1200px, calc(80px + (200px * var(--col-count, 5))));
+    border-top: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color);
+}
+
+.grid-body {
+    display: contents;
+}
+
+.grid-col-header {
+    background: var(--agenda-header-bg);
+    padding: 1rem 0.5rem;
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-main);
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.time-col-header {
+    background: var(--agenda-header-bg);
+    color: var(--text-muted);
+}
+
+.grid-body {
+    display: contents;
+    /* Permite que os filhos participem do grid principal */
+}
+
+/* Células de tempo (Eixo Y) */
+.time-slot {
+    padding: 0.5rem;
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--agenda-header-bg);
+    /* Vai ocupar a coluna 1 e a linha específica definida no HTML/JS */
+}
+
+/* Espaços vazios na grade para manter as bordas visíveis */
+.grid-cell {
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Blocos de Agendamento (Eventos) */
+.agenda-block {
+    margin: 2px;
+    border-radius: 4px;
+    padding: 0.4rem;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    overflow: hidden;
+    color: var(--text-main);
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.1s;
+    border-left: 4px solid rgba(0, 0, 0, 0.2);
+}
+
+.agenda-block:hover {
+    z-index: 999 !important;
+    transform: scale(1.02);
+    opacity: 1 !important;
+}
+
+.agenda-block strong {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+/* As cores dos blocos agora são geradas dinamicamente via JavaScript em app.js */
+
+.relacionamento-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+    width: 100%;
+}
+
+.table-container {
+    overflow-x: auto;
+    width: 100%;
+}
+
+.crm-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-card);
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    font-size: 0.95rem;
+}
+
+.crm-table thead {
+    background: var(--btn-secondary-bg);
+}
+
+.crm-table th {
+    text-align: left;
+    padding: 1.2rem 1rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 2px solid var(--border-color);
+}
+
+.crm-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-main);
+    vertical-align: middle;
+}
+
+.crm-table tbody tr {
+    transition: background-color 0.2s;
+}
+
+.crm-table tbody tr:hover {
+    background-color: var(--btn-secondary-hover);
+}
+
+.crm-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Dropdown Menu para Relacionamento */
+.dropdown {
+    position: relative;
+    display: flex;
+    width: 100%;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    min-width: 200px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+    z-index: 100;
+    border-radius: 0 0 8px 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.dropdown:hover .dropdown-content {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Flyout que expande na horizontal (ex.: "Relacionamento" na sidebar) — a
+   posição real é calculada via JS e o elemento é reparentado pro body, porque
+   o "overflow-y:auto" da sidebar clipa (corta) qualquer filho que ultrapasse
+   sua borda direita. Aqui só definimos a aparência; display/posição ficam com o JS. */
+.sb-flyout {
+    display: none;
+    position: fixed;
+    top: auto;
+    left: auto;
+    width: 300px;
+    border-radius: 14px !important;
+    padding: 0.5rem !important;
+}
+
+.sb-flyout-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.6rem 0.6rem;
+    border-radius: 10px;
+    background: none;
+    border: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.sb-flyout-item:hover {
+    background: var(--header-btn-hover, rgba(255, 255, 255, 0.06));
+}
+
+.sb-flyout-item-icon {
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: var(--header-btn-bg, rgba(255, 255, 255, 0.06));
+    border: 1px solid var(--header-btn-border, rgba(255, 255, 255, 0.08));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+    color: var(--text-main);
+}
+
+.sb-flyout-item-text {
+    min-width: 0;
+}
+
+.sb-flyout-item-title {
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--text-main);
+    line-height: 1.3;
+}
+
+.sb-flyout-item-desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+    margin-top: 0.1rem;
+}
+
+/* Abertura suave do flyout (fade + leve deslize), só efeito visual —
+   não muda posição, itens ou comportamento do menu. */
+.sb-flyout.sb-flyout-visible {
+    animation: sbFlyoutIn 0.16s ease-out;
+}
+
+@keyframes sbFlyoutIn {
+    from { opacity: 0; transform: translateX(-6px) scale(0.97); }
+    to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+.dropdown-content .tab-btn {
+    margin: 0;
+    border-radius: 0;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    width: 100%;
+    justify-content: flex-start;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dropdown-content .tab-btn:last-child {
+    border-bottom: none;
+}
+
+.dropdown-content .tab-btn.active {
+    background: var(--accent-primary);
+    color: #ffffff;
+}
+
+.dropdown-content .tab-btn.active i {
+    color: #ffffff !important;
+}
+
+/* Sugestões de Agendamento */
+.suggestion-chip {
+    background: var(--btn-secondary-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.4rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+
+.suggestion-chip:hover {
+    background: var(--btn-secondary-hover);
+    border-color: var(--accent-primary);
+}
+
+.suggestion-chip.active {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+/* ==========================================
+   CHAT WHATSAPP STYLES
+   ========================================== */
+
+.chat-contact-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.chat-contact-item:hover {
+    background: var(--bg-hover);
+}
+
+.chat-contact-item.active {
+    background: var(--bg-column);
+    border-left: 4px solid var(--accent-success);
+}
+
+.chat-contact-avatar {
+    width: 45px;
+    height: 45px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+
+.chat-contact-info {
+    flex: 1;
+    overflow: hidden;
+}
+
+.chat-contact-name {
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-contact-preview {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-bubble {
+    max-width: 75%;
+    padding: 0.8rem 1rem;
+    border-radius: 12px;
+    position: relative;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.chat-bubble-out {
+    background: var(--accent-success);
+    color: white;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+
+.chat-bubble-in {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+}
+
+.chat-bubble-time {
+    font-size: 0.7rem;
+    opacity: 0.8;
+    margin-top: 0.3rem;
+    text-align: right;
+    display: block;
+}
+
+.chat-bubble-out .chat-bubble-time {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.chat-bubble-in .chat-bubble-time {
+    color: var(--text-muted);
+}
+
+
+/* ============================================ */
+/* MODAIS CUSTOMIZADOS (ALERTS E CONFIRMS) E TOOLTIPS */
+/* ============================================ */
+
+/* Tooltip Customizado para a Agenda (Hover) */
+.agenda-block[data-tooltip] {
+    position: relative;
+}
+
+.agenda-block[data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(23, 23, 23, 0.95);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    z-index: 999999;
+    font-size: 0.85rem;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    pointer-events: none;
+    margin-bottom: 6px;
+    min-width: 200px;
+    text-align: center;
+}
+
+/* Overlay do Modal Customizado */
+.custom-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(6, 8, 12, 0.82);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999999;
+    opacity: 0;
+    animation: fadeIn 0.2s forwards;
+}
+
+/* Caixa do Modal */
+.custom-modal-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    width: 90%;
+    max-width: 400px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+    transform: scale(0.95);
+    animation: popIn 0.2s forwards;
+    color: var(--text-main);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.custom-modal-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.custom-modal-message {
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.custom-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes popIn {
+    to {
+        transform: scale(1);
+    }
+}
+
+
+/* ============================================ */
+/* FLATPICKR CUSTOMIZATION (CALEND�RIO) */
+/* ============================================ */
+
+
+
+/* ============================================ */
+/* FLATPICKR CUSTOMIZATION (CALENDÁRIO) */
+/* ============================================ */
+
+.flatpickr-calendar {
+    background: #111111 !important;
+    border: 1px solid #2a2a2a !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6) !important;
+    border-radius: 16px !important;
+    padding: 20px 15px !important;
+    font-family: inherit !important;
+    width: 320px !important;
+    transform: scale(0.95);
+    transform-origin: top center;
+}
+
+/* Remover setinhas da caixa do flatpickr */
+.flatpickr-calendar.arrowTop:before,
+.flatpickr-calendar.arrowTop:after,
+.flatpickr-calendar.arrowBottom:before,
+.flatpickr-calendar.arrowBottom:after {
+    display: none !important;
+}
+
+.flatpickr-months {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    margin-bottom: 20px !important;
+    padding: 0 10px !important;
+}
+
+.flatpickr-months .flatpickr-month {
+    background: transparent !important;
+    color: #fff !important;
+    height: auto !important;
+}
+
+.flatpickr-current-month {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 !important;
+    height: auto !important;
+    position: static !important;
+    width: auto !important;
+}
+
+.flatpickr-current-month .flatpickr-monthDropdown-months,
+.flatpickr-current-month input.cur-year {
+    background: #1a1a1a !important;
+    border: 1px solid #333 !important;
+    border-radius: 8px !important;
+    color: #fff !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+    padding: 6px 10px !important;
+    height: auto !important;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+.flatpickr-current-month .flatpickr-monthDropdown-months:hover,
+.flatpickr-current-month input.cur-year:hover {
+    border-color: #555 !important;
+}
+
+.flatpickr-weekdays {
+    height: auto !important;
+    margin-bottom: 15px !important;
+    width: 100% !important;
+}
+
+.flatpickr-weekdaycontainer {
+    display: grid !important;
+    grid-template-columns: repeat(7, 1fr) !important;
+    justify-items: center !important;
+    width: 100% !important;
+}
+
+.flatpickr-weekdays .flatpickr-weekday {
+    color: #888 !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    background: transparent !important;
+    text-align: center !important;
+    width: 34px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.flatpickr-days,
+.flatpickr-rContainer,
+.flatpickr-innerContainer {
+    width: 100% !important;
+    display: block !important;
+}
+
+.dayContainer {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(7, 1fr) !important;
+    justify-items: center !important;
+    row-gap: 4px !important;
+}
+
+.flatpickr-day {
+    color: #eaeaea !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    border-radius: 8px !important;
+    width: 34px !important;
+    max-width: 34px !important;
+    height: 34px !important;
+    line-height: 34px !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: all 0.2s ease !important;
+}
+
+.flatpickr-day:hover,
+.flatpickr-day:focus {
+    background: #1eb980 !important;
+    border-color: #1eb980 !important;
+    color: #fff !important;
+}
+
+.flatpickr-day.selected,
+.flatpickr-day.startRange,
+.flatpickr-day.endRange,
+.flatpickr-day.selected:focus,
+.flatpickr-day.selected:hover {
+    background: #1eb980 !important;
+    border-color: #1eb980 !important;
+    color: #fff !important;
+    box-shadow: 0 4px 12px rgba(30, 185, 128, 0.4) !important;
+}
+
+.flatpickr-day.today {
+    background: rgba(30, 185, 128, 0.15) !important;
+    color: #1eb980 !important;
+    font-weight: bold !important;
+    border: 1px solid rgba(30, 185, 128, 0.4) !important;
+    border-radius: 8px !important;
+}
+
+.flatpickr-day.today:hover {
+    background: #1eb980 !important;
+    color: #fff !important;
+}
+
+.flatpickr-day.flatpickr-disabled,
+.flatpickr-day.prevMonthDay,
+.flatpickr-day.nextMonthDay {
+    color: #555 !important;
+    opacity: 0.6 !important;
+}
+
+.flatpickr-time {
+    border-top: 1px solid #2a2a2a !important;
+    margin-top: 10px !important;
+}
+
+.flatpickr-time input,
+.flatpickr-time .flatpickr-am-pm {
+    color: #fff !important;
+}
+
+.flatpickr-time input:hover,
+.flatpickr-time .flatpickr-am-pm:hover {
+    background: #2a2a2a !important;
+}
+
+.flatpickr-innerContainer,
+.flatpickr-weekwrapper,
+.flatpickr-weekdaycontainer,
+.flatpickr-months {
+    background: transparent !important;
+}
+
+.flatpickr-prev-month,
+.flatpickr-next-month {
+    position: static !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: auto !important;
+    padding: 8px !important;
+    border-radius: 8px !important;
+    transition: all 0.2s ease !important;
+}
+
+.flatpickr-prev-month:hover,
+.flatpickr-next-month:hover {
+    background: #1a1a1a !important;
+}
+
+.flatpickr-prev-month svg,
+.flatpickr-next-month svg {
+    fill: #888 !important;
+    width: 14px !important;
+    height: 14px !important;
+}
+
+.flatpickr-prev-month:hover svg,
+.flatpickr-next-month:hover svg {
+    fill: #fff !important;
+}
+
+/* Ocultar botão de mudar tema */
+#theme-toggle {
+    display: none !important;
+}
+
+/* ==========================================
+   AVATAR COMPONENT DESIGN SYSTEM (Radix UI Structure)
+   ========================================== */
+.avatar {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+}
+
+.avatar-image {
+    position: relative;
+    overflow: hidden;
+    border-radius: 50%;
+    width: 100%;
+    height: 100%;
+}
+
+.avatar-image img {
+    aspect-ratio: 1 / 1;
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+}
+
+.avatar-fallback {
+    display: flex;
+    height: 100%;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--border-color, #333);
+    background: var(--agenda-c3-bg, rgba(77, 124, 15, 0.25));
+    color: var(--text-main, #ffffff);
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.avatar-indicator {
+    position: absolute;
+    display: flex;
+    width: 24px;
+    height: 24px;
+    align-items: center;
+    justify-content: center;
+}
+
+.avatar-status {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-card, #1e1e1e);
+    box-sizing: content-box;
+}
+
+.avatar-status.online {
+    background-color: #16a34a;
+}
+
+.avatar-status.offline {
+    background-color: #52525b;
+}
+
+.avatar-status.busy {
+    background-color: #d97706;
+}
+
+.avatar-status.away {
+    background-color: #2563eb;
+}
+
+/* ==========================================
+   WAVEFORM AUDIO PLAYER VISUALIZATION (ElevenLabs Style)
+   ========================================== */
+.waveform-player {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.85rem;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 18px;
+    min-width: 240px;
+    max-width: 290px;
+    user-select: none;
+    margin-top: 0.35rem;
+    margin-bottom: 0.2rem;
+}
+
+.waveform-play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #52525b, #27272a);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease, opacity 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.waveform-play-btn:hover {
+    background: linear-gradient(135deg, #71717a, #3f3f46);
+    opacity: 0.95;
+}
+
+.waveform-play-btn i {
+    font-size: 0.95rem;
+    margin-left: 2px;
+}
+
+.waveform-play-btn.playing i {
+    margin-left: 0;
+}
+
+.waveform-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.waveform-bars-container {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 24px;
+    cursor: pointer;
+    padding: 2px 0;
+}
+
+.waveform-bar {
+    flex: 1;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 3px;
+    transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.waveform-bar.active {
+    background: var(--accent-success, #10b981);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+}
+
+/* Column & Card styles defined in Kanban section */
+
+.column-header {
+    padding: 0 0.2rem 0.85rem 0.2rem;
+    border-bottom: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    background: transparent;
+    gap: 0.2rem;
+    width: 100%;
+}
+
+.column-title {
+    font-weight: 600;
+    font-size: 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-main);
+}
+
+.card-count {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.15rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.column-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin-top: 0.35rem;
+    width: 100%;
+}
+
+.column-stats-patients {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.column-stats-value {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    opacity: 0.85;
+}
+
+.card-list {
+    background: rgba(23, 26, 32, 0.45);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 0.85rem;
+    flex-grow: 1;
+    overflow-y: auto;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Scrollbar styles */
+.card-list::-webkit-scrollbar {
+    width: 5px;
+}
+
+.card-list::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 10px;
+}
+
+.column-add-card-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.55rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(-4px);
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.column:hover .column-add-card-btn {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.column-add-card-btn:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--text-main);
+    border-color: var(--accent-primary, #818cf8);
+}
+
+/* Cards - Premium Clean Theme */
+.card {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 10px !important;
+    padding: 1rem !important;
+    cursor: grab;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+    position: relative;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+    color: var(--text-main) !important;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* Column Top Border Accents */
+.col-entrada .card {
+    border-top: 3px solid #34d399 !important;
+}
+
+.col-contatado .card {
+    border-top: 3px solid #fbbf24 !important;
+}
+
+.col-orcado .card {
+    border-top: 3px solid #a78bfa !important;
+}
+
+.col-agendado .card {
+    border-top: 3px solid #2dd4bf !important;
+}
+
+.col-ganho .card {
+    border-top: 3px solid #10b981 !important;
+}
+
+.col-perdido .card {
+    border-top: 3px solid #f87171 !important;
+}
+
+.card:active {
+    cursor: grabbing;
+}
+
+.card:hover {
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    transform: translateY(-2px);
+    background: #1C2027 !important;
+    /* Cards destacados */
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28) !important;
+}
+
+.card.dragging {
+    opacity: 0.4;
+    background: rgba(23, 26, 32, 0.9) !important;
+    border-style: dashed !important;
+}
+
+.card-title {
+    font-weight: 600 !important;
+    font-size: 1.05rem !important;
+    margin-bottom: 0;
+    color: var(--text-main) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.card-info {
+    font-size: 0.82rem !important;
+    color: var(--text-muted) !important;
+    opacity: 0.95;
+    margin-bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.72rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted) !important;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    white-space: nowrap;
+}
+
+.card .tag {
+    background: rgba(255, 255, 255, 0.04) !important;
+    padding: 0.2rem 0.5rem !important;
+    border-radius: 6px !important;
+    color: var(--text-muted) !important;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.delete-btn {
+    position: absolute;
+    top: 0.85rem;
+    right: 0.85rem;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+    font-size: 0.85rem;
+}
+
+.notes-btn,
+.orc-btn {
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+}
+
+.card:hover .delete-btn,
+.card:hover .notes-btn,
+.card:hover .orc-btn {
+    opacity: 0.85;
+}
+
+.card:hover .delete-btn:hover,
+.card:hover .notes-btn:hover,
+.card:hover .orc-btn:hover {
+    opacity: 1;
+}
+
+.notes-btn.has-notes {
+    opacity: 1;
+}
+
+.delete-btn:hover {
+    color: var(--accent-danger);
+}
+
+.waveform-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 500;
+}
+
+.waveform-speed-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.waveform-speed-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+
+/* === DASHBOARD PREMIUM CARDS === */
+.dash-kpi-card {
+    cursor: default;
+}
+
+.dash-kpi-card:hover {}
+
+/* === DASHBOARD PRESET BUTTONS === */
+.dash-preset-btn.active {
+    background: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    color: #fff !important;
+    font-weight: 600;
+}
+
+.dash-preset-btn:hover:not(.active) {
+    border-color: var(--accent-primary) !important;
+    color: var(--text-main) !important;
+}
+
+/* Flatpickr dark theme overrides for dashboard */
+#view-dashboard .flatpickr-calendar {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+
+/* ============================================================
+   FLATPICKR — TEMA ESCURO CUSTOMIZADO (sem artefatos visuais)
+   ============================================================ */
+.flatpickr-calendar {
+    background: #1c1c1e !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6) !important;
+    font-family: 'Inter', sans-serif !important;
+    color: #e4e4e7 !important;
+    padding: 0.5rem !important;
+}
+
+/* Remove artefatos de pseudo-elementos (chaves/colchetes brancos) */
+.flatpickr-day::before,
+.flatpickr-day::after {
+    display: none !important;
+    content: none !important;
+}
+
+.flatpickr-day {
+    color: #e4e4e7 !important;
+    border-radius: 8px !important;
+    border: none !important;
+    font-size: 0.85rem !important;
+    font-weight: 400 !important;
+    height: 36px !important;
+    line-height: 36px !important;
+}
+
+.flatpickr-day:hover {
+    background: rgba(96, 165, 250, 0.2) !important;
+    color: #60a5fa !important;
+}
+
+.flatpickr-day.today {
+    border: 1.5px solid #60a5fa !important;
+    color: #60a5fa !important;
+    font-weight: 600 !important;
+    background: transparent !important;
+}
+
+.flatpickr-day.selected,
+.flatpickr-day.startRange,
+.flatpickr-day.endRange {
+    background: #60a5fa !important;
+    color: #fff !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(96, 165, 250, 0.4) !important;
+}
+
+.flatpickr-day.inRange {
+    background: rgba(96, 165, 250, 0.15) !important;
+    color: #93c5fd !important;
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.flatpickr-day.startRange {
+    border-radius: 8px 0 0 8px !important;
+}
+
+.flatpickr-day.endRange {
+    border-radius: 0 8px 8px 0 !important;
+}
+
+.flatpickr-day.startRange.endRange {
+    border-radius: 8px !important;
+}
+
+.flatpickr-day.flatpickr-disabled,
+.flatpickr-day.prevMonthDay,
+.flatpickr-day.nextMonthDay {
+    color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.flatpickr-months {
+    padding: 0.25rem 0.25rem 0 0.25rem !important;
+    align-items: center !important;
+}
+
+.flatpickr-month,
+.flatpickr-monthDropdown-months {
+    background: transparent !important;
+    color: #e4e4e7 !important;
+    font-weight: 600 !important;
+    fill: #e4e4e7 !important;
+}
+
+.flatpickr-monthDropdown-months {
+    background: #2a2a2e !important;
+    border-radius: 6px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.flatpickr-monthDropdown-month {
+    background: #2a2a2e !important;
+    color: #e4e4e7 !important;
+}
+
+.numInputWrapper input {
+    background: #2a2a2e !important;
+    color: #e4e4e7 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 6px !important;
+}
+
+.flatpickr-prev-month,
+.flatpickr-next-month {
+    fill: #a1a1aa !important;
+    color: #a1a1aa !important;
+}
+
+.flatpickr-prev-month:hover,
+.flatpickr-next-month:hover {
+    fill: #60a5fa !important;
+    color: #60a5fa !important;
+}
+
+.flatpickr-weekday {
+    color: #71717a !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+}
+
+.msg-bubble-container:hover .msg-dropdown-trigger {
+    display: flex !important;
+}
+
+.card-options-btn {
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+}
+
+.card:hover .card-options-btn {
+    opacity: 0.85;
+}
+
+.card:hover .card-options-btn:hover {
+    opacity: 1;
+    color: var(--accent-primary) !important;
+}
+
+/* Destaque temporário ao chegar num card via "Ver no Kanban" */
+@keyframes cardHighlightPulse {
+    0%, 100% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(96, 165, 250, 0); }
+    20% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.55); }
+    60% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.35); }
+}
+
+.card-highlight-pulse {
+    animation: cardHighlightPulse 1.1s ease-in-out 2;
+    border-color: rgba(96, 165, 250, 0.7) !important;
+}
+
+/* Bolinha vermelha pulsante na barra de gravação de áudio do chat */
+@keyframes chatRecPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+/* ============================================ */
+/* PAINEL "ORIGEM DE LEADS" (UTMs / Campanhas)   */
+/* ============================================ */
+.utm-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.utm-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+}
+
+.utm-kpi-chip {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.utm-kpi-chip .utm-kpi-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.utm-kpi-chip .utm-kpi-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+}
+
+.utm-field label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 0.3rem;
+}
+
+.utm-field input, .utm-field select {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.55rem 0.75rem;
+    border-radius: 7px;
+    outline: none;
+    font-size: 0.86rem;
+    font-family: inherit;
+    transition: border-color 0.15s;
+}
+
+.utm-field input:focus, .utm-field select:focus {
+    border-color: var(--accent-primary);
+}
+
+.utm-field .utm-hint {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 0.3rem;
+    line-height: 1.35;
+}
+
+.utm-channel-picker {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.4rem;
+}
+
+.utm-channel-btn {
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    border-radius: 8px;
+    padding: 0.55rem 0.3rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.utm-channel-btn i {
+    font-size: 0.95rem;
+}
+
+.utm-channel-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-main);
+}
+
+.utm-channel-btn.active {
+    background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-main));
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.utm-empty-state {
+    text-align: center;
+    padding: 2.5rem 1rem;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.utm-empty-state i {
+    font-size: 1.8rem;
+    opacity: 0.4;
+}
+
+.utm-empty-state span {
+    font-size: 0.85rem;
+}
+
+/* Barra de input do chat — ícones lisos, sem fundo/borda/sombra ("círculo metálico"),
+   pra ficar minimalista como WhatsApp/Telegram. */
+.chat-input-icon-btn {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: var(--text-muted);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.05rem;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+}
+
+.chat-input-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+}
+
+.chat-input-send-btn {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: var(--accent-success);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.15s;
+}
+
+.chat-input-send-btn:hover {
+    background: rgba(16, 185, 129, 0.12);
+    transform: scale(1.08);
+}
+
+/* Lista de conversas do WhatsApp — botão de apagar só aparece no hover da linha */
+.chat-row-delete-btn {
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background-color 0.15s;
+}
+
+.chat-row:hover .chat-row-delete-btn {
+    opacity: 1;
+}
+
+.chat-row-delete-btn:hover {
+    color: #fff !important;
+    background: var(--accent-danger) !important;
+}
+
+.chat-filter-toggle-btn-active {
+    background: rgba(16, 185, 129, 0.12) !important;
+    border-color: var(--accent-success) !important;
+    color: var(--accent-success) !important;
+}
+
+.chat-filter-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.65rem 1rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    font-weight: 500;
+    transition: background-color 0.15s;
+}
+
+.chat-filter-menu-item i {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.chat-filter-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-filter-menu-item.active {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--accent-success);
+    font-weight: 600;
+}
+
+.chat-filter-menu-item.active i {
+    color: var(--accent-success);
+}
+
+.chat-row-favorite-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0.3rem;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.chat-row:hover .chat-row-favorite-btn,
+.chat-row-favorite-btn.is-favorite {
+    opacity: 1;
+}
+
+.chat-row-favorite-btn.is-favorite {
+    color: #fbbf24;
+}

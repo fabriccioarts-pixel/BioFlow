@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Comercial - Clínica</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Chart.js for Dashboard -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <h1><i class="fa-solid fa-users-rays"></i> CRM Amigo App</h1>
+        </div>
+
+        <div class="tabs-container">
+            <button class="tab-btn" onclick="window.location.href='index.html'" id="tab-kanban">
+                <i class="fa-solid fa-table-columns"></i> CRM Vendas
+            </button>
+            <button class="tab-btn" onclick="window.location.href='agenda.html'" id="tab-agenda">
+                <i class="fa-regular fa-calendar-days"></i> Agenda Completa
+            </button>
+            <button class="tab-btn" onclick="window.location.href='dashboard.html'" id="tab-dashboard" style="background: rgba(99, 102, 241, 0.1); color: var(--accent-primary); border-color: rgba(99, 102, 241, 0.3);">
+                <i class="fa-solid fa-chart-pie"></i> Dashboard VIP
+            </button>
+
+            <div class="dropdown">
+                <button class="tab-btn" id="tab-relacionamento-main">
+                    <i class="fa-solid fa-heart" style="color: var(--accent-success)"></i> Relacionamento <i class="fa-solid fa-chevron-down" style="font-size: 0.75rem; margin-left: 0.3rem; opacity: 0.7;"></i>
+                </button>
+                <div class="dropdown-content">
+                    <button class="tab-btn active" onclick="window.location.href='posvenda.html'" id="tab-posvenda">
+                        <i class="fa-solid fa-star" style="color: var(--accent-warning)"></i> Pós-Venda
+                    </button>
+                    <button class="tab-btn" onclick="window.location.href='faltantes.html'" id="tab-faltantes">
+                        <i class="fa-solid fa-user-xmark" style="color: var(--accent-danger)"></i> Faltantes
+                    </button>
+                    <button class="tab-btn" onclick="window.location.href='sumidos.html'" id="tab-sumidos">
+                        <i class="fa-solid fa-user-clock" style="color: var(--accent-danger)"></i> Sumidos
+                    </button>
+                    <button class="tab-btn" onclick="window.location.href='aniversariantes.html'" id="tab-aniversariantes">
+                        <i class="fa-solid fa-cake-candles" style="color: var(--accent-primary)"></i> Aniversariantes
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="actions" style="display: flex; gap: 1rem; align-items: center;">
+            <button class="btn-secondary" id="theme-toggle" onclick="toggleTheme()" title="Mudar Tema" style="padding: 0.5rem; width: 40px; height: 40px; justify-content: center;">
+                <i class="fa-solid fa-moon"></i>
+            </button>
+            <button class="btn-primary" onclick="openNewLeadModal()">
+                <i class="fa-solid fa-plus"></i> Novo Paciente
+            </button>
+        </div>
+    </header>
+
+    <!-- ABA: PÓS-VENDA -->
+    <main class="relacionamento" id="view-posvenda" style="display: flex; padding: 2rem; flex-grow: 1; flex-direction: column;">
+        <div style="margin-bottom: 2rem;">
+            <h2 style="font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="fa-solid fa-star" style="color: var(--accent-warning)"></i> Relacionamento: Pós-Venda (7~15 dias) <span id="count-posvenda" style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 1rem; margin-left: auto;">0</span></h2>
+            <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realizaram procedimentos recentemente. Ideal para pedir feedback e avaliação.</p>
+        </div>
+        <div class="table-container">
+            <table class="crm-table">
+                <thead>
+                    <tr>
+                        <th>Paciente</th>
+                        <th>Telefone</th>
+                        <th>Último Atendimento</th>
+                        <th style="width: 220px; text-align: center;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="list-posvenda">
+                    <tr>
+                        <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                            <i class="fa-solid fa-circle-notch spin"></i> Buscando no histórico...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- Modal Novo Lead -->
+    <div class="modal-overlay" id="modalNewLead">
+        <div class="modal">
+            <h2><i class="fa-solid fa-user-plus"></i> Cadastrar Paciente</h2>
+            <div class="form-group">
+                <label>Nome do Paciente</label>
+                <input type="text" id="nl-nome" placeholder="Ex: Maria da Silva">
+            </div>
+            <div class="form-group">
+                <label>WhatsApp</label>
+                <input type="text" id="nl-telefone" placeholder="(61) 99999-9999">
+            </div>
+            <div class="form-group">
+                <label>Data de Nascimento</label>
+                <input type="date" id="lead-born" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label>Origem (Opcional)</label>
+                <select id="lead-origem" class="form-control">
+                    <option value="Meta Ads">Meta Ads (Facebook/Insta)</option>
+                    <option value="Google Meu Negócio">Google Meu Negócio</option>
+                    <option value="Indicação">Indicação</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
+                <button class="btn-save" onclick="saveNewLead()">Salvar Lead</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Agendamento (Integração) -->
+    <div class="modal-overlay" id="modalAgendamento">
+        <div class="modal">
+            <h2><i class="fa-solid fa-robot" style="color: var(--accent-primary)"></i> Integração Amigo App</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem;">
+                Você arrastou este paciente para "Agendado". Confirme os dados abaixo para enviar automaticamente para a agenda do Amigo App via Vercel.
+            </p>
+            <form id="form-agendar">
+            <input type="hidden" id="ag-lead-id">            <!-- Campos extras para agendamento direto pela grade -->
+            <div id="directScheduleFields" style="display: none;">
+                <div class="form-group">
+                    <label>Nome do Paciente</label>
+                    <input type="text" id="ag-patient-name" class="form-control" placeholder="Ex: João da Silva">
+                </div>
+                <div style="display: flex; gap: 1rem;">
+                    <div class="form-group" style="flex: 1;">
+                        <label>Telefone (WhatsApp)</label>
+                        <input type="text" id="ag-patient-phone" class="form-control" placeholder="(61) 99999-9999">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Data de Nascimento</label>
+                        <input type="date" id="ag-patient-born" class="form-control">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>E-mail</label>
+                    <input type="email" id="ag-patient-email" class="form-control" placeholder="email@exemplo.com">
+                </div>
+            </div>
+
+
+            <div class="form-group">
+                <label>Local (Clínica)</label>
+                <select id="ag-place" class="form-control" required>
+                    <option value="">Carregando locais...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Profissional (Médico/Estética)</label>
+                <select id="ag-user" class="form-control" required>
+                    <option value="">Carregando profissionais...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Procedimento / Serviço</label>
+                <select id="ag-event" class="form-control" required>
+                    <option value="">Carregando serviços...</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 1rem;">
+                <div class="form-group" style="flex: 1;">
+                    <label>Data</label>
+                    <input type="date" id="ag-data" class="form-control" required>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                    <label>Horário</label>
+                    <input type="time" id="ag-hora" class="form-control" required>
+                </div>
+            </div>
+            </form>
+
+            <div class="integration-loader" id="integrationLoader">
+                <i class="fa-solid fa-circle-notch spin"></i> Chamando API da Vercel (Seguro)...
+            </div>
+
+            <div class="modal-actions" id="integrationActions">
+                <button class="btn-cancel" onclick="cancelAgendamento()">Desfazer</button>
+                <button class="btn-save" onclick="confirmAgendamento()">Agendar no Sistema</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

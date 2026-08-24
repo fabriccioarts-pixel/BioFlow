@@ -1,0 +1,36 @@
+.env
+node_modules/
+.vercel/
+
+.vercel
+
+# Dados de paciente / PII — nunca versionar
+aniversariantes.csv
+last_webhook_payload.json
+
+# Ferramentas de túnel local e seus logs
+cloudflared.exe
+cf_out.txt
+lt_out.txt
+
+# Scripts de migração/debug avulsos e scaffolding de teste
+scratch/
+temp_app.js
+temp_app_local.js
+temp_swagger.html
+fix.cjs
+fix2.cjs
+fix3.cjs
+fix4.cjs
+fix_columns.js
+fix_onChange.cjs
+fix_onChange2.cjs
+fix_race.cjs
+theme_flatpickr.cjs
+update_app.cjs
+init_quick_replies.js
+clear.js
+create_table.js
+test_put.js
+test_wa.js
+scratch_*.mjs
