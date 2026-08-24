@@ -1195,6 +1195,23 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_campaign_clicks (
     clicked_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
 
+// Públicos salvos: recortes de leads (por responsável, origem e período de
+// entrada) definidos no Kanban e reaproveitados no disparo de campanhas. Essa
+// tabela só existia dentro da rota manual /api/init-db — como ninguém a
+// chamou depois que a tabela foi adicionada ao código, ela nunca chegou a ser
+// criada em produção, e todo GET /api/audiences batia em "no such table".
+// Auto-criar aqui garante que ela exista sem depender de um passo manual.
+queryD1(`CREATE TABLE IF NOT EXISTS lead_audiences (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_id TEXT,
+    origem TEXT,
+    date_start TEXT,
+    date_end TEXT,
+    has_schedule INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
 // Configurações simples de chave/valor (ex.: meta de receita do dashboard) —
 // evita criar uma tabela dedicada pra cada configuração pontual do sistema.
 queryD1(`CREATE TABLE IF NOT EXISTS crm_settings (
