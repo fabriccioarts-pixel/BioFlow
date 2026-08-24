@@ -2946,11 +2946,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div style="display: flex; gap: 1rem;">
                 <div class="form-group" style="flex: 1;">
                     <label>Valor Original (R$)</label>
-                    <input type="number" step="0.01" id="orc-valor" class="form-control" placeholder="0.00">
+                    <input type="text" inputmode="numeric" id="orc-valor" class="form-control" placeholder="0,00" oninput="maskCurrencyInput(this)">
                 </div>
                 <div class="form-group" style="flex: 1;">
-                    <label>Desconto Oferecido (R$)</label>
-                    <input type="number" step="0.01" id="orc-desconto" class="form-control" placeholder="0.00">
+                    <label>Desconto Oferecido (%)</label>
+                    <input type="number" step="0.01" min="0" max="100" id="orc-desconto" class="form-control" placeholder="0">
                 </div>
             </div>
 

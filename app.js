@@ -125,7 +125,7 @@ function celebrateAgendamento() {
         if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
         const canvas = document.createElement('canvas');
-        canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:99999;';
+        canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:99999999;';
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
         document.body.appendChild(canvas);
@@ -819,10 +819,13 @@ leads[leadIndex].column = targetColumnId;
 renderBoard();
 updateLeadColumnOnServer(draggedCardId, targetColumnId);
 
-// Se moveu para agendado, abre o modal de integração
+// Se moveu para agendado, comemora e só então abre o modal de integração.
+// O modal cobre quase toda a tela com um overlay escuro assim que abre — disparar
+// os dois no mesmo instante fazia o confete "sumir" atrás do formulário mal
+// dava tempo de aparecer. Um pequeno atraso deixa a comemoração visível primeiro.
 if (targetColumnId === 'col-agendado') {
 celebrateAgendamento();
-openAgendamentoModal(draggedCardId);
+setTimeout(() => openAgendamentoModal(draggedCardId), 400);
 }
 // Se moveu para orçado, abre o modal de orçamento (Fase 2.1)
 else if (targetColumnId === 'col-orcado') {
@@ -1053,7 +1056,7 @@ async function changeLeadStatusFromChat(newColumn) {
         await updateLeadColumnOnServer(lead.id, newColumn);
         if (newColumn === 'col-agendado' && !wasAlreadyAgendado) {
             celebrateAgendamento();
-            openAgendamentoModal(lead.id);
+            setTimeout(() => openAgendamentoModal(lead.id), 400);
         }
     } else {
         const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
@@ -1070,7 +1073,7 @@ async function changeLeadStatusFromChat(newColumn) {
         await saveLeadToServer(newLead);
         if (newColumn === 'col-agendado') {
             celebrateAgendamento();
-            openAgendamentoModal(newLead.id);
+            setTimeout(() => openAgendamentoModal(newLead.id), 400);
         }
     }
 }
@@ -1227,6 +1230,34 @@ async function saveLeadNotes() {
     document.getElementById('modalLeadNotes').classList.remove('active');
 }
 
+// Máscara de moeda BRL (1.234,56) digitada da direita pra esquerda, como app de banco:
+// cada tecla empurra um dígito novo pros centavos e reformata o campo inteiro.
+function maskCurrencyInput(el) {
+    let digits = el.value.replace(/\D/g, '');
+    if (!digits) { el.value = ''; return; }
+    digits = digits.replace(/^0+(?=\d)/, '');
+    while (digits.length < 3) digits = '0' + digits;
+    const cents = digits.slice(-2);
+    const intPart = digits.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    el.value = intPart + ',' + cents;
+}
+
+// Converte um valor numérico "cru" (ex: "1000.00", vindo do banco) pro formato
+// mascarado exibido no input (ex: "1.000,00").
+function formatCurrencyBRLValue(rawValue) {
+    const num = parseFloat(String(rawValue).replace(',', '.'));
+    if (isNaN(num)) return '';
+    return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Converte o valor mascarado do input (ex: "1.000,00") de volta pra número puro
+// (ex: "1000.00") — formato que todo o resto do sistema espera em orc.valor.
+function parseCurrencyBRLInput(masked) {
+    if (!masked) return '';
+    const num = parseFloat(String(masked).replace(/\./g, '').replace(',', '.'));
+    return isNaN(num) ? '' : num.toFixed(2);
+}
+
 function openOrcamentoModal(id) {
     const lead = leads.find(l => l.id === id);
     if (!lead) return;
@@ -1239,7 +1270,7 @@ function openOrcamentoModal(id) {
     } catch(e) {}
 
     document.getElementById('orc-procedimento').value = orc.procedimento || '';
-    document.getElementById('orc-valor').value = orc.valor || '';
+    document.getElementById('orc-valor').value = orc.valor ? formatCurrencyBRLValue(orc.valor) : '';
     document.getElementById('orc-desconto').value = orc.desconto || '';
     document.getElementById('orc-condicoes').value = orc.condicoes || '';
     
@@ -1249,7 +1280,9 @@ function openOrcamentoModal(id) {
 async function saveOrcamento() {
     const id = document.getElementById('orc-lead-id').value;
     const procedimento = document.getElementById('orc-procedimento').value;
-    const valor = document.getElementById('orc-valor').value;
+    // O campo mostra "1.000,00" (máscara BRL), mas é armazenado como número puro
+    // ("1000.00") pra continuar compatível com todo lugar que faz parseFloat(orc.valor).
+    const valor = parseCurrencyBRLInput(document.getElementById('orc-valor').value);
     const desconto = document.getElementById('orc-desconto').value;
     const condicoes = document.getElementById('orc-condicoes').value;
     
@@ -3519,7 +3552,7 @@ function renderDashboard() {
     const subtitleEl = document.getElementById('dash-subtitle');
     if (subtitleEl) subtitleEl.innerText = subtitleText;
 
-    let receitaTotal = 0, agendamentosComValor = 0;
+    let receitaPrevista = 0, receitaRealizada = 0, agendamentosComValor = 0;
     let leadsAtivos = 0, agendadosTotal = 0, ganhosTotal = 0, perdidosTotal = 0;
     let leadsContatados = 0; // Leads que entraram no período selecionado
     let perdasTotal = 0;
@@ -3548,10 +3581,10 @@ function renderDashboard() {
 
         if (lead.column === 'col-ganho') {
             ganhosTotal++;
-            if (revenueInPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
+            if (revenueInPeriod) { receitaRealizada += val; if (val > 0) agendamentosComValor++; }
         } else if (lead.column === 'col-agendado') {
             agendadosTotal++;
-            if (revenueInPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
+            if (revenueInPeriod) { receitaPrevista += val; if (val > 0) agendamentosComValor++; }
         } else if (lead.column === 'col-perdido') {
             perdidosTotal++;
             if (revenueInPeriod) perdasTotal += val;
@@ -3568,11 +3601,12 @@ function renderDashboard() {
         }
     });
 
-    const ticketMedio = agendamentosComValor > 0 ? (receitaTotal / agendamentosComValor) : 0;
+    const ticketMedio = agendamentosComValor > 0 ? ((receitaPrevista + receitaRealizada) / agendamentosComValor) : 0;
     const taxaConversao = leads.length > 0 ? Math.round(((agendadosTotal + ganhosTotal) / leads.length) * 100) : 0;
 
     const el = id => document.getElementById(id);
-    if (el('dash-receita-total')) el('dash-receita-total').innerText = 'R$ ' + receitaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-receita-prevista')) el('dash-receita-prevista').innerText = 'R$ ' + receitaPrevista.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-receita-realizada')) el('dash-receita-realizada').innerText = 'R$ ' + receitaRealizada.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
     if (el('dash-ticket-medio')) el('dash-ticket-medio').innerText = 'R$ ' + ticketMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
     if (el('dash-leads-ativos')) el('dash-leads-ativos').innerText = leadsAtivos;
     if (el('dash-taxa-resposta')) el('dash-taxa-resposta').innerText = taxaConversao + '%';
@@ -3614,7 +3648,9 @@ function renderDashboard() {
             }).join('');
     }
 
-    renderDashboardGoal(receitaTotal);
+    // Meta de receita acompanha o faturamento realizado (Ganho), não a previsão de
+    // agendados — meta é sobre dinheiro que já entrou, não sobre o que ainda pode cair.
+    renderDashboardGoal(receitaRealizada);
     renderCharts(origemMap, isInPeriod);
 }
 
