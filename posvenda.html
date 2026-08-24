@@ -73,10 +73,12 @@
             <h2 style="font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="fa-solid fa-star" style="color: var(--accent-warning)"></i> Relacionamento: Pós-Venda (7~15 dias) <span id="count-posvenda" style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 1rem; margin-left: auto;">0</span></h2>
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realizaram procedimentos recentemente. Ideal para pedir feedback e avaliação.</p>
         </div>
+        <div id="rel-bulk-bar-posvenda" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
             <table class="crm-table">
                 <thead>
                     <tr>
+                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('posvenda', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -85,7 +87,7 @@
                 </thead>
                 <tbody id="list-posvenda">
                     <tr>
-                        <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                        <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">
                             <i class="fa-solid fa-circle-notch spin"></i> Buscando no histórico...
                         </td>
                     </tr>

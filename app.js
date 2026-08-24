@@ -1875,6 +1875,12 @@ function switchTab(tabId) {
         if (view) view.style.display = 'flex';
         loadWhatsappTemplates();
         loadAudiences().then(updateCampaignLeadCount);
+        loadDispatchHistory();
+        const pricingBtn = document.getElementById('btn-whatsapp-pricing');
+        if (pricingBtn) {
+            const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+            pricingBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+        }
     } else if (tabId === 'origem-leads') {
         const view = document.getElementById('view-origem-leads');
         if (view) view.style.display = 'flex';
@@ -1904,6 +1910,12 @@ function switchTab(tabId) {
         const view = document.getElementById(`view-${tabId}`);
         if (view) {
             view.style.display = 'flex';
+            // A barra de disparo em massa dessas telas precisa da lista de templates
+            // aprovados — sem isso, quem nunca abriu a aba Campanhas via checkbox
+            // "vazio" mesmo tendo templates disponíveis.
+            if (typeof loadWhatsappTemplates === 'function' && cachedWhatsappTemplates.length === 0) {
+                loadWhatsappTemplates();
+            }
             if (tabId === 'aniversariantes') {
                 fetchAniversariantesHoje();
                 fetchAniversariantesMes();
@@ -1942,15 +1954,187 @@ async function fetchRelacionamento() {
 function renderRelacionamentoList(idSuffix, list, cardRenderer) {
     const countEl = document.getElementById(`count-${idSuffix}`);
     if (countEl) countEl.innerText = list.length;
-    
+
     const container = document.getElementById(`list-${idSuffix}`);
-    
+    resetRelBulkBar(idSuffix);
+
     if (list.length === 0) {
         container.innerHTML = `<div style="color: var(--text-muted); text-align: center; grid-column: 1 / -1; margin-top: 2rem;">Nenhum paciente encontrado.</div>`;
         return;
     }
-    
+
     container.innerHTML = list.map(item => cardRenderer(item)).join('');
+}
+
+// === SELEÇÃO EM MASSA + DISPARO DE CAMPANHA PARA AS LISTAS DE RELACIONAMENTO ===
+// tipo (id usado no DOM/checkboxes) -> tipo aceito por /api/mensagens (paciente_id/tipo).
+// "posvenda" (sem underscore, por causa do id-suffix já usado no HTML) vira "pos_venda"
+// (com underscore, o valor histórico gravado no banco); aniversariantes-hoje/mes viram
+// o mesmo "aniversariante" já usado por getWhatsAppLink.
+const REL_TIPO_TO_BACKEND = {
+    posvenda: 'pos_venda',
+    faltantes: 'faltantes',
+    sumidos: 'sumidos',
+    'aniversariantes-hoje': 'aniversariante',
+    'aniversariantes-mes': 'aniversariante'
+};
+
+function resetRelBulkBar(tipo) {
+    const bar = document.getElementById(`rel-bulk-bar-${tipo}`);
+    if (!bar) return;
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    delete bar.dataset.built;
+}
+
+function getRelSelectedRecipients(tipo) {
+    const boxes = document.querySelectorAll(`.rel-select[data-tipo="${tipo}"]:checked`);
+    return Array.from(boxes).map(cb => ({
+        id: cb.dataset.id,
+        nome: cb.dataset.nome,
+        telefone: cb.dataset.telefone
+    }));
+}
+
+function toggleRelSelectAll(tipo, checked) {
+    document.querySelectorAll(`.rel-select[data-tipo="${tipo}"]`).forEach(cb => { cb.checked = checked; });
+    updateRelBulkBar(tipo);
+}
+
+function updateRelBulkBar(tipo) {
+    const bar = document.getElementById(`rel-bulk-bar-${tipo}`);
+    if (!bar) return;
+    const count = document.querySelectorAll(`.rel-select[data-tipo="${tipo}"]:checked`).length;
+
+    if (count === 0) {
+        resetRelBulkBar(tipo);
+        return;
+    }
+
+    bar.style.display = 'flex';
+    // Só (re)monta o select/botões na primeira vez que a barra aparece — senão o
+    // template escolhido pelo atendente seria perdido a cada novo checkbox clicado.
+    if (!bar.dataset.built) {
+        const approved = (cachedWhatsappTemplates || []).filter(t => t.status === 'APPROVED');
+        const options = approved.length
+            ? approved.map(t => `<option value="${escapeHtml(t.name)}|${escapeHtml(t.language)}">${escapeHtml(t.name)} (${escapeHtml(t.language)})</option>`).join('')
+            : '<option value="">Nenhum template aprovado ainda</option>';
+        bar.innerHTML = `
+            <span class="rel-bulk-count" style="font-weight: 600; white-space: nowrap;"></span>
+            <select class="form-control" id="rel-bulk-template-${tipo}" style="flex: 1; min-width: 220px;" ${approved.length ? '' : 'disabled'}>${options}</select>
+            <button type="button" class="btn-primary" id="rel-bulk-send-${tipo}" onclick="startRelacionamentoCampaign('${tipo}')" ${approved.length ? '' : 'disabled'} style="white-space: nowrap;">
+                <i class="fa-brands fa-whatsapp"></i> Disparar Campanha
+            </button>
+            <button type="button" class="btn-secondary" onclick="markRelSelectedAsContacted('${tipo}')" style="white-space: nowrap;">
+                <i class="fa-solid fa-check"></i> Marcar como Contactado
+            </button>
+        `;
+        bar.dataset.built = '1';
+    }
+    const countEl = bar.querySelector('.rel-bulk-count');
+    if (countEl) countEl.innerText = `${count} selecionado(s)`;
+}
+
+function reloadRelSource(tipo) {
+    if (tipo === 'posvenda' || tipo === 'faltantes' || tipo === 'sumidos') {
+        relacionamentoFetched = false;
+        fetchRelacionamento();
+    } else if (tipo === 'aniversariantes-hoje') {
+        aniversariantesHojeFetched = false;
+        fetchAniversariantesHoje();
+    } else if (tipo === 'aniversariantes-mes') {
+        aniversariantesMesFetched = false;
+        fetchAniversariantesMes();
+    }
+}
+
+async function startRelacionamentoCampaign(tipo) {
+    const recipients = getRelSelectedRecipients(tipo);
+    if (recipients.length === 0) return;
+
+    const selectEl = document.getElementById(`rel-bulk-template-${tipo}`);
+    const selectedValue = selectEl ? selectEl.value : '';
+    if (!selectedValue) {
+        alert('Selecione um template aprovado!');
+        return;
+    }
+    const [templateName, languageCode] = selectedValue.split('|');
+
+    const selectedTemplate = cachedWhatsappTemplates.find(t => t.name === templateName && t.language === languageCode);
+    const templateCategory = (selectedTemplate && selectedTemplate.category) || 'UTILITY';
+    const bodyComponent = selectedTemplate ? (selectedTemplate.components || []).find(c => c.type === 'BODY') : null;
+    const bodyVarMatches = bodyComponent && bodyComponent.text ? (bodyComponent.text.match(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g) || []) : [];
+    const bodyVarCount = bodyVarMatches.length;
+    const bodyVarName = bodyVarMatches[0] ? bodyVarMatches[0].replace(/[{}\s]/g, '') : null;
+    const isNamedParam = bodyVarName && !/^\d+$/.test(bodyVarName);
+    if (bodyVarCount > 1) {
+        alert(`O template "${templateName}" tem ${bodyVarCount} variáveis no corpo. Disparo em massa hoje só suporta templates sem variável ou com uma única variável (preenchida com o nome do paciente).`);
+        return;
+    }
+
+    if (!confirm(`Disparar o template "${templateName}" para ${recipients.length} paciente(s)?`)) return;
+
+    const pricingRates = await getWhatsappPricingRates();
+    const costPerMessage = pricingRates[templateCategory] ?? pricingRates.UTILITY;
+    const backendTipo = REL_TIPO_TO_BACKEND[tipo];
+
+    // Troca a barra de seleção por uma mini área de progresso — o motor de disparo
+    // (dispatchTemplateCampaign) espera esses elementos pra atualizar status/log/barra.
+    const bar = document.getElementById(`rel-bulk-bar-${tipo}`);
+    bar.style.display = 'block';
+    bar.innerHTML = `
+        <div style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; gap: 0.5rem;">
+                <strong id="rel-bulk-status-${tipo}">Em progresso...</strong>
+                <span id="rel-bulk-progress-text-${tipo}" style="font-size: 0.8rem; color: var(--text-muted);">0 / ${recipients.length} processados</span>
+            </div>
+            <div style="height: 6px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; margin-bottom: 0.5rem;">
+                <div id="rel-bulk-progress-bar-${tipo}" style="height: 100%; width: 0%; background: var(--accent-primary); transition: width .2s;"></div>
+            </div>
+            <div id="rel-bulk-log-${tipo}" style="max-height: 140px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 0.5rem;"></div>
+        </div>
+    `;
+
+    // dispatchTemplateCampaign mexe em btn.disabled/innerHTML — aqui não tem um botão
+    // "oficial" pra desabilitar durante o envio, então passamos um <button> descartável.
+    const dummyBtn = document.createElement('button');
+
+    await dispatchTemplateCampaign(recipients, {
+        templateName, languageCode, templateCategory, costPerMessage,
+        bodyVarCount, isNamedParam, bodyVarName,
+        targetLabel: `relacionamento:${tipo}`,
+        els: {
+            btn: dummyBtn,
+            logBox: document.getElementById(`rel-bulk-log-${tipo}`),
+            statusText: document.getElementById(`rel-bulk-status-${tipo}`),
+            progressText: document.getElementById(`rel-bulk-progress-text-${tipo}`),
+            progressBar: document.getElementById(`rel-bulk-progress-bar-${tipo}`)
+        },
+        onResult: (lead, success) => {
+            // Só marca como contactado em sucesso real confirmado pela Meta — diferente
+            // do botão manual antigo, que marcava só no clique, antes até de enviar.
+            if (success) registerMessageSent(lead.id, backendTipo, null);
+        }
+    });
+
+    setTimeout(() => reloadRelSource(tipo), 1500);
+}
+
+async function markRelSelectedAsContacted(tipo) {
+    const recipients = getRelSelectedRecipients(tipo);
+    if (recipients.length === 0) return;
+    if (!(await customConfirm(`Marcar ${recipients.length} paciente(s) como já contactado(s), sem enviar mensagem? Use isso pra quem você já abordou por outro canal (ligação, presencial, etc).`, 'Marcar como Contactado'))) return;
+
+    const backendTipo = REL_TIPO_TO_BACKEND[tipo];
+    await Promise.all(recipients.map(r =>
+        fetch('/api/mensagens', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paciente_id: r.id, tipo: backendTipo })
+        }).catch(e => console.error('Erro ao marcar como contactado:', e))
+    ));
+
+    reloadRelSource(tipo);
 }
 
 function getWhatsAppLink(phone, name, type) {
@@ -1990,6 +2174,7 @@ function renderPosVendaCard(item) {
 
     return `
         <tr>
+            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="posvenda" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('posvenda')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2021,6 +2206,7 @@ function renderFaltantesCard(item) {
 
     return `
         <tr>
+            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="faltantes" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('faltantes')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2051,6 +2237,7 @@ function renderSumidosCard(item) {
 
     return `
         <tr>
+            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="sumidos" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('sumidos')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2656,18 +2843,20 @@ async function fetchAniversariantesMes() {
 function renderAniversariantesHoje() {
     const list = document.getElementById('list-aniversariantes-hoje');
     if (!list) return;
+    resetRelBulkBar('aniversariantes-hoje');
 
     if (aniversariantesHojeData.length === 0) {
-        list.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Nenhum aniversariante encontrado hoje pela API.</td></tr>';
+        list.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">Nenhum aniversariante encontrado hoje pela API.</td></tr>';
         document.getElementById('count-aniversariantes-hoje').innerText = '0';
         return;
     }
-    
+
     document.getElementById('count-aniversariantes-hoje').innerText = aniversariantesHojeData.length;
 
     list.innerHTML = aniversariantesHojeData.map(p => {
         return `
             <tr style="background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent-warning);">
+                <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-hoje" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-hoje')"></td>
                 <td style="font-weight: 500;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(245, 158, 11, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-warning);">
@@ -2679,9 +2868,14 @@ function renderAniversariantesHoje() {
                 <td>${formatPhone(p.phone)}</td>
                 <td><span style="font-weight: 500;">${p.age} anos</span></td>
                 <td style="text-align: center;">
-                    <a href="${getWhatsAppLink(p.phone, p.name, 'aniversariante')}" target="_blank" class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.15); color: var(--accent-success); border-color: rgba(16, 185, 129, 0.3); text-decoration: none; padding: 0.5rem;">
-                        <i class="fa-brands fa-whatsapp"></i> Parabéns
-                    </a>
+                    ${p.contacted ?
+                        `<button disabled class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(255, 255, 255, 0.05); color: var(--text-muted); cursor: not-allowed; border: none; padding: 0.5rem;">
+                            <i class="fa-solid fa-check"></i> Já Contactado
+                        </button>` :
+                        `<a href="${getWhatsAppLink(p.phone, p.name, 'aniversariante')}" onclick="registerMessageSent('${escapeHtml(p.phone || '')}', 'aniversariante', this)" target="_blank" class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.15); color: var(--accent-success); border-color: rgba(16, 185, 129, 0.3); text-decoration: none; padding: 0.5rem;">
+                            <i class="fa-brands fa-whatsapp"></i> Parabéns
+                        </a>`
+                    }
                 </td>
             </tr>
         `;
@@ -2691,21 +2885,23 @@ function renderAniversariantesHoje() {
 function renderAniversariantesMes() {
     const list = document.getElementById('list-aniversariantes-mes');
     if (!list) return;
+    resetRelBulkBar('aniversariantes-mes');
 
     if (aniversariantesMesData.length === 0) {
-        list.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Planilha vazia ou não importada.</td></tr>';
+        list.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">Planilha vazia ou não importada.</td></tr>';
         document.getElementById('count-aniversariantes-mes').innerText = '0';
         return;
     }
-    
+
     document.getElementById('count-aniversariantes-mes').innerText = aniversariantesMesData.length;
 
     list.innerHTML = aniversariantesMesData.map(p => {
         const isTodayStyle = p.isToday ? 'background: rgba(16, 185, 129, 0.1); border-left: 3px solid var(--accent-success);' : '';
         const todayBadge = p.isToday ? '<span style="background: var(--accent-success); color: white; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; margin-left: 0.5rem; font-weight: bold;">HOJE</span>' : '';
-        
+
         return `
             <tr style="${isTodayStyle}">
+                <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-mes" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-mes')"></td>
                 <td style="font-weight: 500;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(245, 158, 11, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-warning);">
@@ -2717,9 +2913,14 @@ function renderAniversariantesMes() {
                 <td>${formatPhone(p.phone)}</td>
                 <td>${p.birthDate} ${todayBadge}</td>
                 <td style="text-align: center;">
-                    <a href="${getWhatsAppLink(p.phone, p.name, 'aniversariante')}" target="_blank" class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.15); color: var(--accent-success); border-color: rgba(16, 185, 129, 0.3); text-decoration: none; padding: 0.5rem;">
-                        <i class="fa-brands fa-whatsapp"></i> Parabéns
-                    </a>
+                    ${p.contacted ?
+                        `<button disabled class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(255, 255, 255, 0.05); color: var(--text-muted); cursor: not-allowed; border: none; padding: 0.5rem;">
+                            <i class="fa-solid fa-check"></i> Já Contactado
+                        </button>` :
+                        `<a href="${getWhatsAppLink(p.phone, p.name, 'aniversariante')}" onclick="registerMessageSent('${escapeHtml(p.phone || '')}', 'aniversariante', this)" target="_blank" class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.15); color: var(--accent-success); border-color: rgba(16, 185, 129, 0.3); text-decoration: none; padding: 0.5rem;">
+                            <i class="fa-brands fa-whatsapp"></i> Parabéns
+                        </a>`
+                    }
                 </td>
             </tr>
         `;
@@ -4136,6 +4337,86 @@ async function updateCampaignLeadCount() {
     }
 }
 
+// === CUSTO DO DISPARO (tarifa por mensagem, por categoria de template) ===
+let cachedWhatsappPricingRates = null;
+
+async function getWhatsappPricingRates() {
+    if (cachedWhatsappPricingRates) return cachedWhatsappPricingRates;
+    try {
+        const res = await fetch('/api/settings/whatsapp-pricing');
+        const json = await res.json();
+        cachedWhatsappPricingRates = json.rates || { MARKETING: 0.3125, UTILITY: 0.0340, AUTHENTICATION: 0.0340 };
+    } catch (e) {
+        cachedWhatsappPricingRates = { MARKETING: 0.3125, UTILITY: 0.0340, AUTHENTICATION: 0.0340 };
+    }
+    return cachedWhatsappPricingRates;
+}
+
+async function openWhatsappPricingEditor() {
+    const rates = await getWhatsappPricingRates();
+    const marketing = prompt('Tarifa Marketing (R$ por mensagem):', rates.MARKETING);
+    if (marketing === null) return;
+    const utility = prompt('Tarifa Utility (R$ por mensagem):', rates.UTILITY);
+    if (utility === null) return;
+    const authentication = prompt('Tarifa Authentication (R$ por mensagem):', rates.AUTHENTICATION);
+    if (authentication === null) return;
+
+    try {
+        const res = await fetch('/api/settings/whatsapp-pricing', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ MARKETING: marketing, UTILITY: utility, AUTHENTICATION: authentication })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar tarifas');
+        cachedWhatsappPricingRates = json.rates;
+        if (typeof showToast === 'function') showToast('Tarifas atualizadas!', 'success');
+        else alert('Tarifas atualizadas!');
+    } catch (e) {
+        alert('Erro ao salvar tarifas: ' + e.message);
+    }
+}
+
+async function loadDispatchHistory() {
+    const box = document.getElementById('dispatch-history-list');
+    if (!box) return;
+    try {
+        const res = await fetch('/api/whatsapp/dispatches');
+        const json = await res.json();
+        const dispatches = json.dispatches || [];
+        if (dispatches.length === 0) {
+            box.innerHTML = `<div class="utm-empty-state" style="padding: 1rem;"><span>Nenhum disparo registrado ainda.</span></div>`;
+            return;
+        }
+        box.innerHTML = `
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem;">
+                <thead>
+                    <tr style="text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border-color);">
+                        <th style="padding: 0.5rem;">Data</th>
+                        <th style="padding: 0.5rem;">Template</th>
+                        <th style="padding: 0.5rem;">Categoria</th>
+                        <th style="padding: 0.5rem; text-align: right;">Enviados</th>
+                        <th style="padding: 0.5rem; text-align: right;">Custo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${dispatches.map(d => `
+                        <tr style="border-bottom: 1px solid var(--border-color);">
+                            <td style="padding: 0.5rem; color: var(--text-muted);">${new Date(d.created_at).toLocaleString('pt-BR')}</td>
+                            <td style="padding: 0.5rem; color: var(--text-main);">${escapeHtml(d.template_name || '')}</td>
+                            <td style="padding: 0.5rem; color: var(--text-muted);">${escapeHtml(d.category || '')}</td>
+                            <td style="padding: 0.5rem; text-align: right; color: var(--text-main);">${d.success_count}/${d.total_leads}</td>
+                            <td style="padding: 0.5rem; text-align: right; color: var(--accent-success); font-weight: 600;">R$ ${Number(d.cost_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        box.innerHTML = `<div class="utm-empty-state" style="padding: 1rem;"><span>Erro ao carregar histórico de disparos.</span></div>`;
+    }
+}
+
 async function startCampaign() {
     const selectEl = document.getElementById('campaign-template-select');
     const selectedValue = selectEl ? selectEl.value : '';
@@ -4154,6 +4435,13 @@ async function startCampaign() {
     // lead); templates com mais de uma são bloqueados aqui pra não mandar disparo
     // pela metade pra centenas de leads.
     const selectedTemplate = cachedWhatsappTemplates.find(t => t.name === templateName && t.language === languageCode);
+    // Categoria vem pronta da Meta (MARKETING/UTILITY/AUTHENTICATION) — desde jan/2026
+    // ela cobra por mensagem enviada, tarifa fixa por categoria, então já dá pra saber
+    // o custo antes mesmo de enviar. UTILITY como fallback (tarifa mais baixa) se a
+    // categoria não vier por algum motivo.
+    const templateCategory = (selectedTemplate && selectedTemplate.category) || 'UTILITY';
+    const pricingRates = await getWhatsappPricingRates();
+    const costPerMessage = pricingRates[templateCategory] ?? pricingRates.UTILITY;
     const bodyComponent = selectedTemplate ? (selectedTemplate.components || []).find(c => c.type === 'BODY') : null;
     const bodyVarMatches = bodyComponent && bodyComponent.text ? (bodyComponent.text.match(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g) || []) : [];
     const bodyVarCount = bodyVarMatches.length;
@@ -4226,23 +4514,50 @@ async function startCampaign() {
         return;
     }
 
+    const costText = document.getElementById('campaign-cost-text');
+    await dispatchTemplateCampaign(targetLeads, {
+        templateName, languageCode, templateCategory, costPerMessage,
+        bodyVarCount, isNamedParam, bodyVarName,
+        targetLabel: targetCol,
+        els: { btn, logBox, statusText, progressText, progressBar, costText }
+    });
+}
+
+// Motor genérico de disparo de template em massa, extraído de startCampaign() pra
+// poder ser reaproveitado por qualquer tela que precise mandar o mesmo template pra
+// uma lista de destinatários (ex: campanhas de reativação de Faltantes/Sumidos/
+// Pós-venda/Aniversariantes, que não vêm do Kanban de leads).
+// recipients: [{ id, nome, telefone }]. els: { btn, logBox, statusText, progressText,
+// progressBar, costText? }. onResult(recipient, success) é chamado após cada envio,
+// opcional — usado por quem chama pra registrar "contactado" só em sucesso real.
+async function dispatchTemplateCampaign(recipients, opts) {
+    const {
+        templateName, languageCode, templateCategory, costPerMessage,
+        bodyVarCount, isNamedParam, bodyVarName, targetLabel, els, onResult
+    } = opts;
+    const { btn, logBox, statusText, progressText, progressBar, costText } = els;
+
+    const originalBtnHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Disparando...';
-    logBox.innerHTML = `<div>Iniciando campanha para ${targetLeads.length} leads...</div>`;
+    logBox.innerHTML = `<div>Iniciando campanha para ${recipients.length} leads...</div>`;
     statusText.innerText = "Em progresso...";
     statusText.style.color = "var(--accent-info)";
     progressBar.style.width = "0%";
 
     let successCount = 0;
     let failCount = 0;
+    let costTotal = 0;
+    if (costText) costText.innerText = 'Custo estimado: R$ 0,00';
 
-    for (let i = 0; i < targetLeads.length; i++) {
-        const lead = targetLeads[i];
-        let phone = lead.telefone.replace(/\D/g, '');
+    for (let i = 0; i < recipients.length; i++) {
+        const lead = recipients[i];
+        let phone = String(lead.telefone || '').replace(/\D/g, '');
         if (!phone.startsWith('55') && phone.length <= 11) {
             phone = '55' + phone;
         }
 
+        let success = false;
         try {
             const res = await fetch('/api/whatsapp/send', {
                 method: 'POST',
@@ -4261,7 +4576,10 @@ async function startCampaign() {
 
             const data = await res.json();
             if (data.success) {
+                success = true;
                 successCount++;
+                costTotal += costPerMessage;
+                if (costText) costText.innerText = 'Custo estimado: R$ ' + costTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
                 logBox.innerHTML += `<div style="color: var(--accent-success);">[OK] ${lead.nome} (${phone})</div>`;
             } else {
                 failCount++;
@@ -4272,9 +4590,13 @@ async function startCampaign() {
             logBox.innerHTML += `<div style="color: var(--accent-danger);">[FALHA] ${lead.nome} (${phone}): ${e.message}</div>`;
         }
 
-        const pct = Math.round(((i + 1) / targetLeads.length) * 100);
+        if (typeof onResult === 'function') {
+            try { onResult(lead, success); } catch (e) { console.error('Erro no callback pós-envio:', e); }
+        }
+
+        const pct = Math.round(((i + 1) / recipients.length) * 100);
         progressBar.style.width = `${pct}%`;
-        progressText.innerText = `${i + 1} / ${targetLeads.length} processados`;
+        progressText.innerText = `${i + 1} / ${recipients.length} processados`;
         logBox.scrollTop = logBox.scrollHeight;
 
         // Rate limit: ~1-1.6s entre mensagens, com variação, pra não ter um padrão
@@ -4284,11 +4606,32 @@ async function startCampaign() {
     }
 
     btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Iniciar Disparo';
+    btn.innerHTML = originalBtnHtml;
     statusText.innerText = `Concluído: ${successCount} Sucessos, ${failCount} Falhas.`;
     statusText.style.color = failCount === 0 ? "var(--accent-success)" : "var(--accent-warning)";
     logBox.innerHTML += `<div><strong>Campanha finalizada!</strong></div>`;
     logBox.scrollTop = logBox.scrollHeight;
+
+    try {
+        await fetch('/api/whatsapp/dispatches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                template_name: templateName,
+                category: templateCategory,
+                target_column: targetLabel,
+                total_leads: recipients.length,
+                success_count: successCount,
+                fail_count: failCount,
+                cost_total: costTotal
+            })
+        });
+        if (typeof loadDispatchHistory === 'function') loadDispatchHistory();
+    } catch (e) {
+        console.error('Erro ao salvar disparo no histórico:', e);
+    }
+
+    return { successCount, failCount, costTotal };
 }
 
 // === TEMPLATES DE MENSAGEM (Meta) ===

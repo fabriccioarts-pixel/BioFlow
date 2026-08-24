@@ -549,12 +549,27 @@
                         <span id="campaign-progress-text">0 / 0 enviados</span>
                         <span id="campaign-status" style="color: var(--accent-warning); font-weight: 600;">Aguardando início...</span>
                     </div>
+                    <div style="color: var(--accent-success); font-size: 0.85rem; font-weight: 600;" id="campaign-cost-text">Custo estimado: R$ 0,00</div>
 
                     <div id="campaign-log"
                         style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.3rem;">
                         <div>Pronto para começar. Selecione o público e clique em Iniciar.</div>
                     </div>
                 </div>
+        </div>
+
+        <div class="utm-panel" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; margin-top: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap;">
+                <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fa-solid fa-clock-rotate-left" style="color: var(--accent-success);"></i> Histórico de Disparos
+                </h3>
+                <button class="btn-secondary" id="btn-whatsapp-pricing" onclick="openWhatsappPricingEditor()" style="display: none;" title="Editar tarifas por mensagem">
+                    <i class="fa-solid fa-tags"></i> Tarifas
+                </button>
+            </div>
+            <div id="dispatch-history-list" style="overflow-x: auto;">
+                <div class="utm-empty-state" style="padding: 1rem;"><span>Carregando histórico...</span></div>
+            </div>
         </div>
     </div>
 
@@ -1444,10 +1459,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realizaram procedimentos
                 recentemente. Ideal para pedir feedback e avaliação.</p>
         </div>
+        <div id="rel-bulk-bar-posvenda" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
             <table class="crm-table">
                 <thead>
                     <tr>
+                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('posvenda', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1471,10 +1488,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que agendaram mas não compareceram. Tente
                 reagendar a consulta.</p>
         </div>
+        <div id="rel-bulk-bar-faltantes" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
             <table class="crm-table">
                 <thead>
                     <tr>
+                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('faltantes', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1498,10 +1517,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes sem novos agendamentos há mais de 45
                 dias. Faça uma campanha de resgate.</p>
         </div>
+        <div id="rel-bulk-bar-sumidos" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
             <table class="crm-table">
                 <thead>
                     <tr>
+                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('sumidos', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1533,10 +1554,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <div id="rel-bulk-bar-aniversariantes-hoje" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container" style="background: transparent;">
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-hoje', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Idade Alcançada</th>
@@ -1545,7 +1568,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </thead>
                     <tbody id="list-aniversariantes-hoje">
                         <tr>
-                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
                                 <i class="fa-solid fa-circle-notch spin"></i> Consultando a API...
                             </td>
                         </tr>
@@ -1577,10 +1600,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <div id="rel-bulk-bar-aniversariantes-mes" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container">
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-mes', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Data de Nascimento</th>
@@ -1589,7 +1614,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </thead>
                     <tbody id="list-aniversariantes-mes">
                         <tr>
-                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">
                                 <i class="fa-solid fa-circle-notch spin"></i> Lendo arquivo local...
                             </td>
                         </tr>

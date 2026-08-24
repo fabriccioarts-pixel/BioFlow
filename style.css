@@ -1547,6 +1547,23 @@ select.form-control option {
     border-bottom: none;
 }
 
+/* Barra de disparo em massa nas telas de relacionamento (Pós-venda, Faltantes,
+   Sumidos, Aniversariantes) — some/aparece conforme checkboxes são marcados */
+.rel-bulk-bar {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-primary);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.rel-bulk-bar .rel-bulk-count {
+    color: var(--text-main);
+}
+
 /* Dropdown Menu para Relacionamento */
 .dropdown {
     position: relative;

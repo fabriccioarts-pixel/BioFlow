@@ -1336,6 +1336,96 @@ app.put('/api/settings/dashboard-goal', async (req, res) => {
     }
 });
 
+// Tarifas do disparo de WhatsApp (R$ por mensagem, por categoria de template) —
+// desde jan/2026 a Meta cobra por mensagem enviada (não mais por conversa de
+// 24h), com valor fixo por categoria. Editável porque a Meta pode reajustar.
+const DEFAULT_WHATSAPP_PRICING = { MARKETING: 0.3125, UTILITY: 0.0340, AUTHENTICATION: 0.0340 };
+
+app.get('/api/settings/whatsapp-pricing', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_pricing_rates'");
+        let rates = DEFAULT_WHATSAPP_PRICING;
+        if (rows && rows[0] && rows[0].value) {
+            try { rates = { ...DEFAULT_WHATSAPP_PRICING, ...JSON.parse(rows[0].value) }; } catch (e) {}
+        }
+        res.json({ rates });
+    } catch (e) {
+        console.error('Erro ao buscar tarifas do WhatsApp:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar tarifas.' });
+    }
+});
+
+app.put('/api/settings/whatsapp-pricing', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem definir tarifas.' });
+    }
+    try {
+        const { MARKETING, UTILITY, AUTHENTICATION } = req.body || {};
+        const rates = {
+            MARKETING: parseFloat(MARKETING),
+            UTILITY: parseFloat(UTILITY),
+            AUTHENTICATION: parseFloat(AUTHENTICATION)
+        };
+        for (const key of Object.keys(rates)) {
+            if (isNaN(rates[key]) || rates[key] < 0) {
+                return res.status(400).json({ error: `Tarifa inválida para ${key}.` });
+            }
+        }
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_pricing_rates', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(rates)]
+        );
+        res.json({ success: true, rates });
+    } catch (e) {
+        console.error('Erro ao salvar tarifas do WhatsApp:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar tarifas.' });
+    }
+});
+
+// Histórico de disparos em massa (campanhas de template) — cada linha é um
+// disparo concluído, com o custo estimado já calculado no front (soma de
+// sucessos × tarifa da categoria do template no momento do envio).
+queryD1(`CREATE TABLE IF NOT EXISTS wa_dispatches (
+    id TEXT PRIMARY KEY,
+    template_name TEXT,
+    category TEXT,
+    target_column TEXT,
+    total_leads INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    cost_total REAL DEFAULT 0,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+app.post('/api/whatsapp/dispatches', async (req, res) => {
+    try {
+        const { template_name, category, target_column, total_leads, success_count, fail_count, cost_total } = req.body || {};
+        if (!template_name) {
+            return res.status(400).json({ error: 'Nome do template é obrigatório.' });
+        }
+        const id = `disp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await queryD1(
+            'INSERT INTO wa_dispatches (id, template_name, category, target_column, total_leads, success_count, fail_count, cost_total, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, template_name, category || null, target_column || null, total_leads || 0, success_count || 0, fail_count || 0, cost_total || 0, req.user?.username || null]
+        );
+        res.status(201).json({ success: true, id });
+    } catch (e) {
+        console.error('Erro ao salvar disparo:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar disparo.' });
+    }
+});
+
+app.get('/api/whatsapp/dispatches', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT * FROM wa_dispatches ORDER BY created_at DESC LIMIT 50');
+        res.json({ dispatches: rows || [] });
+    } catch (e) {
+        console.error('Erro ao listar disparos:', e);
+        res.status(500).json({ error: 'Erro interno ao listar disparos.' });
+    }
+});
+
 // ==========================================
 // BIBLIOTECA DE ÁUDIOS (mensagens de voz pré-gravadas)
 // ==========================================
@@ -3358,7 +3448,7 @@ app.get('/api/aniversariantes', async (req, res) => {
         }
 
         const data = await response.json();
-        
+
         let found = [];
         if (data && data.data && Array.isArray(data.data)) {
             // Transformar os dados para o padrão que o front-end espera
@@ -3370,6 +3460,18 @@ app.get('/api/aniversariantes', async (req, res) => {
                     isToday: true // Como filtramos para hoje, todos são hoje
                 };
             });
+        }
+
+        // A API do Amigo não devolve um ID estável pro aniversariante (diferente de
+        // /api/relacionamento, que tem patient.id) — usamos o telefone como chave de
+        // "já contactado" em mensagens_enviadas, já que é o único identificador comum
+        // entre esse bloco (API ao vivo) e o bloco do mês (planilha).
+        try {
+            const rows = await queryD1("SELECT paciente_id FROM mensagens_enviadas WHERE tipo = 'aniversariante' AND data_envio > datetime('now', '-30 days')");
+            const contactedPhones = new Set(rows.map(r => r.paciente_id));
+            found = found.map(p => ({ ...p, contacted: contactedPhones.has(p.phone) }));
+        } catch (e) {
+            console.error("D1: Não foi possível carregar histórico de aniversariantes contactados", e.message);
         }
 
         res.status(200).json({ aniversariantes: found });
@@ -3413,6 +3515,18 @@ app.get('/api/aniversariantes/month', async (req, res) => {
         }
 
         found.sort((a, b) => a.day - b.day);
+
+        // Mesma chave por telefone usada em /api/aniversariantes (API ao vivo) — sem ID
+        // estável comum entre os dois blocos, o telefone é o que garante que marcar como
+        // contactado num bloco reflita no outro pro mesmo aniversariante.
+        try {
+            const contactedRows = await queryD1("SELECT paciente_id FROM mensagens_enviadas WHERE tipo = 'aniversariante' AND data_envio > datetime('now', '-30 days')");
+            const contactedPhones = new Set(contactedRows.map(r => r.paciente_id));
+            found = found.map(p => ({ ...p, contacted: contactedPhones.has(p.phone) }));
+        } catch (e) {
+            console.error("D1: Não foi possível carregar histórico de aniversariantes contactados", e.message);
+        }
+
         res.status(200).json({ aniversariantes: found });
     } catch (error) {
         console.error("Erro Aniversariantes Mês:", error);

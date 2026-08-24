@@ -82,10 +82,12 @@
                 </div>
             </div>
 
+            <div id="rel-bulk-bar-aniversariantes-hoje" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container" style="background: transparent;">
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-hoje', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Idade Alcançada</th>
@@ -94,7 +96,7 @@
                     </thead>
                     <tbody id="list-aniversariantes-hoje">
                         <tr>
-                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
                                 <i class="fa-solid fa-circle-notch spin"></i> Consultando a API...
                             </td>
                         </tr>
@@ -121,10 +123,12 @@
                 </div>
             </div>
 
+            <div id="rel-bulk-bar-aniversariantes-mes" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container">
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-mes', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Data de Nascimento</th>
@@ -133,7 +137,7 @@
                     </thead>
                     <tbody id="list-aniversariantes-mes">
                         <tr>
-                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">
                                 <i class="fa-solid fa-circle-notch spin"></i> Carregando...
                             </td>
                         </tr>
