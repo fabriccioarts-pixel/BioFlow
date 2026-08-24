@@ -49,7 +49,13 @@ function initApp() {
         const overlay = document.getElementById('login-overlay');
         if(overlay) overlay.classList.remove('active');
         
-        fetchLeadsFromServer(); // Busca na nuvem e renderiza todos os leads compartilhados
+        // Etiquetas precisam estar carregadas antes do primeiro renderBoard() pra não
+        // desenhar os cards sem badge na primeira renderização.
+        if (typeof loadAvailableTags === 'function') {
+            loadAvailableTags().then(() => fetchLeadsFromServer());
+        } else {
+            fetchLeadsFromServer(); // Busca na nuvem e renderiza todos os leads compartilhados
+        }
         fetchApiOptions();
         startNotificationPolling();
         loadAudiences();

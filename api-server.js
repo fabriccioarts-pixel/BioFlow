@@ -1022,9 +1022,20 @@ app.get('/api/whatsapp/quick-replies', async (req, res) => {
 
 app.post('/api/whatsapp/quick-replies', async (req, res) => {
     try {
-        const { shortcut, text } = req.body;
-        if(!shortcut || !text) return res.status(400).json({ error: "shortcut e text são obrigatórios" });
-        await queryD1('INSERT OR REPLACE INTO wa_quick_replies (shortcut, text) VALUES (?, ?)', [shortcut, text]);
+        // A tabela real (D1) usa id/shortcut/title/content — não shortcut/text como esse
+        // endpoint tentava gravar antes, o que sempre falhava com erro de coluna/NOT NULL.
+        // original_shortcut identifica a linha ao editar (permite renomear o atalho).
+        const { shortcut, title, text, original_shortcut } = req.body;
+        if (!shortcut || !text) return res.status(400).json({ error: "shortcut e text são obrigatórios" });
+
+        const lookupShortcut = original_shortcut || shortcut;
+        const existing = await queryD1('SELECT id FROM wa_quick_replies WHERE shortcut = ?', [lookupShortcut]);
+        if (existing && existing.length > 0) {
+            await queryD1('UPDATE wa_quick_replies SET shortcut = ?, title = ?, content = ? WHERE id = ?', [shortcut, title || '', text, existing[0].id]);
+        } else {
+            const id = `qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            await queryD1('INSERT INTO wa_quick_replies (id, shortcut, title, content) VALUES (?, ?, ?, ?)', [id, shortcut, title || '', text]);
+        }
         res.json({ success: true });
     } catch(e) {
         console.error(e);
@@ -1379,6 +1390,41 @@ app.put('/api/settings/whatsapp-pricing', async (req, res) => {
     } catch (e) {
         console.error('Erro ao salvar tarifas do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar tarifas.' });
+    }
+});
+
+// Etiquetas de lead (compartilhadas entre todos os atendentes) — antes viviam
+// só no localStorage do navegador de quem criava, então um lead marcado com
+// uma etiqueta custom não mostrava nada pra quem abrisse o CRM em outro
+// dispositivo (a etiqueta simplesmente não existia lá).
+app.get('/api/settings/whatsapp-tags', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+        let tags = [];
+        if (rows && rows[0] && rows[0].value) {
+            try { tags = JSON.parse(rows[0].value); } catch (e) {}
+        }
+        res.json({ tags: Array.isArray(tags) ? tags : [] });
+    } catch (e) {
+        console.error('Erro ao buscar etiquetas:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar etiquetas.' });
+    }
+});
+
+app.put('/api/settings/whatsapp-tags', async (req, res) => {
+    try {
+        const { tags } = req.body || {};
+        if (!Array.isArray(tags)) {
+            return res.status(400).json({ error: 'Lista de etiquetas inválida.' });
+        }
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(tags)]
+        );
+        res.json({ success: true, tags });
+    } catch (e) {
+        console.error('Erro ao salvar etiquetas:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar etiquetas.' });
     }
 });
 
@@ -1896,8 +1942,11 @@ app.post('/api/init-db', async (req, res) => {
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS wa_quick_replies (
-                shortcut TEXT PRIMARY KEY,
-                text TEXT NOT NULL
+                id TEXT PRIMARY KEY,
+                shortcut TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS wa_template_sends (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

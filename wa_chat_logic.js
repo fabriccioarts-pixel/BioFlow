@@ -4470,7 +4470,7 @@ async function saveQuickReply() {
         const res = await fetch('/api/whatsapp/quick-replies', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shortcut, title, text: content })
+            body: JSON.stringify({ shortcut, title, text: content, original_shortcut: editingQuickReplyShortcut })
         });
         const json = await res.json();
         if (json.success) {
