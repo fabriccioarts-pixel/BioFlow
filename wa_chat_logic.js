@@ -569,7 +569,12 @@ function triggerMsgAction(action) {
 async function reactToMessage(emoji) {
     if (!activeMenuMsgId) return;
     const msgId = activeMenuMsgId;
-    
+
+    // Clicar de novo no mesmo emoji já reagido remove a reação (envia emoji vazio,
+    // que é como a API do WhatsApp interpreta "descurtir").
+    const alreadyReacted = window.currentReactionsMap?.[msgId] === emoji;
+    const emojiToSend = alreadyReacted ? '' : emoji;
+
     const menu = document.getElementById('msg-global-dropdown');
     if (menu) menu.style.display = 'none';
     activeMenuMsgId = null;
@@ -580,10 +585,10 @@ async function reactToMessage(emoji) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 to: window.currentActiveChat.phone,
-                message: emoji,
+                message: emojiToSend,
                 quoted_id: msgId,
                 isReaction: true,
-                reactionEmoji: emoji
+                reactionEmoji: emojiToSend
             })
         });
         const json = await res.json();
@@ -3867,12 +3872,17 @@ async function openChat(phone, name, silent = false) {
                 if (msg.message && msg.message.startsWith('[Reagiu com:')) {
                     const match = msg.message.match(/\[Reagiu com:\s*(.*?)\]/);
                     if (match && msg.quoted_id) {
-                        reactionsMap[msg.quoted_id] = match[1];
+                        if (match[1]) {
+                            reactionsMap[msg.quoted_id] = match[1];
+                        } else {
+                            delete reactionsMap[msg.quoted_id];
+                        }
                     }
                 } else {
                     nonReactionMessages.push(msg);
                 }
             });
+            window.currentReactionsMap = reactionsMap;
 
             nonReactionMessages.forEach(msg => {
                 const currentDateStr = formatFullChatDate(msg.timestamp);

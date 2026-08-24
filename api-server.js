@@ -568,13 +568,13 @@ app.post('/api/whatsapp/send', async (req, res) => {
             to: to,
         };
 
-        if (isReaction && reactionEmoji) {
+        if (isReaction) {
             data.type = "reaction";
             data.reaction = {
                 message_id: quoted_id,
-                emoji: reactionEmoji
+                emoji: reactionEmoji || ""
             };
-            db_message_body = `[Reagiu com: ${reactionEmoji}]`;
+            db_message_body = `[Reagiu com: ${reactionEmoji || ''}]`;
         } else {
             if (quoted_id) {
                 data.context = {
