@@ -3793,7 +3793,7 @@ async function openChat(phone, name, silent = false) {
         let currentLead = leads.find(l => isSamePhone(l.telefone, phone));
 
         if (currentLead) {
-            if (!currentLead.column || currentLead.column === 'col-entrada') {
+            if (!silent && (!currentLead.column || currentLead.column === 'col-entrada')) {
                 currentLead.column = 'col-contatado';
                 if (typeof renderBoard === 'function') renderBoard();
                 fetch(`/api/leads/${currentLead.id}`, {
@@ -3805,8 +3805,11 @@ async function openChat(phone, name, silent = false) {
 
             activeColumn = currentLead.column || 'col-contatado';
             leadForLock = currentLead;
-        } else if (phone) {
+        } else if (phone && !silent) {
             // Se o lead ainda não existia no Kanban, cria direto em "Em Atendimento" com o atendente logado!
+            // Só roda numa abertura de verdade (silent=false) — nunca no polling de fundo
+            // (a cada 5s, pra atualizar a conversa já aberta), senão um lead apagado
+            // enquanto a conversa continua na tela era recriado sozinho a cada poll.
             const newLead = {
                 id: Date.now().toString(),
                 nome: name && !name.includes('Contato') ? name : 'Lead WhatsApp',
