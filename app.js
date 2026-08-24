@@ -4075,6 +4075,20 @@ async function startCampaign() {
     // O idioma vem junto no value (formato "nome|idioma") — não é mais escolhido
     // à parte, pra não repetir o erro de mandar um idioma que o template não tem.
     const [templateName, languageCode] = selectedValue.split('|');
+
+    // Se o corpo do template tem variável (ex: "Olá {{1}}"), a Meta exige um
+    // parâmetro pra cada uma — sem isso o envio falha com o erro #132000
+    // "Number of parameters does not match". Hoje só suportamos o caso mais comum
+    // (uma variável = nome do lead); templates com mais de uma são bloqueados aqui
+    // pra não mandar disparo pela metade pra centenas de leads.
+    const selectedTemplate = cachedWhatsappTemplates.find(t => t.name === templateName && t.language === languageCode);
+    const bodyComponent = selectedTemplate ? (selectedTemplate.components || []).find(c => c.type === 'BODY') : null;
+    const bodyVarCount = bodyComponent && bodyComponent.text ? (bodyComponent.text.match(/\{\{\d+\}\}/g) || []).length : 0;
+    if (bodyVarCount > 1) {
+        alert(`O template "${templateName}" tem ${bodyVarCount} variáveis no corpo. Disparo em massa hoje só suporta templates sem variável ou com uma única variável (preenchida com o nome do lead).`);
+        return;
+    }
+
     const targetCol = document.getElementById('campaign-target').value;
     const btn = document.getElementById('btn-start-campaign');
     const logBox = document.getElementById('campaign-log');
@@ -4161,6 +4175,7 @@ async function startCampaign() {
                     isTemplate: true,
                     templateName: templateName,
                     languageCode: languageCode,
+                    templateParams: bodyVarCount === 1 ? [lead.nome || 'Cliente'] : undefined,
                     message: "template" // Placeholder required by backend
                 })
             });

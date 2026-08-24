@@ -461,7 +461,7 @@ async function uploadMediaToMeta(buffer, mimeType, fileName) {
 
 // 3. Send Message to WhatsApp (Suporta texto e mídias via Base64 do frontend)
 app.post('/api/whatsapp/send', async (req, res) => {
-    const { to, message, isTemplate, templateName, languageCode, quoted_id, isReaction, reactionEmoji, isVoiceRecording } = req.body;
+    const { to, message, isTemplate, templateName, languageCode, templateParams, quoted_id, isReaction, reactionEmoji, isVoiceRecording } = req.body;
     
     if (!to) {
         return res.status(400).json({ error: "Número de destino (to) é obrigatório." });
@@ -588,6 +588,15 @@ app.post('/api/whatsapp/send', async (req, res) => {
                     name: templateName || "hello_world",
                     language: { code: languageCode || "pt_BR" }
                 };
+                // Templates com variável no corpo (ex: "Olá {{1}}") exigem um array de
+                // parâmetros correspondente — sem isso a Meta rejeita com o erro
+                // #132000 "Number of parameters does not match the expected number".
+                if (Array.isArray(templateParams) && templateParams.length > 0) {
+                    data.template.components = [{
+                        type: "body",
+                        parameters: templateParams.map(p => ({ type: "text", text: String(p) }))
+                    }];
+                }
                 // O front manda "message: 'template'" só como placeholder pra satisfazer o
                 // payload — sem isso, o balão do chat mostrava literalmente a palavra
                 // "template" em vez de dizer qual template foi enviado.
