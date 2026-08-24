@@ -1374,6 +1374,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // === INTEGRAÇÃO COM A VERCEL (QUE FALA COM AMIGO APP) ===
 function resetAgendamentoForm() {
     window.selectedPatientId = null;
+    // Sem isso, depois da primeira edição de um atendimento existente na sessão,
+    // todo agendamento novo seguinte era tratado como edição (isNewAppointment
+    // ficava sempre false) e o confete de comemoração parava de disparar.
+    window.currentEditingAttendanceId = null;
+    window.currentEditingAttendance = null;
     const idsToClear = [
         'ag-lead-id', 'ag-place', 'ag-user', 'ag-event', 'ag-event-search',
         'ag-patient-name', 'ag-patient-phone', 'ag-patient-email', 'ag-patient-born'
@@ -3513,6 +3518,10 @@ function renderDashboard() {
             } catch(e) {}
         }
         const inPeriod = isInPeriod(lead.created_at);
+        // Receita é filtrada pela data em que o valor foi definido (orçado/agendado/ganho),
+        // não pela data de criação do lead — um lead antigo cujo orçamento só foi fechado
+        // agora precisa contar no período atual, não sumir por ter entrado no CRM há meses.
+        const revenueInPeriod = isInPeriod(lead.data_valor || lead.created_at);
 
         const orig = lead.origem || 'Não informado';
         origemMap[orig] = (origemMap[orig] || 0) + 1;
@@ -3522,13 +3531,13 @@ function renderDashboard() {
 
         if (lead.column === 'col-ganho') {
             ganhosTotal++;
-            if (inPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
+            if (revenueInPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
         } else if (lead.column === 'col-agendado') {
             agendadosTotal++;
-            if (inPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
+            if (revenueInPeriod) { receitaTotal += val; if (val > 0) agendamentosComValor++; }
         } else if (lead.column === 'col-perdido') {
             perdidosTotal++;
-            if (inPeriod) perdasTotal += val;
+            if (revenueInPeriod) perdasTotal += val;
         } else {
             leadsAtivos++;
         }
@@ -3538,7 +3547,7 @@ function renderDashboard() {
         rankingMap[owner].leads++;
         if (lead.column === 'col-agendado' || lead.column === 'col-ganho') {
             rankingMap[owner].agendamentos++;
-            if (inPeriod) rankingMap[owner].receita += val;
+            if (revenueInPeriod) rankingMap[owner].receita += val;
         }
     });
 

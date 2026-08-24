@@ -1849,6 +1849,10 @@ app.post('/api/init-db', async (req, res) => {
         try { await queryD1('ALTER TABLE leads ADD COLUMN valor_recebido REAL'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN orcamento TEXT'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN assigned_at DATETIME'); } catch(e) {}
+        // Data em que o valor (orçamento/venda) passou a existir — o dashboard usa essa
+        // data pra filtrar receita por período, não o created_at (que é de quando o lead
+        // entrou no CRM, podendo ser bem antes do valor ter sido definido).
+        try { await queryD1('ALTER TABLE leads ADD COLUMN data_valor DATETIME'); } catch(e) {}
         // Proteção anti-bloqueio: lead que optou por não receber disparos de campanha/marketing
         try { await queryD1('ALTER TABLE leads ADD COLUMN campaign_opt_out INTEGER DEFAULT 0'); } catch(e) {}
         
@@ -2342,6 +2346,11 @@ app.put('/api/leads/:id', async (req, res) => {
         if (orcamento !== undefined) {
             updates.push('orcamento = ?');
             params.push(orcamento);
+        }
+        const valueColumns = ['col-orcado', 'col-agendado', 'col-ganho'];
+        if (valor_recebido !== undefined || orcamento !== undefined || (column_id !== undefined && valueColumns.includes(column_id))) {
+            updates.push('data_valor = ?');
+            params.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
         }
         if (campaign_opt_out !== undefined) {
             updates.push('campaign_opt_out = ?');
