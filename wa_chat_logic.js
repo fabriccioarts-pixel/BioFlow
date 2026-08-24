@@ -1741,21 +1741,38 @@ const DEFAULT_TAGS = [
     { id: 'retorno', label: '🔄 Retorno', bg: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '#f97316' }
 ];
 
-function getAvailableTags() {
+// As etiquetas ficam salvas no banco (não mais no localStorage) pra serem as
+// mesmas pra todos os atendentes — antes, uma etiqueta criada num navegador
+// simplesmente não existia pros outros, e o badge sumia silenciosamente
+// (getTagBadgeHTML não encontrava o id e retornava vazio).
+let cachedAvailableTags = null;
+
+async function loadAvailableTags() {
     try {
-        const stored = localStorage.getItem('crm_custom_tags');
-        if (stored) {
-            const parsed = JSON.parse(stored);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-    } catch(e) {}
-    return DEFAULT_TAGS;
+        const res = await fetch('/api/settings/whatsapp-tags');
+        const json = await res.json();
+        cachedAvailableTags = (Array.isArray(json.tags) && json.tags.length > 0) ? json.tags : DEFAULT_TAGS;
+    } catch (e) {
+        cachedAvailableTags = DEFAULT_TAGS;
+    }
+    return cachedAvailableTags;
 }
 
-function saveAvailableTags(tags) {
+function getAvailableTags() {
+    return cachedAvailableTags || DEFAULT_TAGS;
+}
+
+async function saveAvailableTags(tags) {
+    cachedAvailableTags = tags; // otimista: UI atualiza na hora, sem esperar o servidor
     try {
-        localStorage.setItem('crm_custom_tags', JSON.stringify(tags));
-    } catch(e) {}
+        await fetch('/api/settings/whatsapp-tags', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags })
+        });
+    } catch (e) {
+        console.error('Erro ao salvar etiquetas no servidor:', e);
+    }
 }
 
 function parseLeadTags(rawTags) {
@@ -2259,12 +2276,7 @@ function renderTagsMenuOptions() {
     let currentLeadTags = [];
     if (window.currentActiveChat && typeof leads !== 'undefined') {
         const phone = window.currentActiveChat.phone;
-        const currentLead = leads.find(l => 
-            l.telefone === phone || 
-            l.telefone === '+' + phone || 
-            (l.telefone && l.telefone.includes(phone)) ||
-            (phone && phone.includes(l.telefone))
-        );
+        const currentLead = leads.find(l => isSamePhone(l.telefone, phone));
         if (currentLead) {
             currentLeadTags = parseLeadTags(currentLead.tags);
         }
@@ -2369,12 +2381,7 @@ async function deleteCustomTag(tagId) {
 async function toggleLeadTag(tagId) {
     if (!window.currentActiveChat || typeof leads === 'undefined') return;
     const phone = window.currentActiveChat.phone;
-    let currentLead = leads.find(l => 
-        l.telefone === phone || 
-        l.telefone === '+' + phone || 
-        (l.telefone && l.telefone.includes(phone)) ||
-        (phone && phone.includes(l.telefone))
-    );
+    let currentLead = leads.find(l => isSamePhone(l.telefone, phone));
 
     if (!currentLead) return;
 
@@ -4463,7 +4470,7 @@ async function saveQuickReply() {
         const res = await fetch('/api/whatsapp/quick-replies', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shortcut, title, content })
+            body: JSON.stringify({ shortcut, title, text: content })
         });
         const json = await res.json();
         if (json.success) {
