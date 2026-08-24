@@ -122,7 +122,6 @@ function initTheme() {
 // biblioteca externa, some sozinho ao fim da animação.
 function celebrateAgendamento() {
     try {
-        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
         const canvas = document.createElement('canvas');
         canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:99999999;';
@@ -1189,7 +1188,7 @@ function openNotesModal(id) {
     document.getElementById('ln-lead-fb-click').value = lead.fb_click_id || '';
     document.getElementById('ln-lead-origem').value = lead.origem || 'Meta Ads';
     document.getElementById('ln-notas').value = lead.notas || '';
-    document.getElementById('ln-lead-valor').value = lead.valor_recebido || '';
+    document.getElementById('ln-lead-valor').value = lead.valor_recebido ? formatCurrencyBRLValue(lead.valor_recebido) : '';
     document.getElementById('modalLeadNotes').classList.add('active');
 }
 
@@ -1202,8 +1201,10 @@ async function saveLeadNotes() {
     const fb_click_id = document.getElementById('ln-lead-fb-click').value;
     const origem = document.getElementById('ln-lead-origem').value;
     const notas = document.getElementById('ln-notas').value;
-    const valor_recebido = document.getElementById('ln-lead-valor').value;
-    
+    // O campo mostra "1.000,00" (máscara BRL), mas é armazenado como número puro
+    // ("1000.00") pra continuar compatível com todo lugar que faz parseFloat(valor_recebido).
+    const valor_recebido = parseCurrencyBRLInput(document.getElementById('ln-lead-valor').value);
+
     const lead = leads.find(l => l.id === id);
     if (lead) {
         lead.nome = nome || 'Desconhecido';
