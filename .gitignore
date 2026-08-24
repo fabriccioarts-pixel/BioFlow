@@ -1,6 +1,7 @@
 .env
 node_modules/
 .vercel/
+.claude/scheduled_tasks.lock
 
 .vercel
 
