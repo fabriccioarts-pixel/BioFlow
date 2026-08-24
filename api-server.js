@@ -266,6 +266,19 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 const name = contact ? (contact.name.formatted_name || contact.name.first_name || "Contato") : "Contato";
                 const phone = contact && contact.phones && contact.phones[0] ? contact.phones[0].phone : "";
                 msg_body = `👤 [Contato: ${name} ${phone ? `- ${phone}` : ''}]`;
+            } else if (msg_type === "button") {
+                // Clique num botão de resposta rápida de um template (ex: "Quero saber mais").
+                msg_body = message_obj.button?.text || "[Clicou em um botão]";
+            } else if (msg_type === "interactive") {
+                // Resposta a uma mensagem interativa (lista ou botões) enviada fora de template.
+                const interactive = message_obj.interactive || {};
+                if (interactive.type === "button_reply") {
+                    msg_body = interactive.button_reply?.title || "[Clicou em um botão]";
+                } else if (interactive.type === "list_reply") {
+                    msg_body = interactive.list_reply?.title || "[Selecionou um item da lista]";
+                } else {
+                    msg_body = "[Resposta interativa]";
+                }
             } else {
                 msg_body = `[Mensagem do tipo: ${msg_type}]`;
             }
@@ -588,13 +601,21 @@ app.post('/api/whatsapp/send', async (req, res) => {
                     name: templateName || "hello_world",
                     language: { code: languageCode || "pt_BR" }
                 };
-                // Templates com variável no corpo (ex: "Olá {{1}}") exigem um array de
-                // parâmetros correspondente — sem isso a Meta rejeita com o erro
-                // #132000 "Number of parameters does not match the expected number".
+                // Templates com variável no corpo exigem um array de parâmetros
+                // correspondente — sem isso a Meta rejeita com o erro #132000 "Number of
+                // parameters does not match the expected number". Aceita tanto string pura
+                // (variável posicional, ex: "Olá {{1}}") quanto objeto { text, parameter_name }
+                // (variável nomeada, ex: "Oi {{customer_name}}" — formato mais novo da Meta,
+                // que exige "parameter_name" em vez de depender só da ordem).
                 if (Array.isArray(templateParams) && templateParams.length > 0) {
                     data.template.components = [{
                         type: "body",
-                        parameters: templateParams.map(p => ({ type: "text", text: String(p) }))
+                        parameters: templateParams.map(p => {
+                            const isObj = p && typeof p === 'object';
+                            const param = { type: "text", text: String(isObj ? p.text : p) };
+                            if (isObj && p.parameter_name) param.parameter_name = p.parameter_name;
+                            return param;
+                        })
                     }];
                 }
                 // O front manda "message: 'template'" só como placeholder pra satisfazer o

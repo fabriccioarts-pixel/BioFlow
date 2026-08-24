@@ -2706,11 +2706,23 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                     onmouseout="this.style.background='transparent'">
                                     <span style="font-size: 1.1rem;">💬</span> Em Atendimento
                                 </div>
+                                <div onclick="selectStageOption('col-orcado')" class="stage-menu-item"
+                                    style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
+                                    onmouseover="this.style.background='rgba(255,255,255,0.08)'"
+                                    onmouseout="this.style.background='transparent'">
+                                    <span style="font-size: 1.1rem;">📄</span> Orçado
+                                </div>
                                 <div onclick="selectStageOption('col-agendado')" class="stage-menu-item"
                                     style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
                                     onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                                     onmouseout="this.style.background='transparent'">
                                     <span style="font-size: 1.1rem;">📅</span> Agendado
+                                </div>
+                                <div onclick="selectStageOption('col-ganho')" class="stage-menu-item"
+                                    style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
+                                    onmouseover="this.style.background='rgba(255,255,255,0.08)'"
+                                    onmouseout="this.style.background='transparent'">
+                                    <span style="font-size: 1.1rem;">✅</span> Ganho
                                 </div>
                                 <div onclick="selectStageOption('col-perdido')" class="stage-menu-item"
                                     style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"

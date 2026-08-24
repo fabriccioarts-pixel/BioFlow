@@ -537,7 +537,10 @@ function triggerMsgAction(action) {
     if (!msg) return;
 
     if (action === 'dados') {
-        alert(`ID da mensagem: ${msg.id}\nData: ${msg.timestamp}\nStatus: ${msg.status || 'recebida'}`);
+        customAlert(
+            `<strong>ID da mensagem:</strong> ${escapeHtml(msg.id)}<br><strong>Data:</strong> ${escapeHtml(msg.timestamp)}<br><strong>Status:</strong> ${escapeHtml(msg.status || 'recebida')}`,
+            'Dados da Mensagem'
+        );
     } else if (action === 'responder') {
         setReplyTo(msgId);
     } else if (action === 'baixar') {
@@ -1699,7 +1702,9 @@ function updateChatStageUI(columnId) {
     const stageMap = {
         'col-entrada': { name: '📥 Novos Leads', border: 'rgba(96, 165, 250, 0.35)', color: '#60a5fa' },
         'col-contatado': { name: '💬 Em Atendimento', border: 'rgba(129, 140, 248, 0.35)', color: '#818cf8' },
+        'col-orcado': { name: '📄 Orçado', border: 'rgba(167, 139, 250, 0.35)', color: '#a78bfa' },
         'col-agendado': { name: '📅 Agendado', border: 'rgba(52, 211, 153, 0.35)', color: '#34d399' },
+        'col-ganho': { name: '✅ Ganho', border: 'rgba(16, 185, 129, 0.35)', color: '#10b981' },
         'col-perdido': { name: '❌ Não Fechou', border: 'rgba(248, 113, 113, 0.35)', color: '#f87171' }
     };
 

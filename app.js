@@ -1048,15 +1048,26 @@ async function changeLeadStatusFromChat(newColumn) {
         (phone && phone.includes(l.telefone))
     );
 
+    // Mesmos modais que abrem ao arrastar o card pra essas colunas no Kanban — sem
+    // isso, mudar o estágio pra Orçado/Agendado/Ganho por aqui nunca pedia o valor
+    // do negócio, ficando fora de sincronia com o comportamento do board.
+    function openStageModal(leadId) {
+        if (newColumn === 'col-agendado') {
+            celebrateAgendamento();
+            setTimeout(() => openAgendamentoModal(leadId), 400);
+        } else if (newColumn === 'col-orcado' && typeof openOrcamentoModal === 'function') {
+            setTimeout(() => openOrcamentoModal(leadId), 400);
+        } else if (newColumn === 'col-ganho') {
+            setTimeout(() => openNotesModal(leadId), 400);
+        }
+    }
+
     if (lead) {
-        const wasAlreadyAgendado = lead.column === 'col-agendado';
+        const wasAlreadyInColumn = lead.column === newColumn;
         lead.column = newColumn;
         renderBoard();
         await updateLeadColumnOnServer(lead.id, newColumn);
-        if (newColumn === 'col-agendado' && !wasAlreadyAgendado) {
-            celebrateAgendamento();
-            setTimeout(() => openAgendamentoModal(lead.id), 400);
-        }
+        if (!wasAlreadyInColumn) openStageModal(lead.id);
     } else {
         const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
         const newLead = {
@@ -1070,10 +1081,7 @@ async function changeLeadStatusFromChat(newColumn) {
         leads.push(newLead);
         renderBoard();
         await saveLeadToServer(newLead);
-        if (newColumn === 'col-agendado') {
-            celebrateAgendamento();
-            setTimeout(() => openAgendamentoModal(newLead.id), 400);
-        }
+        openStageModal(newLead.id);
     }
 }
 
@@ -4139,14 +4147,20 @@ async function startCampaign() {
     // à parte, pra não repetir o erro de mandar um idioma que o template não tem.
     const [templateName, languageCode] = selectedValue.split('|');
 
-    // Se o corpo do template tem variável (ex: "Olá {{1}}"), a Meta exige um
-    // parâmetro pra cada uma — sem isso o envio falha com o erro #132000
-    // "Number of parameters does not match". Hoje só suportamos o caso mais comum
-    // (uma variável = nome do lead); templates com mais de uma são bloqueados aqui
-    // pra não mandar disparo pela metade pra centenas de leads.
+    // Se o corpo do template tem variável — numérica tipo "Olá {{1}}" ou nomeada tipo
+    // "Oi {{customer_name}}" (formato mais novo da Meta) — a API exige um parâmetro
+    // pra cada uma, sem isso o envio falha com o erro #132000 "Number of parameters
+    // does not match". Hoje só suportamos o caso mais comum (uma variável = nome do
+    // lead); templates com mais de uma são bloqueados aqui pra não mandar disparo
+    // pela metade pra centenas de leads.
     const selectedTemplate = cachedWhatsappTemplates.find(t => t.name === templateName && t.language === languageCode);
     const bodyComponent = selectedTemplate ? (selectedTemplate.components || []).find(c => c.type === 'BODY') : null;
-    const bodyVarCount = bodyComponent && bodyComponent.text ? (bodyComponent.text.match(/\{\{\d+\}\}/g) || []).length : 0;
+    const bodyVarMatches = bodyComponent && bodyComponent.text ? (bodyComponent.text.match(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g) || []) : [];
+    const bodyVarCount = bodyVarMatches.length;
+    // Nome do parâmetro se for variável nomeada (ex: "customer_name"); undefined se
+    // for posicional (ex: "1") — a Meta exige "parameter_name" só no formato nomeado.
+    const bodyVarName = bodyVarMatches[0] ? bodyVarMatches[0].replace(/[{}\s]/g, '') : null;
+    const isNamedParam = bodyVarName && !/^\d+$/.test(bodyVarName);
     if (bodyVarCount > 1) {
         alert(`O template "${templateName}" tem ${bodyVarCount} variáveis no corpo. Disparo em massa hoje só suporta templates sem variável ou com uma única variável (preenchida com o nome do lead).`);
         return;
@@ -4238,7 +4252,9 @@ async function startCampaign() {
                     isTemplate: true,
                     templateName: templateName,
                     languageCode: languageCode,
-                    templateParams: bodyVarCount === 1 ? [lead.nome || 'Cliente'] : undefined,
+                    templateParams: bodyVarCount === 1
+                        ? [{ text: lead.nome || 'Cliente', parameter_name: isNamedParam ? bodyVarName : undefined }]
+                        : undefined,
                     message: "template" // Placeholder required by backend
                 })
             });

@@ -2817,6 +2817,12 @@ select.form-control option {
     border-color: var(--accent-primary);
 }
 
+/* Fix para as opções do select no tema escuro */
+.utm-field select option {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+}
+
 .utm-field .utm-hint {
     display: block;
     font-size: 0.72rem;
