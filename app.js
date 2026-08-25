@@ -74,6 +74,10 @@ function initApp() {
             if (btnGestao) {
                 btnGestao.style.display = 'flex';
             }
+            const btnAiAgent = document.getElementById('sb-tool-ai-agent');
+            if (btnAiAgent) {
+                btnAiAgent.style.display = 'flex';
+            }
         }
 
         updateHeaderProfileUI();
@@ -1990,12 +1994,8 @@ function switchTab(tabId) {
         loadAudiences().then(updateCampaignLeadCount);
         loadDispatchHistory();
         const pricingBtn = document.getElementById('btn-whatsapp-pricing');
-        const aiToggleBtn = document.getElementById('btn-whatsapp-ai-toggle');
-        const aiContextBtn = document.getElementById('btn-whatsapp-ai-context');
         const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
         if (pricingBtn) pricingBtn.style.display = isAdmin ? 'inline-flex' : 'none';
-        if (aiToggleBtn) aiToggleBtn.style.display = isAdmin ? 'inline-flex' : 'none';
-        if (aiContextBtn) aiContextBtn.style.display = isAdmin ? 'inline-flex' : 'none';
     } else if (tabId === 'origem-leads') {
         const view = document.getElementById('view-origem-leads');
         if (view) view.style.display = 'flex';
@@ -3128,6 +3128,10 @@ function finishLogin(user) {
     const flyoutGestao = document.getElementById('flyout-gestao-acessos');
     if (flyoutGestao) {
         flyoutGestao.style.display = (loggedUser.role === 'admin' || loggedUser.username === 'admin') ? 'flex' : 'none';
+    }
+    const btnAiAgent = document.getElementById('sb-tool-ai-agent');
+    if (btnAiAgent) {
+        btnAiAgent.style.display = (loggedUser.role === 'admin' || loggedUser.username === 'admin') ? 'flex' : 'none';
     }
 
     fetchLeadsFromServer();
@@ -5155,57 +5159,44 @@ function showDispatchConfirmModal({ templateName, category, recipientCount, cost
     });
 }
 
-async function openWhatsappAiContextEditor() {
+async function openWhatsappAiSettingsModal() {
     try {
-        const res = await fetch('/api/settings/whatsapp-ai-context');
-        const json = await res.json();
-        document.getElementById('whatsapp-ai-context-textarea').value = json.context || '';
-    } catch (e) {
-        console.error('Erro ao buscar contexto da IA:', e);
-    }
-    document.getElementById('modalWhatsappAiContext').classList.add('active');
-}
-
-async function saveWhatsappAiContext() {
-    const context = document.getElementById('whatsapp-ai-context-textarea').value;
-    try {
-        const res = await fetch('/api/settings/whatsapp-ai-context', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ context })
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Erro ao salvar contexto');
-        closeModals();
-        await customAlert('Contexto da IA atualizado!', 'Salvo com Sucesso');
-    } catch (e) {
-        await customAlert('Erro ao salvar: ' + e.message, 'Erro');
-    }
-}
-
-async function openWhatsappAiToggleModal() {
-    try {
-        const res = await fetch('/api/settings/whatsapp-ai');
-        const json = await res.json();
-        document.getElementById('whatsapp-ai-global-toggle').checked = !!json.enabled;
+        const [toggleRes, contextRes] = await Promise.all([
+            fetch('/api/settings/whatsapp-ai'),
+            fetch('/api/settings/whatsapp-ai-context')
+        ]);
+        const toggleJson = await toggleRes.json();
+        const contextJson = await contextRes.json();
+        document.getElementById('whatsapp-ai-global-toggle').checked = !!toggleJson.enabled;
+        document.getElementById('whatsapp-ai-context-textarea').value = contextJson.context || '';
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
-    document.getElementById('modalWhatsappAiToggle').classList.add('active');
+    document.getElementById('modalWhatsappAiSettings').classList.add('active');
 }
 
-async function saveWhatsappAiToggle() {
+async function saveWhatsappAiSettings() {
     const enabled = document.getElementById('whatsapp-ai-global-toggle').checked;
+    const context = document.getElementById('whatsapp-ai-context-textarea').value;
     try {
-        const res = await fetch('/api/settings/whatsapp-ai', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled })
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Erro ao salvar configuração');
+        const [toggleRes, contextRes] = await Promise.all([
+            fetch('/api/settings/whatsapp-ai', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            }),
+            fetch('/api/settings/whatsapp-ai-context', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ context })
+            })
+        ]);
+        const toggleJson = await toggleRes.json();
+        const contextJson = await contextRes.json();
+        if (!toggleRes.ok) throw new Error(toggleJson.error || 'Erro ao salvar interruptor da IA');
+        if (!contextRes.ok) throw new Error(contextJson.error || 'Erro ao salvar contexto da IA');
         closeModals();
-        await customAlert(enabled ? 'IA de atendimento ativada!' : 'IA de atendimento desativada.', 'Configuração Salva');
+        await customAlert('Configuração do agente de IA atualizada!', 'Salvo com Sucesso');
     } catch (e) {
         await customAlert('Erro ao salvar: ' + e.message, 'Erro');
     }
