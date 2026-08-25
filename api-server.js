@@ -895,6 +895,19 @@ async function tagLeadAsQualified(leadId) {
     await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [currentTags.join(','), leadId]);
 }
 
+// Manda cada parágrafo (separado por linha em branco) como uma mensagem
+// separada, em vez de um único balão com quebras de linha internas — fica
+// mais parecido com alguém digitando várias mensagens seguidas no WhatsApp.
+async function sendWhatsappAiReplyInChunks(phone, replyText) {
+    const chunks = replyText.split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
+    for (let i = 0; i < chunks.length; i++) {
+        await sendWhatsappTextInternal(phone, chunks[i]);
+        if (i < chunks.length - 1) {
+            await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
+        }
+    }
+}
+
 async function handleWhatsappAiAutoReply(leadId, phone) {
     try {
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
@@ -923,7 +936,7 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
             return;
         }
 
-        await sendWhatsappTextInternal(phone, replyText);
+        await sendWhatsappAiReplyInChunks(phone, replyText);
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
     }
