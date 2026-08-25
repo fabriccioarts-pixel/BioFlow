@@ -766,6 +766,36 @@ app.get('/api/whatsapp/chats', async (req, res) => {
     }
 });
 
+// Métricas de resposta por conversa, usadas pelo dashboard.
+app.get('/api/whatsapp/response-metrics', async (req, res) => {
+    try {
+        const rows = await queryD1(`
+            SELECT phone, direction, timestamp
+            FROM wa_messages
+            ORDER BY phone ASC, timestamp ASC
+        `);
+        const metrics = {};
+
+        for (const row of rows || []) {
+            const phone = row.phone;
+            if (!phone) continue;
+            if (!metrics[phone]) metrics[phone] = { firstInbound: null, firstResponse: null, lastDirection: null };
+            const metric = metrics[phone];
+            metric.lastDirection = row.direction;
+            if (row.direction === 'in' && !metric.firstInbound) {
+                metric.firstInbound = row.timestamp;
+            } else if (row.direction === 'out' && metric.firstInbound && !metric.firstResponse) {
+                metric.firstResponse = row.timestamp;
+            }
+        }
+
+        res.json({ success: true, data: metrics });
+    } catch (e) {
+        console.error('Erro ao calcular métricas de resposta:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Telefones que já receberam um template específico — usado pra não repetir o
 // mesmo template pra quem já recebeu em campanhas anteriores.
 app.get('/api/whatsapp/template-sends/:templateName', async (req, res) => {
@@ -1341,6 +1371,44 @@ app.get('/api/settings/dashboard-goal', async (req, res) => {
     } catch (e) {
         console.error('Erro ao buscar meta do dashboard:', e);
         res.status(500).json({ error: 'Erro interno ao buscar meta.' });
+    }
+});
+
+// Layout padrão do dashboard (Personalizar > Definir como Padrão) — antes só
+// existia no localStorage de quem clicava, então cada atendente via um "padrão"
+// diferente e o card ficava desalinhado assim que outro navegador nunca tinha
+// customizado nada e caía no arranjo de fábrica em vez do que o admin escolheu.
+app.get('/api/settings/dashboard-layout', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'dashboard_default_layout'");
+        let layout = null;
+        if (rows && rows[0] && rows[0].value) {
+            try { layout = JSON.parse(rows[0].value); } catch (e) {}
+        }
+        res.json({ layout });
+    } catch (e) {
+        console.error('Erro ao buscar layout padrão do dashboard:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar layout.' });
+    }
+});
+
+app.put('/api/settings/dashboard-layout', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem definir o layout padrão pra todos.' });
+    }
+    try {
+        const { layout } = req.body || {};
+        if (!layout || !Array.isArray(layout.cards)) {
+            return res.status(400).json({ error: 'Layout inválido.' });
+        }
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('dashboard_default_layout', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(layout)]
+        );
+        res.json({ success: true, layout });
+    } catch (e) {
+        console.error('Erro ao salvar layout padrão do dashboard:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar layout.' });
     }
 });
 

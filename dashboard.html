@@ -114,11 +114,16 @@
                     <i id="dash-daterange-clear" class="fa-solid fa-xmark" onclick="clearDashCustomRange()"
                         style="color: var(--text-muted); font-size: 0.8rem; cursor: pointer; display: none;"></i>
                 </div>
+                <button id="dash-customize-btn" class="btn-secondary" onclick="toggleDashboardCustomizer()" title="Personalizar layout do dashboard">
+                    <i class="fa-solid fa-sliders"></i> Personalizar
+                </button>
             </div>
         </div>
 
+        <div class="dash-layout-canvas">
         <!-- KPI Cards Row -->
         <div
+            class="dash-kpi-grid dash-layout-region"
             style="padding: 1.5rem 2rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem;">
             <div class="dash-kpi-card"
                 style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color); position: relative; overflow: hidden;">
@@ -275,13 +280,44 @@
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">
                     Valor Perdido</div>
             </div>
+            <div class="dash-kpi-card"
+                style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color); position: relative; overflow: hidden;">
+                <div style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #f97316, #fb923c);"></div>
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(249,115,22,0.12); border-radius: 10px; padding: 0.6rem; color: #f97316; font-size: 1.1rem;"><i class="fa-solid fa-user-clock"></i></div>
+                    <span style="font-size: 0.72rem; background: rgba(249,115,22,0.15); color: #f97316; padding: 0.2rem 0.5rem; border-radius: 20px; font-weight: 600;">atenção</span>
+                </div>
+                <div id="dash-sem-responsavel" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Sem Responsável</div>
+            </div>
+            <div class="dash-kpi-card"
+                style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color); position: relative; overflow: hidden;">
+                <div style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #eab308, #facc15);"></div>
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(234,179,8,0.12); border-radius: 10px; padding: 0.6rem; color: #eab308; font-size: 1.1rem;"><i class="fa-solid fa-reply"></i></div>
+                    <span style="font-size: 0.72rem; background: rgba(234,179,8,0.15); color: #eab308; padding: 0.2rem 0.5rem; border-radius: 20px; font-weight: 600;">WhatsApp</span>
+                </div>
+                <div id="dash-aguardando-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Aguardando Resposta</div>
+            </div>
+            <div class="dash-kpi-card"
+                style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color); position: relative; overflow: hidden;">
+                <div style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #14b8a6, #2dd4bf);"></div>
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(20,184,166,0.12); border-radius: 10px; padding: 0.6rem; color: #14b8a6; font-size: 1.1rem;"><i class="fa-solid fa-stopwatch"></i></div>
+                    <span style="font-size: 0.72rem; background: rgba(20,184,166,0.15); color: #14b8a6; padding: 0.2rem 0.5rem; border-radius: 20px; font-weight: 600;">média</span>
+                </div>
+                <div id="dash-tempo-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">--</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">1ª Resposta</div>
+            </div>
         </div>
 
         <!-- Charts Row -->
-        <div style="padding: 0 2rem 1.5rem 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
-            <div
-                style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
+        <div class="dash-layout-region" style="padding: 0 2rem 1.5rem 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
                 <div
+                    class="dash-layout-card" data-dash-key="leads-chart"
+                    style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
+                <div class="dash-card-header"
                     style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem;">
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Novos
@@ -294,37 +330,40 @@
                         <i class="fa-solid fa-arrow-trend-up"></i> Tendência
                     </div>
                 </div>
-                <div style="height: 260px; position: relative;"><canvas id="leadsChart"></canvas></div>
+                <div class="dash-chart-wrap" style="flex-basis: 260px;"><canvas id="leadsChart"></canvas></div>
             </div>
             <div
+                class="dash-layout-card" data-dash-key="funnel-chart"
                 style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
-                <div style="margin-bottom: 1.25rem;">
+                <div class="dash-card-header" style="margin-bottom: 1.25rem;">
                     <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Funil de
                         Vendas</h3>
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">Distribuição das
                         etapas</p>
                 </div>
-                <div style="height: 260px; position: relative;"><canvas id="funnelChart"></canvas></div>
+                <div class="dash-chart-wrap" style="flex-basis: 260px;"><canvas id="funnelChart"></canvas></div>
             </div>
         </div>
 
         <!-- Origin + Ranking Row -->
-        <div style="padding: 0 2rem 2rem 2rem; display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem;">
-            <div
-                style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
-                <div style="margin-bottom: 1.25rem;">
+        <div class="dash-layout-region" style="padding: 0 2rem 2rem 2rem; display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem;">
+                <div
+                class="dash-layout-card" data-dash-key="origin-chart"
+                    style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
+                <div class="dash-card-header" style="margin-bottom: 1.25rem;">
                     <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Origem dos
                         Leads</h3>
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">De onde vêm seus
                         pacientes</p>
                 </div>
-                <div style="height: 200px; position: relative;"><canvas id="origemChart"></canvas></div>
-                <div id="dash-origem-legend"
+                <div class="dash-chart-wrap" style="flex-basis: 200px;"><canvas id="origemChart"></canvas></div>
+                <div id="dash-origem-legend" class="dash-scroll-fill"
                     style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem;"></div>
             </div>
             <div
+                class="dash-layout-card" data-dash-key="ranking"
                 style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color);">
-                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;">
+                <div class="dash-card-header" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;">
                     <i class="fa-solid fa-trophy" style="color: #fbbf24; font-size: 1rem;"></i>
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Ranking de
@@ -333,8 +372,9 @@
                             atendente</p>
                     </div>
                 </div>
-                <div id="dash-ranking-body" style="display: flex; flex-direction: column; gap: 0.75rem;"></div>
+                <div id="dash-ranking-body" class="dash-scroll-fill" style="display: flex; flex-direction: column; gap: 0.75rem;"></div>
             </div>
+        </div>
         </div>
     </div>
     <!-- Scripts -->
@@ -343,6 +383,7 @@
         // Map fetchDashboardData to actual renderDashboard
         window.fetchDashboardData = async function() {
             await fetchLeadsFromServer();
+            await loadDashboardResponseMetrics();
             renderDashboard();
         };
 
@@ -354,7 +395,8 @@
                 if (Array.isArray(leads) && !_rendered) {
                     _rendered = true;
                     clearInterval(_poll);
-                    renderDashboard();
+                    initializeDashboardCustomizer();
+                    loadDashboardResponseMetrics().then(renderDashboard);
                 }
             }, 150);
             // Stop polling after 15s as safety net

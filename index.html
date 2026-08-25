@@ -317,20 +317,6 @@
                 style="padding: 0.4rem 0.8rem; font-size: 0.85rem;" title="Limpar Filtros"><i
                     class="fa-solid fa-eraser"></i> Limpar</button>
 
-            <span style="width: 1px; align-self: stretch; background: var(--border-color); margin: 0 0.2rem;"></span>
-
-            <button onclick="saveCurrentFiltersAsAudience()" class="btn-secondary"
-                style="padding: 0.4rem 0.8rem; font-size: 0.85rem;" title="Salvar os filtros atuais como um Público, pra usar depois numa campanha">
-                <i class="fa-solid fa-bullseye"></i> Salvar como Público</button>
-
-            <div style="position: relative;">
-                <select id="kanban-audience-select" onchange="applyAudienceToKanbanFilters(this.value)"
-                    style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; max-width: 200px;">
-                    <option value="">🎯 Públicos Salvos</option>
-                </select>
-            </div>
-            <button onclick="deleteSelectedAudience()" class="btn-secondary" title="Apagar o público selecionado no seletor ao lado"
-                style="padding: 0.4rem 0.6rem; font-size: 0.85rem;"><i class="fa-solid fa-trash"></i></button>
         </div>
 
         <div class="board" style="flex-grow: 1; padding: 1.5rem 2rem; overflow-y: auto;">
@@ -756,11 +742,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <i id="dash-daterange-clear" class="fa-solid fa-xmark" onclick="clearDashCustomRange()"
                         style="color: var(--text-muted); font-size: 0.8rem; cursor: pointer; display: none;"></i>
                 </div>
+                <button id="dash-customize-btn" class="btn-secondary" onclick="toggleDashboardCustomizer()" title="Personalizar layout do dashboard">
+                    <i class="fa-solid fa-sliders"></i> Personalizar
+                </button>
             </div>
         </div>
 
+        <div class="dash-layout-canvas">
         <!-- KPI Cards Row -->
         <div
+            class="dash-kpi-grid dash-layout-region"
             style="padding: 1.5rem 2rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem;">
             <div class="dash-kpi-card"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
@@ -901,11 +892,38 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">
                     Valor Perdido</div>
             </div>
+            <div class="dash-kpi-card"
+                style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(249,115,22,0.12); border-radius: 10px; padding: 0.6rem; color: #f97316; font-size: 1.1rem;"><i class="fa-solid fa-user-clock"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #f97316; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">atenção</span>
+                </div>
+                <div id="dash-sem-responsavel" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Sem Responsável</div>
+            </div>
+            <div class="dash-kpi-card"
+                style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(234,179,8,0.12); border-radius: 10px; padding: 0.6rem; color: #eab308; font-size: 1.1rem;"><i class="fa-solid fa-reply"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #eab308; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">WhatsApp</span>
+                </div>
+                <div id="dash-aguardando-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Aguardando Resposta</div>
+            </div>
+            <div class="dash-kpi-card"
+                style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(20,184,166,0.12); border-radius: 10px; padding: 0.6rem; color: #14b8a6; font-size: 1.1rem;"><i class="fa-solid fa-stopwatch"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #14b8a6; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">média</span>
+                </div>
+                <div id="dash-tempo-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">--</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">1ª Resposta</div>
+            </div>
         </div>
 
         <!-- Meta de Receita -->
-        <div style="padding: 0 2rem 1.5rem 2rem;">
-            <div id="dash-goal-card"
+        <div class="dash-layout-region" style="padding: 0 2rem 1.5rem 2rem;">
+            <div id="dash-goal-card" class="dash-layout-card" data-dash-key="goal"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); display: none;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.6rem;">
                     <div>
@@ -945,10 +963,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         </div>
 
         <!-- Charts Row -->
-        <div style="padding: 0 2rem 1.5rem 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+        <div class="dash-layout-region" style="padding: 0 2rem 1.5rem 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
             <div
+            class="dash-layout-card" data-dash-key="leads-chart"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border);">
-                <div
+                <div class="dash-card-header"
                     style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem;">
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Novos
@@ -961,37 +980,40 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         <i class="fa-solid fa-arrow-trend-up"></i> Tendência
                     </div>
                 </div>
-                <div style="height: 260px; position: relative;"><canvas id="leadsChart"></canvas></div>
+                <div class="dash-chart-wrap" style="flex-basis: 260px;"><canvas id="leadsChart"></canvas></div>
             </div>
             <div
+                class="dash-layout-card" data-dash-key="funnel-chart"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border);">
-                <div style="margin-bottom: 1.25rem;">
+                <div class="dash-card-header" style="margin-bottom: 1.25rem;">
                     <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Funil de
                         Vendas</h3>
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">Distribuição das
                         etapas</p>
                 </div>
-                <div style="height: 260px; position: relative;"><canvas id="funnelChart"></canvas></div>
+                <div class="dash-chart-wrap" style="flex-basis: 260px;"><canvas id="funnelChart"></canvas></div>
             </div>
         </div>
 
         <!-- Origin + Ranking Row -->
-        <div style="padding: 0 2rem 2rem 2rem; display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem;">
+        <div class="dash-layout-region" style="padding: 0 2rem 2rem 2rem; display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem;">
             <div
+            class="dash-layout-card" data-dash-key="origin-chart"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border);">
-                <div style="margin-bottom: 1.25rem;">
+                <div class="dash-card-header" style="margin-bottom: 1.25rem;">
                     <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Origem dos
                         Leads</h3>
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">De onde vêm seus
                         pacientes</p>
                 </div>
-                <div style="height: 200px; position: relative;"><canvas id="origemChart"></canvas></div>
-                <div id="dash-origem-legend"
+                <div class="dash-chart-wrap" style="flex-basis: 200px;"><canvas id="origemChart"></canvas></div>
+                <div id="dash-origem-legend" class="dash-scroll-fill"
                     style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem;"></div>
             </div>
             <div
+                class="dash-layout-card" data-dash-key="ranking"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border);">
-                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;">
+                <div class="dash-card-header" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;">
                     <i class="fa-solid fa-trophy" style="color: #fbbf24; font-size: 1rem;"></i>
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Ranking de
@@ -1000,8 +1022,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             atendente</p>
                     </div>
                 </div>
-                <div id="dash-ranking-body" style="display: flex; flex-direction: column; gap: 0.75rem;"></div>
+                <div id="dash-ranking-body" class="dash-scroll-fill" style="display: flex; flex-direction: column; gap: 0.75rem;"></div>
             </div>
+        </div>
         </div>
     </div>
 
@@ -1040,6 +1063,74 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
                 <button class="btn-save" onclick="saveNewLead()">Salvar Lead</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmação de Disparo (custo estimado antes de enviar) -->
+    <div class="modal-overlay" id="modalDispatchConfirm">
+        <div class="modal" style="max-width: 420px;">
+            <h2><i class="fa-solid fa-paper-plane" style="color: var(--accent-primary);"></i> Confirmar Disparo</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem 0;">
+                Revise os dados antes de enviar — as mensagens começam a sair assim que você confirmar.
+            </p>
+
+            <div style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 10px; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.65rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem;">
+                    <span style="color: var(--text-muted);">Template</span>
+                    <strong id="dispatch-confirm-template" style="color: var(--text-main); text-align: right;">—</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem;">
+                    <span style="color: var(--text-muted);">Categoria</span>
+                    <strong id="dispatch-confirm-category" style="color: var(--text-main);">—</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem;">
+                    <span style="color: var(--text-muted);">Destinatários</span>
+                    <strong id="dispatch-confirm-count" style="color: var(--text-main);">—</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem;">
+                    <span style="color: var(--text-muted);">Tarifa por mensagem</span>
+                    <strong id="dispatch-confirm-rate" style="color: var(--text-main);">—</strong>
+                </div>
+                <div style="border-top: 1px solid var(--border-color); margin-top: 0.2rem; padding-top: 0.65rem; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: var(--text-main);">Custo total estimado</span>
+                    <strong id="dispatch-confirm-total" style="color: var(--accent-success); font-size: 1.15rem;">—</strong>
+                </div>
+            </div>
+
+            <p id="dispatch-confirm-warning" style="display: none; color: var(--accent-warning); font-size: 0.78rem; margin: 0.75rem 0 0 0;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Esse é um volume grande de envios — considere dividir em lotes menores.
+            </p>
+
+            <div class="modal-actions">
+                <button class="btn-cancel" id="dispatch-cancel-btn">Cancelar</button>
+                <button class="btn-save" id="dispatch-confirm-btn"><i class="fa-solid fa-paper-plane"></i> Confirmar Disparo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Tarifas do Disparo de WhatsApp -->
+    <div class="modal-overlay" id="modalWhatsappPricing">
+        <div class="modal" style="max-width: 420px;">
+            <h2><i class="fa-solid fa-tags" style="color: var(--accent-primary);"></i> Tarifas do Disparo</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem 0;">
+                Valor em R$ cobrado pela Meta por mensagem enviada, por categoria de template.
+            </p>
+            <div class="form-group">
+                <label>Marketing (R$ por mensagem)</label>
+                <input type="number" step="0.0001" min="0" id="pricing-marketing" class="form-control" placeholder="0.3125">
+            </div>
+            <div class="form-group">
+                <label>Utilidade (R$ por mensagem)</label>
+                <input type="number" step="0.0001" min="0" id="pricing-utility" class="form-control" placeholder="0.0340">
+            </div>
+            <div class="form-group">
+                <label>Autenticação (R$ por mensagem)</label>
+                <input type="number" step="0.0001" min="0" id="pricing-authentication" class="form-control" placeholder="0.0340">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
+                <button class="btn-save" onclick="saveWhatsappPricingEditor()"><i class="fa-solid fa-floppy-disk"></i> Salvar Tarifas</button>
             </div>
         </div>
     </div>
@@ -1459,12 +1550,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realizaram procedimentos
                 recentemente. Ideal para pedir feedback e avaliação.</p>
         </div>
+        <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('posvenda', this)" style="align-self: flex-start; margin-bottom: 1rem;">
+            <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+        </button>
         <div id="rel-bulk-bar-posvenda" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
-            <table class="crm-table">
+            <table class="crm-table" id="rel-table-posvenda">
                 <thead>
                     <tr>
-                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('posvenda', this.checked)"></th>
+                        <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('posvenda', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1488,12 +1582,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que agendaram mas não compareceram. Tente
                 reagendar a consulta.</p>
         </div>
+        <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('faltantes', this)" style="align-self: flex-start; margin-bottom: 1rem;">
+            <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+        </button>
         <div id="rel-bulk-bar-faltantes" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
-            <table class="crm-table">
+            <table class="crm-table" id="rel-table-faltantes">
                 <thead>
                     <tr>
-                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('faltantes', this.checked)"></th>
+                        <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('faltantes', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1517,12 +1614,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes sem novos agendamentos há mais de 45
                 dias. Faça uma campanha de resgate.</p>
         </div>
+        <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('sumidos', this)" style="align-self: flex-start; margin-bottom: 1rem;">
+            <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+        </button>
         <div id="rel-bulk-bar-sumidos" class="rel-bulk-bar" style="display: none;"></div>
         <div class="table-container">
-            <table class="crm-table">
+            <table class="crm-table" id="rel-table-sumidos">
                 <thead>
                     <tr>
-                        <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('sumidos', this.checked)"></th>
+                        <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('sumidos', this.checked)"></th>
                         <th>Paciente</th>
                         <th>Telefone</th>
                         <th>Último Atendimento</th>
@@ -1554,12 +1654,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('aniversariantes-hoje', this)" style="margin-bottom: 1rem;">
+                <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+            </button>
             <div id="rel-bulk-bar-aniversariantes-hoje" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container" style="background: transparent;">
-                <table class="crm-table">
+                <table class="crm-table" id="rel-table-aniversariantes-hoje">
                     <thead>
                         <tr>
-                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-hoje', this.checked)"></th>
+                            <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-hoje', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Idade Alcançada</th>
@@ -1600,12 +1703,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('aniversariantes-mes', this)" style="margin-bottom: 1rem;">
+                <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+            </button>
             <div id="rel-bulk-bar-aniversariantes-mes" class="rel-bulk-bar" style="display: none;"></div>
             <div class="table-container">
-                <table class="crm-table">
+                <table class="crm-table" id="rel-table-aniversariantes-mes">
                     <thead>
                         <tr>
-                            <th style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-mes', this.checked)"></th>
+                            <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" onclick="toggleRelSelectAll('aniversariantes-mes', this.checked)"></th>
                             <th>Paciente</th>
                             <th>Celular</th>
                             <th>Data de Nascimento</th>

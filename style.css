@@ -201,7 +201,7 @@ body {
 
 /* Qualquer conteúdo de página (fora da barra lateral) ocupa o espaço restante.
    Elementos com position:fixed (modais) ignoram isso normalmente. */
-body > *:not(header) {
+body>*:not(header) {
     flex: 1 1 auto;
     min-width: 0;
 }
@@ -1047,6 +1047,49 @@ th {
     background: var(--btn-secondary-hover);
 }
 
+/* Barra de personalização do dashboard (Concluir/Cancelar/Restaurar/Definir como
+   Padrão) — antes todos os 4 botões saíam com a mesma cor cinza do .btn-secondary,
+   sem nenhuma pista visual de qual ação é "positiva" x "destrutiva" x "neutra". */
+#dash-customize-btn.active {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-success);
+    border-color: rgba(16, 185, 129, 0.35);
+}
+
+#dash-customize-btn.active:hover {
+    background: rgba(16, 185, 129, 0.25);
+}
+
+#dash-layout-cancel-btn {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--accent-danger);
+    border-color: rgba(248, 113, 113, 0.35);
+}
+
+#dash-layout-cancel-btn:hover {
+    background: rgba(248, 113, 113, 0.25);
+}
+
+#dash-layout-reset-btn {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--accent-warning);
+    border-color: rgba(251, 191, 36, 0.35);
+}
+
+#dash-layout-reset-btn:hover {
+    background: rgba(251, 191, 36, 0.25);
+}
+
+#dash-layout-set-default-btn {
+    background: rgba(167, 139, 250, 0.15);
+    color: var(--accent-primary);
+    border-color: rgba(167, 139, 250, 0.35);
+}
+
+#dash-layout-set-default-btn:hover {
+    background: rgba(167, 139, 250, 0.25);
+}
+
 /* Kanban Board */
 .board {
     display: flex;
@@ -1155,6 +1198,33 @@ th {
 .card.dragging {
     opacity: 0.5;
     background: rgba(30, 41, 59, 0.9) !important;
+}
+
+@keyframes card-landing {
+    0% { transform: translateY(-18px); opacity: 0.4; }
+    70% { transform: translateY(3px); opacity: 1; }
+    100% { transform: translateY(0); opacity: 1; }
+}
+
+.card-landing {
+    animation: card-landing 0.3s ease-out;
+}
+
+.kanban-drag-ghost {
+    position: fixed;
+    margin: 0;
+    z-index: 999999;
+    pointer-events: none;
+    transform: rotate(2deg);
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.5);
+    opacity: 0.95;
+}
+
+.card-list.kanban-drop-hover {
+    background: rgba(16, 185, 129, 0.08);
+    outline: 2px dashed var(--accent-success, #10b981);
+    outline-offset: -4px;
+    border-radius: 8px;
 }
 
 .card-title {
@@ -1539,6 +1609,22 @@ select.form-control option {
     transition: background-color 0.2s;
 }
 
+/* Coluna de checkbox fica escondida até o atendente clicar em "Selecionar
+   para Disparo" — evita poluir a lista quando o objetivo é só consultar. */
+.crm-table .rel-select-col {
+    display: none;
+}
+
+.crm-table.rel-selecting .rel-select-col {
+    display: table-cell;
+}
+
+.rel-select-toggle-btn.active {
+    background: rgba(239, 68, 68, 0.12) !important;
+    border-color: rgba(239, 68, 68, 0.4) !important;
+    color: var(--accent-danger) !important;
+}
+
 .crm-table tbody tr:hover {
     background-color: var(--btn-secondary-hover);
 }
@@ -1664,8 +1750,15 @@ select.form-control option {
 }
 
 @keyframes sbFlyoutIn {
-    from { opacity: 0; transform: translateX(-6px) scale(0.97); }
-    to { opacity: 1; transform: translateX(0) scale(1); }
+    from {
+        opacity: 0;
+        transform: translateX(-6px) scale(0.97);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
 }
 
 .dropdown-content .tab-btn {
@@ -2576,8 +2669,401 @@ select.form-control option {
 
 
 /* === DASHBOARD PREMIUM CARDS === */
+/* Radius fixo e igual em todo card do dashboard (KPI, gráfico, ranking, meta),
+   não importa o quanto ele seja redimensionado — sem !important aqui, o card
+   maior (ou o "goal card") mantinha o border-radius original de 14/16px vindo
+   do HTML enquanto os KPIs ficavam com 6px, um inconsistente com o outro. */
+.dash-layout-canvas .dash-kpi-card,
+.dash-layout-canvas .dash-layout-card {
+    border-radius: 6px !important;
+}
+
 .dash-kpi-card {
     cursor: default;
+    padding: 1rem !important;
+}
+
+.dash-card-tools {
+    display: none;
+    align-items: center;
+    gap: 0.2rem;
+    position: absolute;
+    top: 0.4rem;
+    right: 0.4rem;
+    z-index: 2;
+}
+
+/* Enquanto o editor inline de "Meta de Receita" está aberto, o card fica temporariamente
+   mais alto que o span de grid já calculado (masonry) — isso garante que ele pinte por
+   cima do próximo card do grid até o repack (packDashboardMasonry) recalcular o span. */
+.dash-card-elevated {
+    position: relative;
+    z-index: 5;
+}
+
+.dash-layout-editing .dash-kpi-card,
+.dash-layout-editing .dash-layout-card {
+    cursor: grab;
+    outline: 1px dashed rgba(167, 139, 250, 0.75);
+    outline-offset: -4px;
+}
+
+.dash-layout-editing .dash-kpi-card:active,
+.dash-kpi-card.dash-card-dragging,
+.dash-layout-card.dash-card-dragging {
+    cursor: grabbing;
+}
+
+.dash-card-dragging {
+    opacity: 0.96;
+    outline-color: var(--accent-primary) !important;
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+    transform: scale(1.02);
+    transition: none !important;
+}
+
+/* Marca onde o card vai cair se soltar agora — o card arrastado troca de
+   lugar com este ao vivo, então é só uma pista visual extra de destino. */
+.dash-card-drop-target {
+    outline: 2px solid var(--accent-success, #10b981) !important;
+    outline-offset: -4px;
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.dash-layout-editing .dash-card-tools {
+    display: flex;
+}
+
+.dash-card-drag {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    padding: 0.18rem;
+    cursor: grab;
+    touch-action: none;
+}
+
+.dash-layout-editing .dash-card-hidden {
+    opacity: 0.35;
+    outline-style: dashed !important;
+    outline-color: var(--accent-danger, #ef4444) !important;
+}
+
+.dash-card-tools button {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--header-btn-border);
+    border-radius: 4px;
+    background: var(--header-btn-bg);
+    color: var(--text-main);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.dash-card-tools button:hover {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.dash-card-resize-handle {
+    display: none;
+    position: absolute;
+    z-index: 3;
+}
+
+.dash-card-resize-right {
+    top: 0;
+    right: -3px;
+    bottom: 0;
+    width: 8px;
+    cursor: ew-resize;
+}
+
+.dash-card-resize-bottom {
+    right: 0;
+    bottom: -3px;
+    left: 0;
+    height: 8px;
+    cursor: ns-resize;
+}
+
+.dash-card-resize-corner {
+    right: -4px;
+    bottom: -4px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+}
+
+.dash-card-resize-right::after,
+.dash-card-resize-bottom::after,
+.dash-card-resize-corner::after {
+    content: '';
+    position: absolute;
+    background: var(--accent-primary);
+    opacity: 0.8;
+}
+
+.dash-card-resize-right::after {
+    top: 50%;
+    right: 1px;
+    width: 3px;
+    height: 32px;
+    transform: translateY(-50%);
+}
+
+.dash-card-resize-bottom::after {
+    bottom: 1px;
+    left: 50%;
+    width: 32px;
+    height: 3px;
+    transform: translateX(-50%);
+}
+
+.dash-card-resize-corner::after {
+    right: 2px;
+    bottom: 2px;
+    width: 8px;
+    height: 8px;
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.dash-layout-editing .dash-card-resize-handle {
+    display: block;
+}
+
+.dash-is-resizing,
+.dash-is-resizing * {
+    user-select: none !important;
+}
+
+.dash-kpi-grid.dash-layout-editing {
+    outline: 1px solid rgba(167, 139, 250, 0.25);
+    outline-offset: -1px;
+}
+
+.dash-kpi-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 0.65rem !important;
+}
+
+.dash-layout-canvas {
+    display: grid !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    /* Trilha bem fina (mesmo valor de DASHBOARD_LAYOUT_ROW_HEIGHT no app.js) — cada
+       card recebe um grid-row: span N calculado em JS pela sua altura real
+       (packDashboardMasonry). Isso cria um "masonry" de verdade: cards baixos ao
+       lado de um card alto não deixam vão vazio embaixo, porque cada linha física
+       da grade é fina o bastante pra não sobrar espaço não ocupado. */
+    grid-auto-rows: 2px;
+    grid-auto-flow: dense;
+    align-content: start;
+    row-gap: 0.4rem;
+    column-gap: 0.4rem;
+    padding: 1.5rem 2rem 2rem;
+}
+
+.dash-layout-editing {
+    background-image:
+        linear-gradient(to right, rgba(167, 139, 250, 0.18) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(167, 139, 250, 0.14) 1px, transparent 1px);
+    background-size: calc((100% - 2.6rem) / 6) 80px;
+    background-position: 2rem 1.5rem;
+}
+
+.dash-layout-region {
+    display: contents !important;
+}
+
+.dash-layout-canvas .dash-layout-card {
+    grid-column: span 1;
+    min-width: 0;
+    position: relative;
+    min-height: 80px;
+    align-self: start;
+    box-sizing: border-box;
+    /* Cabeçalho fixo + conteúdo (gráfico/lista) flexível: antes o gráfico tinha
+       altura fixa em px (independente do quanto o card fosse encolhido no resize),
+       então encolher o card só cortava/estourava o conteúdo em vez de ajustá-lo. */
+    display: flex;
+    flex-direction: column;
+}
+
+.dash-layout-canvas .dash-layout-card[data-layout-height] {
+    min-height: 0 !important;
+}
+
+.dash-layout-card>.dash-card-header {
+    flex-shrink: 0;
+}
+
+/* overflow:hidden fica só no conteúdo interno (gráfico/lista), não no card
+   inteiro — quando estava no card, os controles de arrastar/esconder (que são
+   filhos posicionados no canto superior) somiam em alguns casos junto com
+   qualquer excesso de conteúdo cortado. */
+.dash-chart-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 40px;
+    overflow: hidden;
+}
+
+.dash-scroll-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.dash-layout-canvas .dash-kpi-card {
+    align-self: start;
+}
+
+.dash-layout-canvas .dash-layout-card[data-dash-key="goal"] {
+    grid-column: span 4;
+}
+
+.dash-layout-canvas .dash-layout-card[data-dash-key="leads-chart"],
+.dash-layout-canvas .dash-layout-card[data-dash-key="ranking"] {
+    grid-column: span 3;
+}
+
+.dash-layout-canvas .dash-layout-card[data-dash-key="funnel-chart"],
+.dash-layout-canvas .dash-layout-card[data-dash-key="origin-chart"] {
+    grid-column: span 1;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(5),
+.dash-kpi-grid .dash-kpi-card:nth-child(6) {
+    grid-column: span 2;
+    min-height: 132px;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(1) {
+    order: 1;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(2) {
+    order: 2;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(3) {
+    order: 3;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(4) {
+    order: 4;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(5) {
+    order: 5;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(6) {
+    order: 6;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(9) {
+    order: 7;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(7) {
+    order: 8;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(10) {
+    order: 9;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(8) {
+    order: 10;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(11) {
+    order: 11;
+}
+
+.dash-kpi-grid .dash-kpi-card:nth-child(11) {
+    grid-column: 2 / span 2;
+}
+
+.dash-kpi-card [id^="dash-"] {
+    font-size: clamp(1.35rem, calc(2rem * var(--dash-number-scale, 1)), 3.6rem) !important;
+    line-height: 1.05;
+    letter-spacing: 0 !important;
+}
+
+.dash-kpi-card>div:last-child {
+    font-size: 0.72rem !important;
+    line-height: 1.35;
+}
+
+@media (max-width: 600px) {
+    .dash-layout-canvas {
+        grid-template-columns: 1fr;
+        padding: 1rem;
+    }
+
+    .dash-layout-editing {
+        background-size: calc(100% - 2rem) 80px;
+        background-position: 1rem 1rem;
+    }
+
+    .dash-layout-canvas .dash-layout-card[data-dash-key="goal"],
+    .dash-layout-canvas .dash-layout-card[data-dash-key="leads-chart"],
+    .dash-layout-canvas .dash-layout-card[data-dash-key="ranking"] {
+        grid-column: span 1;
+    }
+
+    .dash-kpi-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .dash-kpi-grid .dash-kpi-card:nth-child(5),
+    .dash-kpi-grid .dash-kpi-card:nth-child(6) {
+        grid-column: span 1;
+        min-height: 0;
+    }
+
+    .dash-kpi-grid .dash-kpi-card:nth-child(11) {
+        grid-column: span 1;
+    }
+
+    .dash-kpi-card [id^="dash-"] {
+        font-size: clamp(1.25rem, calc(1.8rem * var(--dash-number-scale, 1)), 2.8rem) !important;
+    }
+}
+
+@media (min-width: 601px) and (max-width: 950px) {
+    .dash-layout-canvas {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 1.25rem;
+    }
+
+    .dash-layout-editing {
+        background-size: calc((100% - 2.5rem) / 2) 80px;
+        background-position: 1.25rem 1.25rem;
+    }
+
+    .dash-layout-canvas .dash-layout-card[data-dash-key="goal"],
+    .dash-layout-canvas .dash-layout-card[data-dash-key="leads-chart"],
+    .dash-layout-canvas .dash-layout-card[data-dash-key="ranking"] {
+        grid-column: span 2;
+    }
+
+    .dash-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .dash-kpi-grid .dash-kpi-card:nth-child(5),
+    .dash-kpi-grid .dash-kpi-card:nth-child(6) {
+        grid-column: span 2;
+        min-height: 110px;
+    }
+
+    .dash-kpi-grid .dash-kpi-card:nth-child(11) {
+        grid-column: span 2;
+    }
 }
 
 .dash-kpi-card:hover {}
@@ -2753,9 +3239,19 @@ select.form-control option {
 
 /* Destaque temporário ao chegar num card via "Ver no Kanban" */
 @keyframes cardHighlightPulse {
-    0%, 100% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(96, 165, 250, 0); }
-    20% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.55); }
-    60% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.35); }
+
+    0%,
+    100% {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(96, 165, 250, 0);
+    }
+
+    20% {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.55);
+    }
+
+    60% {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(96, 165, 250, 0.35);
+    }
 }
 
 .card-highlight-pulse {
@@ -2765,8 +3261,17 @@ select.form-control option {
 
 /* Bolinha vermelha pulsante na barra de gravação de áudio do chat */
 @keyframes chatRecPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.35; transform: scale(0.8); }
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.35;
+        transform: scale(0.8);
+    }
 }
 
 /* ============================================ */
@@ -2816,7 +3321,8 @@ select.form-control option {
     margin-bottom: 0.3rem;
 }
 
-.utm-field input, .utm-field select {
+.utm-field input,
+.utm-field select {
     width: 100%;
     box-sizing: border-box;
     background: var(--bg-main);
@@ -2830,7 +3336,8 @@ select.form-control option {
     transition: border-color 0.15s;
 }
 
-.utm-field input:focus, .utm-field select:focus {
+.utm-field input:focus,
+.utm-field select:focus {
     border-color: var(--accent-primary);
 }
 
@@ -3025,4 +3532,35 @@ select.form-control option {
 
 .chat-row-favorite-btn.is-favorite {
     color: #fbbf24;
+}
+
+.dash-card-compact {
+    padding: 0.55rem !important;
+    overflow: hidden;
+}
+
+
+.dash-card-compact>div:not(.dash-card-tools) {
+    margin-bottom: 0.3rem !important;
+}
+
+.dash-card-compact>div:not(.dash-card-tools)>div:first-child {
+    padding: 0.3rem !important;
+    font-size: 0.85rem !important;
+}
+
+.dash-card-compact>div:not(.dash-card-tools)>span {
+    font-size: 0.58rem !important;
+    padding: 0.12rem 0.3rem !important;
+}
+
+.dash-card-compact [id^="dash-"] {
+    font-size: 1.35rem !important;
+    line-height: 1 !important;
+}
+
+.dash-card-compact [id^="dash-"]+div {
+    margin-top: 0.1rem !important;
+    font-size: 0.62rem !important;
+    line-height: 1.1 !important;
 }

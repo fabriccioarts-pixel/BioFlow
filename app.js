@@ -47,7 +47,7 @@ function initApp() {
     initTheme();
     if (loggedUser) {
         const overlay = document.getElementById('login-overlay');
-        if(overlay) overlay.classList.remove('active');
+            if(overlay) overlay.classList.remove('active');
         
         // Etiquetas precisam estar carregadas antes do primeiro renderBoard() pra não
         // desenhar os cards sem badge na primeira renderização.
@@ -627,10 +627,9 @@ const col = document.getElementById(lead.column);
 if (col) {
 const card = document.createElement('div');
 card.className = 'card';
-card.draggable = true;
+card.draggable = false;
 card.id = `card-${lead.id}`;
-card.ondragstart = (e) => drag(e, lead.id);
-card.ondragend = dragEnd;
+card.addEventListener('pointerdown', (e) => startKanbanCardDrag(e, lead.id, card));
 
 // 1. Procedimento de Interesse (Extração com fallback inteligente)
 let procedimentoName = '';
@@ -793,24 +792,97 @@ colList.innerHTML = `
 let draggedCardId = null;
 let sourceColumnId = null;
 
-function drag(ev, id) {
-draggedCardId = id;
-sourceColumnId = leads.find(l => l.id === id).column;
-ev.dataTransfer.setData("text", id);
-setTimeout(() => {
-document.getElementById(`card-${id}`).classList.add('dragging');
-}, 0);
+// Arrastar os cards do Kanban via Pointer Events em vez do drag-and-drop
+// nativo do HTML5 — o preview nativo (e o evento "drag" que atualizaria um
+// fantasma customizado) é inconsistente demais entre navegadores (fica
+// minúsculo, apagado, ou simplesmente não dispara). Pointer events são o
+// mesmo mecanismo já usado (e comprovadamente confiável) no drag do dashboard.
+let kanbanPointerDrag = null;
+let kanbanDragGhost = null;
+let kanbanHoveredColumn = null;
+const KANBAN_DRAG_THRESHOLD = 6; // px — abaixo disso ainda conta como clique (ex: no "..." do card)
+
+function startKanbanCardDrag(event, id, card) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (event.target.closest('.card-options-btn')) return;
+    const rect = card.getBoundingClientRect();
+    kanbanPointerDrag = {
+        id,
+        card,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        rect,
+        moving: false
+    };
 }
 
-function dragEnd(ev) {
-if(draggedCardId) {
-const el = document.getElementById(`card-${draggedCardId}`);
-if(el) el.classList.remove('dragging');
-}
+function updateKanbanCardDrag(event) {
+    if (!kanbanPointerDrag) return;
+    const state = kanbanPointerDrag;
+
+    if (!state.moving) {
+        if (Math.abs(event.clientX - state.startX) < KANBAN_DRAG_THRESHOLD &&
+            Math.abs(event.clientY - state.startY) < KANBAN_DRAG_THRESHOLD) return;
+
+        // Só a partir daqui é um arraste de verdade (passou do limiar) — um
+        // clique simples (ex: no botão "...") nunca chega a criar o fantasma.
+        state.moving = true;
+        draggedCardId = state.id;
+        sourceColumnId = leads.find(l => l.id === state.id).column;
+        state.card.classList.add('dragging');
+        state.card.setPointerCapture?.(state.pointerId);
+
+        kanbanDragGhost = state.card.cloneNode(true);
+        kanbanDragGhost.removeAttribute('id');
+        kanbanDragGhost.classList.add('kanban-drag-ghost');
+        kanbanDragGhost.style.width = `${state.rect.width}px`;
+        document.body.appendChild(kanbanDragGhost);
+    }
+
+    if (!kanbanDragGhost) return;
+    kanbanDragGhost.style.left = `${event.clientX - state.offsetX}px`;
+    kanbanDragGhost.style.top = `${event.clientY - state.offsetY}px`;
+
+    // Destaca a coluna que está por baixo do cursor agora.
+    const stack = document.elementsFromPoint(event.clientX, event.clientY);
+    const under = stack.find(el => el !== kanbanDragGhost && !kanbanDragGhost.contains(el));
+    const targetColumn = under ? under.closest('.card-list') : null;
+    if (kanbanHoveredColumn && kanbanHoveredColumn !== targetColumn) {
+        kanbanHoveredColumn.classList.remove('kanban-drop-hover');
+    }
+    if (targetColumn) targetColumn.classList.add('kanban-drop-hover');
+    kanbanHoveredColumn = targetColumn;
 }
 
+function finishKanbanCardDrag(event) {
+    if (!kanbanPointerDrag) return;
+    const state = kanbanPointerDrag;
+    if (state.moving) {
+        state.card.classList.remove('dragging');
+        if (kanbanDragGhost) { kanbanDragGhost.remove(); kanbanDragGhost = null; }
+        if (kanbanHoveredColumn) {
+            const targetColumnId = kanbanHoveredColumn.id;
+            kanbanHoveredColumn.classList.remove('kanban-drop-hover');
+            kanbanHoveredColumn = null;
+            drop(event, targetColumnId);
+        }
+    }
+    kanbanPointerDrag = null;
+}
+
+document.addEventListener('pointermove', updateKanbanCardDrag);
+document.addEventListener('pointerup', finishKanbanCardDrag);
+document.addEventListener('pointercancel', finishKanbanCardDrag);
+
+// Mantido só porque as colunas ainda têm ondragover="allowDrop(event)" no HTML
+// (inofensivo, nunca dispara pros nossos cards já que não são mais
+// draggable=true — só existe pra não estourar erro se algo externo arrastado
+// passar por cima do board).
 function allowDrop(ev) {
-ev.preventDefault();
+    ev.preventDefault();
 }
 
 function drop(ev, targetColumnId) {
@@ -823,6 +895,15 @@ const leadIndex = leads.findIndex(l => l.id === draggedCardId);
 leads[leadIndex].column = targetColumnId;
 renderBoard();
 updateLeadColumnOnServer(draggedCardId, targetColumnId);
+
+// renderBoard() reconstrói o card do zero na nova coluna — adiciona uma
+// animação de "encaixe" nele pra dar a sensação de movimento suave em vez de
+// simplesmente aparecer pronto na nova posição.
+const droppedCard = document.getElementById(`card-${draggedCardId}`);
+if (droppedCard) {
+    droppedCard.classList.add('card-landing');
+    droppedCard.addEventListener('animationend', () => droppedCard.classList.remove('card-landing'), { once: true });
+}
 
 // Se moveu para agendado, comemora e só então abre o modal de integração.
 // O modal cobre quase toda a tela com um overlay escuro assim que abre — disparar
@@ -1862,16 +1943,27 @@ function switchTab(tabId) {
     } else if (tabId === 'dashboard') {
         const view = document.getElementById('view-dashboard');
         if (view) view.style.display = 'flex';
+        if (!window.dashServerDefaultLoaded) {
+            window.dashServerDefaultLoaded = true;
+            // Precisa terminar ANTES de montar o layout na primeira vez — senão
+            // quem nunca personalizou o próprio dashboard veria o arranjo de
+            // fábrica piscar antes do padrão do servidor chegar.
+            loadServerDashboardDefault().then(initializeDashboardCustomizer);
+        } else {
+            initializeDashboardCustomizer();
+        }
         if (!window.dashGoalLoaded) {
             window.dashGoalLoaded = true;
             loadDashboardGoal().then(renderDashboard);
         }
+        loadDashboardResponseMetrics().then(renderDashboard);
         renderDashboard(); // Render charts and metrics
         // Inicia auto-refresh a cada 30s enquanto o dashboard estiver aberto
         if (!window.dashPollingInterval) {
             window.dashPollingInterval = setInterval(async () => {
                 if (document.getElementById('view-dashboard')?.style.display !== 'none') {
                     await fetchLeadsFromServer(true);
+                    await loadDashboardResponseMetrics();
                     renderDashboard();
                 }
             }, 10000);
@@ -2007,6 +2099,28 @@ function toggleRelSelectAll(tipo, checked) {
     updateRelBulkBar(tipo);
 }
 
+// As caixinhas de seleção ficam escondidas por padrão (coluna .rel-select-col
+// com display:none) — só aparecem depois que o atendente clica em "Selecionar
+// para Disparo", pra não poluir a lista quando o objetivo é só ver quem está
+// naquela lista, não necessariamente disparar mensagem.
+function toggleRelSelectMode(tipo, btn) {
+    const table = document.getElementById(`rel-table-${tipo}`);
+    if (!table) return;
+    const active = table.classList.toggle('rel-selecting');
+
+    if (!active) {
+        document.querySelectorAll(`.rel-select[data-tipo="${tipo}"]`).forEach(cb => { cb.checked = false; });
+        const headerCheckbox = table.querySelector('thead input[type="checkbox"]');
+        if (headerCheckbox) headerCheckbox.checked = false;
+        updateRelBulkBar(tipo);
+    }
+
+    btn.classList.toggle('active', active);
+    btn.innerHTML = active
+        ? '<i class="fa-solid fa-xmark"></i> Cancelar Seleção'
+        : '<i class="fa-regular fa-square-check"></i> Selecionar para Disparo';
+}
+
 function updateRelBulkBar(tipo) {
     const bar = document.getElementById(`rel-bulk-bar-${tipo}`);
     if (!bar) return;
@@ -2054,9 +2168,22 @@ function reloadRelSource(tipo) {
     }
 }
 
+// Limite de conversas iniciadas por dia da Meta pra contas Tier 1 (novas/não
+// verificadas) — ultrapassar arrisca mensagens rejeitadas ou queda na nota de
+// qualidade do número. Mesmo valor usado no disparo em massa da aba de campanhas.
+const RELACIONAMENTO_DISPATCH_LIMIT = 250;
+
 async function startRelacionamentoCampaign(tipo) {
     const recipients = getRelSelectedRecipients(tipo);
     if (recipients.length === 0) return;
+
+    if (recipients.length > RELACIONAMENTO_DISPATCH_LIMIT) {
+        await customAlert(
+            `Você selecionou ${recipients.length} pacientes, mas o limite por disparo é ${RELACIONAMENTO_DISPATCH_LIMIT} (limite diário da Meta pra contas Tier 1). Desmarque alguns e repita o disparo depois pro restante.`,
+            'Limite de Disparo'
+        );
+        return;
+    }
 
     const selectEl = document.getElementById(`rel-bulk-template-${tipo}`);
     const selectedValue = selectEl ? selectEl.value : '';
@@ -2078,10 +2205,17 @@ async function startRelacionamentoCampaign(tipo) {
         return;
     }
 
-    if (!confirm(`Disparar o template "${templateName}" para ${recipients.length} paciente(s)?`)) return;
-
     const pricingRates = await getWhatsappPricingRates();
     const costPerMessage = pricingRates[templateCategory] ?? pricingRates.UTILITY;
+
+    const confirmed = await showDispatchConfirmModal({
+        templateName,
+        category: templateCategory,
+        recipientCount: recipients.length,
+        costPerMessage
+    });
+    if (!confirmed) return;
+
     const backendTipo = REL_TIPO_TO_BACKEND[tipo];
 
     // Troca a barra de seleção por uma mini área de progresso — o motor de disparo
@@ -2180,7 +2314,7 @@ function renderPosVendaCard(item) {
 
     return `
         <tr>
-            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="posvenda" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('posvenda')"></td>
+            <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="posvenda" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('posvenda')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2212,7 +2346,7 @@ function renderFaltantesCard(item) {
 
     return `
         <tr>
-            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="faltantes" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('faltantes')"></td>
+            <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="faltantes" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('faltantes')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2243,7 +2377,7 @@ function renderSumidosCard(item) {
 
     return `
         <tr>
-            <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="sumidos" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('sumidos')"></td>
+            <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="sumidos" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('sumidos')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
@@ -2862,7 +2996,7 @@ function renderAniversariantesHoje() {
     list.innerHTML = aniversariantesHojeData.map(p => {
         return `
             <tr style="background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent-warning);">
-                <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-hoje" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-hoje')"></td>
+                <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-hoje" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-hoje')"></td>
                 <td style="font-weight: 500;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(245, 158, 11, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-warning);">
@@ -2907,7 +3041,7 @@ function renderAniversariantesMes() {
 
         return `
             <tr style="${isTodayStyle}">
-                <td style="text-align: center;"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-mes" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-mes')"></td>
+                <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-mes" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-mes')"></td>
                 <td style="font-weight: 500;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(245, 158, 11, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-warning);">
@@ -3734,6 +3868,558 @@ function clearDashCustomRange() {
     renderDashboard();
 }
 
+// === DASHBOARD RESPONSE METRICS ===
+let dashboardResponseMetrics = {};
+
+async function loadDashboardResponseMetrics() {
+    try {
+        const res = await fetch('/api/whatsapp/response-metrics');
+        const json = await res.json();
+        dashboardResponseMetrics = json.success && json.data ? json.data : {};
+    } catch (e) {
+        dashboardResponseMetrics = {};
+    }
+}
+
+function formatResponseTime(minutes) {
+    if (!Number.isFinite(minutes)) return '--';
+    if (minutes < 60) return `${Math.max(1, Math.round(minutes))} min`;
+    const hours = minutes / 60;
+    if (hours < 24) return `${hours.toFixed(1).replace('.', ',')} h`;
+    return `${(hours / 24).toFixed(1).replace('.', ',')} d`;
+}
+
+const DASH_LAYOUT_STORAGE_KEY = 'crm-dashboard-layout-v3';
+// Layout "padrão" definido pelo usuário — quando existe, "Restaurar" volta pra
+// ele em vez do arranjo original de fábrica (dataset.originalIndex).
+const DASH_LAYOUT_DEFAULT_KEY = 'crm-dashboard-layout-default-v3';
+let dashboardCustomizerActive = false;
+let dashboardResizing = null;
+const DASHBOARD_GRID_ROW_HEIGHT = 80;
+// Trilha bem fina de propósito: cada card ocupa um número inteiro de trilhas
+// (arredondado pra cima), então a trilha maior = mais folga sobrando entre o
+// fim do card e a próxima linha. Com 8px essa folga ficava visível (vertical
+// maior que o gap horizontal); com 2px a folga máxima é imperceptível.
+const DASHBOARD_LAYOUT_ROW_HEIGHT = 2;
+
+function getDashboardGrid() {
+    return document.querySelector('.dash-layout-canvas');
+}
+
+function getDashboardCards() {
+    const grid = getDashboardGrid();
+    return grid ? Array.from(grid.querySelectorAll('.dash-kpi-card, .dash-layout-card')) : [];
+}
+
+function getDashboardCardKey(card) {
+    if (card.dataset.dashKey) return card.dataset.dashKey;
+    const value = card.querySelector('[id^="dash-"]');
+    return value ? value.id : null;
+}
+
+function getDefaultDashboardSpan(index, card) {
+    const key = card ? getDashboardCardKey(card) : null;
+    if (key === 'goal' || key === 'leads-chart' || key === 'ranking') return key === 'goal' ? 4 : 3;
+    if (key === 'funnel-chart' || key === 'origin-chart') return 1;
+    return [4, 5, 10].includes(index) ? 2 : 1;
+}
+
+function updateDashboardCardScale(card) {
+    const span = Number(card.dataset.layoutSpan) || 1;
+    const height = Number(card.dataset.layoutHeight) || card.getBoundingClientRect().height || DASHBOARD_GRID_ROW_HEIGHT;
+    const heightUnits = Math.max(1, height / DASHBOARD_GRID_ROW_HEIGHT);
+    const scale = Math.max(0.8, Math.min(1.8, (span + heightUnits) / 2));
+    card.style.setProperty('--dash-number-scale', scale.toFixed(2));
+    card.classList.toggle('dash-card-compact', heightUnits <= 1);
+    card.classList.toggle('dash-card-square', span === 1 && heightUnits <= 1);
+}
+
+function readDashboardLayout(storageKey = DASH_LAYOUT_STORAGE_KEY) {
+    try {
+        const layout = JSON.parse(localStorage.getItem(storageKey));
+        return layout && Array.isArray(layout.cards) ? layout : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function captureCurrentDashboardLayout() {
+    return {
+        cards: getDashboardCards().map((card, index) => ({
+            key: getDashboardCardKey(card),
+            span: Number(card.dataset.layoutSpan) || getDefaultDashboardSpan(index, card),
+            height: Number(card.dataset.layoutHeight) || null,
+            hidden: card.dataset.hidden === 'true'
+        })).filter(card => card.key)
+    };
+}
+
+function saveDashboardLayout() {
+    localStorage.setItem(DASH_LAYOUT_STORAGE_KEY, JSON.stringify(captureCurrentDashboardLayout()));
+}
+
+// Layout padrão do dashboard, compartilhado no servidor (crm_settings) — antes
+// "Definir como Padrão" só gravava no localStorage de quem clicava, então cada
+// atendente via um padrão diferente (ou nenhum). Guardado em cache aqui pra
+// applyDashboardLayout()/resetDashboardLayout() não precisarem esperar rede
+// toda vez que o dashboard é aberto.
+let cachedServerDashboardDefault = null;
+
+async function loadServerDashboardDefault() {
+    try {
+        const res = await fetch('/api/settings/dashboard-layout');
+        const json = await res.json();
+        cachedServerDashboardDefault = (json.layout && Array.isArray(json.layout.cards)) ? json.layout : null;
+    } catch (e) {
+        console.error('Erro ao buscar layout padrão do dashboard:', e);
+        cachedServerDashboardDefault = null;
+    }
+}
+
+// Grava o arranjo atual como o novo padrão pra TODO MUNDO (servidor) — "Restaurar"
+// passa a voltar pra este estado em vez do arranjo original de fábrica, pra
+// qualquer atendente que ainda não tenha personalizado o próprio dashboard.
+async function setDashboardLayoutAsDefault() {
+    const layout = captureCurrentDashboardLayout();
+    localStorage.setItem(DASH_LAYOUT_DEFAULT_KEY, JSON.stringify(layout)); // cache local imediato
+    try {
+        const res = await fetch('/api/settings/dashboard-layout', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layout })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar no servidor');
+        cachedServerDashboardDefault = layout;
+        await customAlert('Layout definido como padrão para todos os atendentes!', 'Padrão Salvo');
+    } catch (e) {
+        console.error('Erro ao salvar layout padrão no servidor:', e);
+        await customAlert('O layout ficou salvo só neste navegador — não foi possível sincronizar com o servidor: ' + e.message, 'Aviso');
+    }
+}
+
+function autoPackDashboardCards() {
+    const cards = getDashboardCards();
+    cards.forEach((card, index) => {
+        const span = Math.max(1, Math.min(6, Number(card.dataset.layoutSpan) || getDefaultDashboardSpan(index, card)));
+        card.dataset.layoutSpan = span;
+        card.style.gridColumn = `span ${span}`;
+        card.style.removeProperty('width');
+        card.style.order = index + 1;
+    });
+    packDashboardMasonry();
+    saveDashboardLayout();
+}
+
+// "Masonry" via grid-row: cada card ocupa exatamente quantas trilhas de
+// DASHBOARD_LAYOUT_ROW_HEIGHT (8px) precisa pra sua altura real. Sem isso, uma
+// linha do grid inteira fica com a altura do card MAIS alto dela (ex: o
+// gráfico de pizza), e os cards baixos ao lado deixam um vão vazio embaixo —
+// eles não esticam pra preencher porque o CSS Grid não sabe que aquele
+// espaço "pertence" à próxima linha.
+function packDashboardMasonry() {
+    const grid = getDashboardGrid();
+    if (!grid) return;
+    // O row-gap do grid entra UMA VEZ entre cada trilha ocupada — pra um card que
+    // atravessa N trilhas de 8px, a altura reservada é N*8 + (N-1)*gap, não N*8.
+    // Ignorar o gap nessa conta inflava o span (ex: card de 260px virava ~33
+    // trilhas em vez de ~15), reservando um espaço muito maior que o card real
+    // e deixando um vão vazio enorme até a próxima linha.
+    const rowGap = parseFloat(getComputedStyle(grid).rowGap) || 0;
+    const trackHeight = DASHBOARD_LAYOUT_ROW_HEIGHT;
+    const spanFor = (height) => Math.max(1, Math.ceil((height + rowGap) / (trackHeight + rowGap)));
+
+    const cards = getDashboardCards().filter(card => card.style.display !== 'none');
+
+    // Cards de KPI que ninguém redimensionou manualmente devem todos ficar com a
+    // MESMA altura de trilha — senão uma diferença de 1-2px entre números/textos
+    // (ex: "0" vs "2") já é o bastante pra dois cards "iguais" caírem em linhas
+    // diferentes, quebrando o alinhamento (desnível visual). Cards de
+    // gráfico/lista (.dash-layout-card) continuam com altura própria, já que
+    // aqueles são propositalmente diferentes uns dos outros.
+    const autoKpiCards = cards.filter(card =>
+        card.classList.contains('dash-kpi-card') && !(Number(card.dataset.layoutHeight) > 0)
+    );
+    let sharedKpiSpan = 1;
+    autoKpiCards.forEach(card => {
+        sharedKpiSpan = Math.max(sharedKpiSpan, spanFor(card.getBoundingClientRect().height));
+    });
+
+    cards.forEach(card => {
+        const height = card.getBoundingClientRect().height;
+        if (!height) return;
+        const span = autoKpiCards.includes(card) ? sharedKpiSpan : spanFor(height);
+        card.style.gridRow = `span ${span}`;
+    });
+}
+
+// layoutData opcional: quando passado, aplica esse arranjo específico (usado
+// pelo "Cancelar" pra voltar ao estado de antes de abrir o modo de edição) em
+// vez de ler do localStorage.
+function applyDashboardLayout(layoutData) {
+    const grid = getDashboardGrid();
+    if (!grid) return;
+
+    // Se essa é a primeira visita nesse navegador (sem layout individual salvo
+    // ainda), cai pro padrão definido pelo admin no servidor — compartilhado por
+    // todo mundo — em vez do arranjo de fábrica. O DASH_LAYOUT_DEFAULT_KEY local
+    // só entra como último fallback, se o servidor não respondeu.
+    const saved = layoutData || readDashboardLayout() || cachedServerDashboardDefault || readDashboardLayout(DASH_LAYOUT_DEFAULT_KEY);
+    const cards = getDashboardCards();
+    if (saved) {
+        const cardMap = new Map(cards.map(card => [getDashboardCardKey(card), card]));
+        saved.cards.forEach(item => {
+            const card = cardMap.get(item.key);
+            if (card) {
+                card.dataset.layoutSpan = Math.max(1, Math.min(6, Number(item.span) || 1));
+                if (Number(item.height) > 0) card.dataset.layoutHeight = Number(item.height);
+                delete card.dataset.layoutWidth;
+                card.dataset.hidden = item.hidden ? 'true' : 'false';
+                grid.appendChild(card);
+            }
+        });
+    }
+
+    getDashboardCards().forEach((card, index) => {
+        const span = Number(card.dataset.layoutSpan) || getDefaultDashboardSpan(index, card);
+        card.dataset.layoutSpan = span;
+        card.style.gridColumn = `span ${span}`;
+        card.style.order = index + 1;
+        if (Number(card.dataset.layoutHeight) > 0) {
+            card.style.minHeight = '0';
+            card.style.height = `${card.dataset.layoutHeight}px`;
+        }
+        card.style.removeProperty('width');
+        // Card oculto some de verdade fora do modo de edição — no modo de edição,
+        // renderDashboardCardTools/toggleDashboardCustomizer o mantêm visível (esmaecido)
+        // pra dar pra reativar.
+        card.classList.toggle('dash-card-hidden', card.dataset.hidden === 'true');
+        if (card.dataset.hidden === 'true' && !dashboardCustomizerActive) {
+            card.style.display = 'none';
+        }
+        updateDashboardCardScale(card);
+    });
+    packDashboardMasonry();
+}
+
+function renderDashboardCardTools() {
+    getDashboardCards().forEach(card => {
+        // Recria do zero em vez de "inserir só se não existir" — depois de um
+        // arraste, o card às vezes ficava com os controles presentes no DOM mas
+        // sem aparecer (algum resíduo de estilo do position:fixed durante o
+        // drag). Remover e recriar elimina qualquer estado inconsistente.
+        card.querySelectorAll(':scope > .dash-card-tools, :scope > .dash-card-resize-handle').forEach(el => el.remove());
+        const isHidden = card.dataset.hidden === 'true';
+        card.insertAdjacentHTML('afterbegin', `
+            <div class="dash-card-tools" aria-label="Controles do card">
+                <span class="dash-card-drag" title="Arraste para reordenar"><i class="fa-solid fa-grip-vertical"></i></span>
+                <button type="button" class="dash-card-visibility" onclick="toggleDashboardCardVisibility(this)" title="${isHidden ? 'Card oculto — clique para mostrar' : 'Ocultar este card'}"><i class="fa-solid ${isHidden ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
+            </div>
+            <span class="dash-card-resize-handle dash-card-resize-right" data-dash-resize-edge="right" title="Arraste para redimensionar na horizontal"></span>
+            <span class="dash-card-resize-handle dash-card-resize-bottom" data-dash-resize-edge="bottom" title="Arraste para redimensionar na vertical"></span>
+            <span class="dash-card-resize-handle dash-card-resize-corner" data-dash-resize-edge="corner" title="Arraste para redimensionar"></span>
+        `);
+    });
+}
+
+// Reordenar via Pointer Events (mousedown+move+up), igual ao redimensionamento logo
+// abaixo — o drag-and-drop nativo do HTML5 (dragstart/dragover/drop) parava de
+// disparar de forma inconsistente entre navegadores/cliques, então trocamos pelo
+// mesmo mecanismo que já funciona de forma confiável pro resize.
+let dashboardPointerDrag = null;
+
+// Versão simples de propósito: o card NÃO sai do fluxo do grid nem segue o
+// cursor "voando" (position:fixed) — ele só ganha destaque visual (sombra/
+// opacidade) e troca de lugar quando o cursor passa por cima de outro card.
+// A versão "voando" causava um bug onde os controles (arrastar/esconder) do
+// próprio card ficavam invisíveis durante e depois do arraste; essa versão
+// mais simples não mexe em position/left/top/width/z-index do card, então não
+// tem como esse estado ficar "preso".
+function startDashboardPointerDrag(event, handle) {
+    if (!dashboardCustomizerActive) return;
+    const card = handle.closest('.dash-kpi-card, .dash-layout-card');
+    if (!card) return;
+    event.preventDefault();
+    dashboardPointerDrag = { card };
+    handle.setPointerCapture?.(event.pointerId);
+    card.classList.add('dash-card-dragging');
+}
+
+function updateDashboardPointerDrag(event) {
+    if (!dashboardPointerDrag) return;
+    const { card } = dashboardPointerDrag;
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    const targetCard = under ? under.closest('.dash-kpi-card, .dash-layout-card') : null;
+
+    // Marca visualmente o card que vai ser trocado de lugar — mesmo sem o card
+    // "voar" atrás do cursor, dá pra ver exatamente onde ele vai cair antes de
+    // soltar o botão.
+    if (dashboardPointerDrag.dropTarget && dashboardPointerDrag.dropTarget !== targetCard) {
+        dashboardPointerDrag.dropTarget.classList.remove('dash-card-drop-target');
+    }
+    if (targetCard && targetCard !== card) {
+        targetCard.classList.add('dash-card-drop-target');
+        dashboardPointerDrag.dropTarget = targetCard;
+    } else {
+        dashboardPointerDrag.dropTarget = null;
+    }
+
+    if (!targetCard || targetCard === card) return;
+    const cards = getDashboardCards();
+    const draggedIndex = cards.indexOf(card);
+    const targetIndex = cards.indexOf(targetCard);
+    if (draggedIndex === -1 || targetIndex === -1) return;
+    if (draggedIndex < targetIndex) targetCard.after(card);
+    else targetCard.before(card);
+}
+
+function finishDashboardPointerDrag() {
+    if (!dashboardPointerDrag) return;
+    const { card, dropTarget } = dashboardPointerDrag;
+    card.classList.remove('dash-card-dragging');
+    if (dropTarget) dropTarget.classList.remove('dash-card-drop-target');
+    dashboardPointerDrag = null;
+    getDashboardCards().forEach((item, index) => {
+        item.style.order = index + 1;
+    });
+    autoPackDashboardCards();
+    // Rede de segurança: garante que o card solto (e todos os outros) continuam
+    // com o grip/olho — renderDashboardCardTools só insere o que estiver faltando.
+    if (dashboardCustomizerActive) renderDashboardCardTools();
+}
+
+function toggleDashboardCardVisibility(button) {
+    const card = button.closest('.dash-kpi-card, .dash-layout-card');
+    if (!card) return;
+    const nowHidden = card.dataset.hidden !== 'true';
+    card.dataset.hidden = nowHidden ? 'true' : 'false';
+    card.classList.toggle('dash-card-hidden', nowHidden);
+    button.innerHTML = `<i class="fa-solid ${nowHidden ? 'fa-eye-slash' : 'fa-eye'}"></i>`;
+    button.title = nowHidden ? 'Card oculto — clique para mostrar' : 'Ocultar este card';
+    packDashboardMasonry();
+    saveDashboardLayout();
+}
+
+function startDashboardResize(event, handle) {
+    if (!dashboardCustomizerActive) return;
+    const card = handle.closest('.dash-kpi-card, .dash-layout-card');
+    const grid = getDashboardGrid();
+    if (!card || !grid) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dashboardResizing = {
+        card,
+        grid,
+        startX: event.clientX,
+        startY: event.clientY,
+        startSpan: Number(card.dataset.layoutSpan) || 1,
+        startHeight: card.getBoundingClientRect().height,
+        edge: handle.dataset.dashResizeEdge
+    };
+    handle.setPointerCapture?.(event.pointerId);
+    document.body.classList.add('dash-is-resizing');
+}
+
+function updateDashboardResize(event) {
+    if (!dashboardResizing) return;
+    const { card, grid, startX, startY, startSpan, startHeight, edge } = dashboardResizing;
+    const gridStyle = getComputedStyle(grid);
+    const columns = gridStyle.gridTemplateColumns.split(' ').length || 4;
+    const gap = parseFloat(gridStyle.columnGap) || 0;
+    const gridWidth = grid.getBoundingClientRect().width;
+    const columnWidth = (gridWidth - (gap * (columns - 1))) / columns;
+    const spanWidth = columnWidth + gap;
+    if (edge === 'right' || edge === 'corner') {
+        const nextSpan = Math.max(1, Math.min(columns, Math.round(startSpan + (event.clientX - startX) / spanWidth)));
+        card.dataset.layoutSpan = nextSpan;
+        card.style.gridColumn = `span ${nextSpan}`;
+        card.style.removeProperty('width');
+        updateDashboardCardScale(card);
+    }
+    if (edge === 'bottom' || edge === 'corner') {
+        const nextHeight = Math.max(DASHBOARD_GRID_ROW_HEIGHT, Math.round((startHeight + event.clientY - startY) / DASHBOARD_GRID_ROW_HEIGHT) * DASHBOARD_GRID_ROW_HEIGHT);
+        card.dataset.layoutHeight = nextHeight;
+        card.style.minHeight = '0';
+        card.style.height = `${nextHeight}px`;
+        updateDashboardCardScale(card);
+    }
+    packDashboardMasonry();
+}
+
+function finishDashboardResize() {
+    if (!dashboardResizing) return;
+    autoPackDashboardCards();
+    dashboardResizing = null;
+    document.body.classList.remove('dash-is-resizing');
+    if (dashboardCustomizerActive) renderDashboardCardTools();
+}
+
+// Guarda como o layout estava antes de entrar no modo de edição — "Cancelar"
+// (ou ESC) volta pra esse ponto, descartando qualquer arraste/redimensionamento
+// feito durante essa sessão de edição.
+let dashboardEditSessionSnapshot = null;
+
+function toggleDashboardCustomizer() {
+    const grid = getDashboardGrid();
+    const button = document.getElementById('dash-customize-btn');
+    if (!grid) return;
+
+    dashboardCustomizerActive = !dashboardCustomizerActive;
+    if (dashboardCustomizerActive) {
+        dashboardEditSessionSnapshot = captureCurrentDashboardLayout();
+    }
+    renderDashboardCardTools();
+    grid.classList.toggle('dash-layout-editing', dashboardCustomizerActive);
+    // Cards ocultos ficam visíveis (esmaecidos) enquanto o modo de edição está
+    // ativo, pra dar pra reativá-los — e voltam a sumir de verdade ao sair.
+    getDashboardCards().forEach(card => {
+        if (card.dataset.hidden === 'true') {
+            card.style.display = dashboardCustomizerActive ? '' : 'none';
+        }
+    });
+    if (button) {
+        button.classList.toggle('active', dashboardCustomizerActive);
+        button.innerHTML = dashboardCustomizerActive
+            ? '<i class="fa-solid fa-check"></i> Concluir'
+            : '<i class="fa-solid fa-sliders"></i> Personalizar';
+    }
+    if (dashboardCustomizerActive) {
+        grid.classList.add('dash-layout-has-tools');
+        if (!document.getElementById('dash-layout-cancel-btn')) {
+            button.insertAdjacentHTML('afterend', '<button id="dash-layout-cancel-btn" class="btn-secondary" onclick="cancelDashboardCustomizer()" title="Sair sem salvar as mudanças desta sessão (Esc)"><i class="fa-solid fa-xmark"></i> Cancelar</button>');
+        }
+        const cancelBtn = document.getElementById('dash-layout-cancel-btn');
+        if (!document.getElementById('dash-layout-reset-btn')) {
+            cancelBtn.insertAdjacentHTML('afterend', '<button id="dash-layout-reset-btn" class="btn-secondary" onclick="resetDashboardLayout()" title="Restaurar layout padrão"><i class="fa-solid fa-rotate-left"></i> Restaurar</button>');
+        }
+        // Só admin pode definir o padrão global — o backend já recusa (403) quem
+        // não for, mas escondendo o botão evita o clique inútil pra quem não pode.
+        const isAdminUser = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+        if (isAdminUser && !document.getElementById('dash-layout-set-default-btn')) {
+            const resetBtn = document.getElementById('dash-layout-reset-btn');
+            resetBtn.insertAdjacentHTML('afterend', '<button id="dash-layout-set-default-btn" class="btn-secondary" onclick="setDashboardLayoutAsDefault()" title="Salvar o layout atual como padrão para todos os atendentes"><i class="fa-solid fa-floppy-disk"></i> Definir como Padrão</button>');
+        }
+    } else {
+        grid.classList.remove('dash-layout-has-tools');
+        const cancelButton = document.getElementById('dash-layout-cancel-btn');
+        if (cancelButton) cancelButton.remove();
+        const resetButton = document.getElementById('dash-layout-reset-btn');
+        if (resetButton) resetButton.remove();
+        const setDefaultButton = document.getElementById('dash-layout-set-default-btn');
+        if (setDefaultButton) setDefaultButton.remove();
+    }
+}
+
+// "Cancelar" (botão ou tecla Esc): descarta qualquer mudança feita durante
+// essa sessão de edição, voltando pro layout de quando "Personalizar" foi aberto.
+function cancelDashboardCustomizer() {
+    if (dashboardEditSessionSnapshot) {
+        localStorage.setItem(DASH_LAYOUT_STORAGE_KEY, JSON.stringify(dashboardEditSessionSnapshot));
+        applyDashboardLayout(dashboardEditSessionSnapshot);
+    }
+    if (dashboardCustomizerActive) toggleDashboardCustomizer();
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && dashboardCustomizerActive) cancelDashboardCustomizer();
+});
+
+function resetDashboardLayout() {
+    localStorage.removeItem(DASH_LAYOUT_STORAGE_KEY);
+    const grid = getDashboardGrid();
+    if (!grid) return;
+
+    // Se o admin definiu um layout padrão pra todo mundo (servidor), "Restaurar"
+    // volta pra ele em vez do arranjo original de fábrica.
+    const customDefault = cachedServerDashboardDefault || readDashboardLayout(DASH_LAYOUT_DEFAULT_KEY);
+    const cards = getDashboardCards();
+
+    if (customDefault) {
+        const cardMap = new Map(cards.map(card => [getDashboardCardKey(card), card]));
+        customDefault.cards.forEach(item => {
+            const card = cardMap.get(item.key);
+            if (!card) return;
+            grid.appendChild(card);
+            card.dataset.layoutSpan = Math.max(1, Math.min(6, Number(item.span) || 1));
+            if (Number(item.height) > 0) {
+                card.dataset.layoutHeight = Number(item.height);
+            } else {
+                delete card.dataset.layoutHeight;
+            }
+            card.dataset.hidden = item.hidden ? 'true' : 'false';
+        });
+    } else {
+        cards.sort((a, b) => Number(a.dataset.originalIndex) - Number(b.dataset.originalIndex));
+        cards.forEach((card, index) => {
+            grid.appendChild(card);
+            card.dataset.layoutSpan = getDefaultDashboardSpan(index, card);
+            delete card.dataset.layoutHeight;
+            card.dataset.hidden = 'false';
+        });
+    }
+
+    getDashboardCards().forEach((card, index) => {
+        card.style.gridColumn = `span ${card.dataset.layoutSpan}`;
+        delete card.dataset.layoutWidth;
+        card.classList.toggle('dash-card-hidden', card.dataset.hidden === 'true');
+        card.style.removeProperty('min-height');
+        if (Number(card.dataset.layoutHeight) > 0) {
+            card.style.height = `${card.dataset.layoutHeight}px`;
+        } else {
+            card.style.removeProperty('height');
+        }
+        card.style.removeProperty('width');
+        card.style.removeProperty('display');
+        card.style.order = index + 1;
+        updateDashboardCardScale(card);
+        const visBtn = card.querySelector('.dash-card-visibility');
+        if (visBtn) {
+            const isHidden = card.dataset.hidden === 'true';
+            visBtn.innerHTML = `<i class="fa-solid ${isHidden ? 'fa-eye-slash' : 'fa-eye'}"></i>`;
+            visBtn.title = isHidden ? 'Card oculto — clique para mostrar' : 'Ocultar este card';
+        }
+    });
+    renderDashboard();
+}
+
+document.addEventListener('pointerdown', event => {
+    const resizeHandle = event.target.closest('[data-dash-resize-edge]');
+    if (resizeHandle) { startDashboardResize(event, resizeHandle); return; }
+    const dragHandle = event.target.closest('.dash-card-drag');
+    if (dragHandle) startDashboardPointerDrag(event, dragHandle);
+});
+
+document.addEventListener('pointermove', event => {
+    updateDashboardResize(event);
+    updateDashboardPointerDrag(event);
+});
+document.addEventListener('pointerup', () => {
+    finishDashboardResize();
+    finishDashboardPointerDrag();
+});
+// Rede de segurança: se o navegador cancelar o gesto no meio do caminho (perda
+// de foco da janela, menu de contexto etc.), sem isso o card ficava travado em
+// position:fixed pra sempre, com os próprios botões inacessíveis.
+document.addEventListener('pointercancel', () => {
+    finishDashboardResize();
+    finishDashboardPointerDrag();
+});
+
+let dashMasonryResizeTimeout = null;
+window.addEventListener('resize', () => {
+    clearTimeout(dashMasonryResizeTimeout);
+    dashMasonryResizeTimeout = setTimeout(packDashboardMasonry, 150);
+});
+
+function initializeDashboardCustomizer() {
+    const cards = getDashboardCards();
+    cards.forEach((card, index) => {
+        if (!card.dataset.originalIndex) card.dataset.originalIndex = index;
+    });
+    applyDashboardLayout();
+    renderDashboardCardTools();
+}
+
 // === DASHBOARD LOGIC ===
 function renderDashboard() {
     if (!Array.isArray(leads)) return;
@@ -3771,6 +4457,8 @@ function renderDashboard() {
     let receitaPrevista = 0, receitaRealizada = 0, agendamentosComValor = 0;
     let leadsAtivos = 0, agendadosTotal = 0, ganhosTotal = 0, perdidosTotal = 0;
     let leadsContatados = 0; // Leads que entraram no período selecionado
+    let semResponsavel = 0, aguardandoResposta = 0;
+    let responseMinutesTotal = 0, responseCount = 0;
     let perdasTotal = 0;
     const rankingMap = {};
     const origemMap = {};
@@ -3784,6 +4472,8 @@ function renderDashboard() {
             } catch(e) {}
         }
         const inPeriod = isInPeriod(lead.created_at);
+        const leadPhone = String(lead.telefone || '').replace(/\D/g, '');
+        const responseMetric = Object.entries(dashboardResponseMetrics).find(([phone]) => String(phone).replace(/\D/g, '') === leadPhone)?.[1];
         // Receita é filtrada pela data em que o valor foi definido (orçado/agendado/ganho),
         // não pela data de criação do lead — um lead antigo cujo orçamento só foi fechado
         // agora precisa contar no período atual, não sumir por ter entrado no CRM há meses.
@@ -3794,31 +4484,47 @@ function renderDashboard() {
 
         // Conta leads que entraram no período selecionado
         if (inPeriod) leadsContatados++;
-
-        if (lead.column === 'col-ganho') {
-            ganhosTotal++;
-            if (revenueInPeriod) { receitaRealizada += val; if (val > 0) agendamentosComValor++; }
-        } else if (lead.column === 'col-agendado') {
-            agendadosTotal++;
-            if (revenueInPeriod) { receitaPrevista += val; if (val > 0) agendamentosComValor++; }
-        } else if (lead.column === 'col-perdido') {
-            perdidosTotal++;
-            if (revenueInPeriod) perdasTotal += val;
-        } else {
-            leadsAtivos++;
+        if (inPeriod && !lead.owner_id) semResponsavel++;
+        if (inPeriod && responseMetric) {
+            if (responseMetric.lastDirection === 'in' && !responseMetric.firstResponse) aguardandoResposta++;
+            if (responseMetric.firstInbound && responseMetric.firstResponse) {
+                const firstInbound = new Date(responseMetric.firstInbound).getTime();
+                const firstResponse = new Date(responseMetric.firstResponse).getTime();
+                if (firstResponse >= firstInbound) {
+                    responseMinutesTotal += (firstResponse - firstInbound) / 60000;
+                    responseCount++;
+                }
+            }
         }
 
-        const owner = lead.owner_id || 'Sem Dono';
-        if (!rankingMap[owner]) rankingMap[owner] = { name: owner, leads: 0, agendamentos: 0, receita: 0 };
-        rankingMap[owner].leads++;
-        if (lead.column === 'col-agendado' || lead.column === 'col-ganho') {
-            rankingMap[owner].agendamentos++;
-            if (revenueInPeriod) rankingMap[owner].receita += val;
+        if (lead.column === 'col-ganho') {
+            if (inPeriod) ganhosTotal++;
+            if (revenueInPeriod) { receitaRealizada += val; if (val > 0) agendamentosComValor++; }
+        } else if (lead.column === 'col-agendado') {
+            if (inPeriod) agendadosTotal++;
+            if (revenueInPeriod) { receitaPrevista += val; if (val > 0) agendamentosComValor++; }
+        } else if (lead.column === 'col-perdido') {
+            if (inPeriod) perdidosTotal++;
+            if (revenueInPeriod) perdasTotal += val;
+        } else {
+            if (inPeriod) leadsAtivos++;
+        }
+
+        if (inPeriod) {
+            const owner = lead.owner_id || 'Sem Dono';
+            if (!rankingMap[owner]) rankingMap[owner] = { name: owner, leads: 0, agendamentos: 0, receita: 0 };
+            rankingMap[owner].leads++;
+            if (lead.column === 'col-agendado' || lead.column === 'col-ganho') {
+                rankingMap[owner].agendamentos++;
+                if (revenueInPeriod) rankingMap[owner].receita += val;
+            }
         }
     });
 
     const ticketMedio = agendamentosComValor > 0 ? ((receitaPrevista + receitaRealizada) / agendamentosComValor) : 0;
-    const taxaConversao = leads.length > 0 ? Math.round(((agendadosTotal + ganhosTotal) / leads.length) * 100) : 0;
+    const leadsNoPeriodo = leads.filter(lead => isInPeriod(lead.created_at)).length;
+    const taxaConversao = leadsNoPeriodo > 0 ? Math.round(((agendadosTotal + ganhosTotal) / leadsNoPeriodo) * 100) : 0;
+    const tempoMedioResposta = responseCount > 0 ? responseMinutesTotal / responseCount : NaN;
 
     const el = id => document.getElementById(id);
     if (el('dash-receita-prevista')) el('dash-receita-prevista').innerText = 'R$ ' + receitaPrevista.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
@@ -3829,6 +4535,9 @@ function renderDashboard() {
     if (el('dash-agendamentos-total')) el('dash-agendamentos-total').innerText = agendadosTotal + ganhosTotal;
     if (el('dash-leads-hoje')) el('dash-leads-hoje').innerText = leadsContatados;
     if (el('dash-perdas-total')) el('dash-perdas-total').innerText = 'R$ ' + perdasTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-sem-responsavel')) el('dash-sem-responsavel').innerText = semResponsavel;
+    if (el('dash-aguardando-resposta')) el('dash-aguardando-resposta').innerText = aguardandoResposta;
+    if (el('dash-tempo-resposta')) el('dash-tempo-resposta').innerText = formatResponseTime(tempoMedioResposta);
 
     // Ranking - premium cards
     const rankingArray = Object.values(rankingMap).sort((a, b) => b.receita - a.receita);
@@ -3850,7 +4559,7 @@ function renderDashboard() {
                     <div style="flex: 1; min-width: 0;">
                         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.35rem;">
                             <span style="font-weight: 700; color: var(--text-main); font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;">${r.name}</span>
-                            <span style="font-size: 0.78rem; color: var(--text-muted);">${r.leads} leads &middot; ${conv}% conv.</span>
+                            <span style="font-size: 0.78rem; color: var(--text-muted);">${r.leads} leads &middot; ${conv}% conversão</span>
                         </div>
                         <div style="height: 5px; background: var(--header-btn-bg); border-radius: 99px; overflow: hidden;">
                             <div style="height: 100%; width: ${barPct}%; background: var(--accent-primary); border-radius: 99px;"></div>
@@ -3932,11 +4641,27 @@ function openDashGoalEditor() {
     const input = document.getElementById('dash-goal-input');
     if (input) input.value = cachedDashGoal || '';
     if (editor) editor.style.display = 'flex';
+    // O card "Meta de Receita" faz parte do masonry do dashboard (grid-row: span N,
+    // calculado pela altura real do card). Abrir o editor aumenta a altura, mas o
+    // span já calculado não muda sozinho — sem repack, o conteúdo extra transborda
+    // pra fora da célula e fica coberto pelo próximo card (que pinta por cima por
+    // vir depois no DOM). dash-card-elevated garante que fique por cima enquanto
+    // o repack (que precisa do próximo frame pra ler a altura já expandida) roda.
+    const card = editor ? editor.closest('.dash-kpi-card, .dash-layout-card') : null;
+    if (card) card.classList.add('dash-card-elevated');
+    // Chamada síncrona, sem requestAnimationFrame: packDashboardMasonry() lê
+    // getBoundingClientRect(), que força um reflow imediato — com RAF, o card ficava
+    // um frame inteiro com a caixa (fundo) na altura antiga enquanto o conteúdo do
+    // editor já tinha transbordado pra fora dela, sem nenhum fundo atrás.
+    if (typeof packDashboardMasonry === 'function') packDashboardMasonry();
 }
 
 function cancelDashGoalEdit() {
     const editor = document.getElementById('dash-goal-editor');
     if (editor) editor.style.display = 'none';
+    const card = editor ? editor.closest('.dash-kpi-card, .dash-layout-card') : null;
+    if (card) card.classList.remove('dash-card-elevated');
+    if (typeof packDashboardMasonry === 'function') packDashboardMasonry();
 }
 
 async function saveDashGoal() {
@@ -4265,6 +4990,13 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
             </div>`;
         }).join('');
     }
+
+    // Reempacota depois que os gráficos (Chart.js) terminam de desenhar — o
+    // tamanho real do canvas só é conhecido depois desse ponto.
+    if (typeof packDashboardMasonry === 'function') {
+        packDashboardMasonry();
+        setTimeout(packDashboardMasonry, 50);
+    }
 }
 
 // === CAMPANHAS DE DISPARO ===
@@ -4331,15 +5063,24 @@ async function updateCampaignLeadCount() {
         console.error('Erro ao calcular leads elegíveis para campanha:', e);
     }
 
-    const max = Math.max(eligibleCount, 1);
+    // Trava em 250 — limite de conversas iniciadas por dia da Meta pra contas
+    // no Tier 1 (novas/não verificadas). Passar disso arrisca mensagens
+    // rejeitadas ou queda na nota de qualidade do número.
+    const CAMPAIGN_DISPATCH_LIMIT = 250;
+    const cappedEligible = Math.min(eligibleCount, CAMPAIGN_DISPATCH_LIMIT);
+    const max = Math.max(cappedEligible, 1);
     slider.max = String(max);
     slider.value = String(max);
     slider.disabled = eligibleCount === 0;
-    if (display) display.textContent = String(eligibleCount);
+    if (display) display.textContent = String(cappedEligible);
     if (hint) {
-        hint.textContent = eligibleCount === 0
-            ? 'Nenhum lead elegível nesse público (sem opt-in confirmado, todos já receberam esse template, ou pediram pra não receber campanhas).'
-            : `Arraste pra limitar quantos dos ${eligibleCount} leads elegíveis recebem esse disparo.`;
+        if (eligibleCount === 0) {
+            hint.textContent = 'Nenhum lead elegível nesse público (sem opt-in confirmado, todos já receberam esse template, ou pediram pra não receber campanhas).';
+        } else if (eligibleCount > CAMPAIGN_DISPATCH_LIMIT) {
+            hint.textContent = `${eligibleCount} leads elegíveis, mas o disparo é limitado a ${CAMPAIGN_DISPATCH_LIMIT} por vez (limite diário da Meta pra contas Tier 1). Repita o disparo depois pra alcançar o restante.`;
+        } else {
+            hint.textContent = `Arraste pra limitar quantos dos ${eligibleCount} leads elegíveis recebem esse disparo.`;
+        }
     }
 }
 
@@ -4358,14 +5099,57 @@ async function getWhatsappPricingRates() {
     return cachedWhatsappPricingRates;
 }
 
+// Tela de confirmação antes de qualquer disparo em massa — mostra o custo
+// estimado (destinatários × tarifa da categoria do template) em vez do
+// confirm() nativo do navegador, que não passava informação nenhuma pro
+// atendente antes de sair enviando mensagem pra centenas de pacientes.
+const DISPATCH_CATEGORY_LABELS = { MARKETING: 'Marketing', UTILITY: 'Utilidade', AUTHENTICATION: 'Autenticação' };
+
+function showDispatchConfirmModal({ templateName, category, recipientCount, costPerMessage }) {
+    return new Promise(resolve => {
+        const modal = document.getElementById('modalDispatchConfirm');
+        const confirmBtn = document.getElementById('dispatch-confirm-btn');
+        const cancelBtn = document.getElementById('dispatch-cancel-btn');
+        const warningEl = document.getElementById('dispatch-confirm-warning');
+        if (!modal || !confirmBtn || !cancelBtn) { resolve(true); return; } // rede de segurança se o modal não existir
+
+        const total = recipientCount * costPerMessage;
+        const fmtBRL = (v) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        document.getElementById('dispatch-confirm-template').textContent = templateName;
+        document.getElementById('dispatch-confirm-category').textContent = DISPATCH_CATEGORY_LABELS[category] || category;
+        document.getElementById('dispatch-confirm-count').textContent = `${recipientCount} paciente${recipientCount === 1 ? '' : 's'}`;
+        document.getElementById('dispatch-confirm-rate').textContent = fmtBRL(costPerMessage);
+        document.getElementById('dispatch-confirm-total').textContent = fmtBRL(total);
+        warningEl.style.display = recipientCount > 200 ? 'block' : 'none';
+
+        const cleanup = (result) => {
+            modal.classList.remove('active');
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            resolve(result);
+        };
+        const onConfirm = () => cleanup(true);
+        const onCancel = () => cleanup(false);
+
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        modal.classList.add('active');
+    });
+}
+
 async function openWhatsappPricingEditor() {
     const rates = await getWhatsappPricingRates();
-    const marketing = prompt('Tarifa Marketing (R$ por mensagem):', rates.MARKETING);
-    if (marketing === null) return;
-    const utility = prompt('Tarifa Utility (R$ por mensagem):', rates.UTILITY);
-    if (utility === null) return;
-    const authentication = prompt('Tarifa Authentication (R$ por mensagem):', rates.AUTHENTICATION);
-    if (authentication === null) return;
+    document.getElementById('pricing-marketing').value = rates.MARKETING;
+    document.getElementById('pricing-utility').value = rates.UTILITY;
+    document.getElementById('pricing-authentication').value = rates.AUTHENTICATION;
+    document.getElementById('modalWhatsappPricing').classList.add('active');
+}
+
+async function saveWhatsappPricingEditor() {
+    const marketing = document.getElementById('pricing-marketing').value;
+    const utility = document.getElementById('pricing-utility').value;
+    const authentication = document.getElementById('pricing-authentication').value;
 
     try {
         const res = await fetch('/api/settings/whatsapp-pricing', {
@@ -4376,10 +5160,10 @@ async function openWhatsappPricingEditor() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Erro ao salvar tarifas');
         cachedWhatsappPricingRates = json.rates;
-        if (typeof showToast === 'function') showToast('Tarifas atualizadas!', 'success');
-        else alert('Tarifas atualizadas!');
+        closeModals();
+        await customAlert('Tarifas atualizadas!', 'Tarifas Salvas');
     } catch (e) {
-        alert('Erro ao salvar tarifas: ' + e.message);
+        await customAlert('Erro ao salvar tarifas: ' + e.message, 'Erro');
     }
 }
 

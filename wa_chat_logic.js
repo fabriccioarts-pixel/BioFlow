@@ -3587,6 +3587,11 @@ async function sendCustomChatMessage(msgText, filename = '', caption = '', isVoi
         return;
     }
 
+    const activeLead = typeof leads !== 'undefined'
+        ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
+        : null;
+    if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
+
     const popup = document.getElementById('quick-replies-popup');
     if (popup) popup.style.display = 'none';
 
@@ -3623,7 +3628,6 @@ async function sendCustomChatMessage(msgText, filename = '', caption = '', isVoi
                     body: JSON.stringify({ column_id: 'col-contatado' })
                 }).catch(console.error);
             }
-            renewLeadConversation(lead.id); // enviar mensagem conta como atividade: renova a posse da conversa
         }
     }
 
@@ -3777,11 +3781,8 @@ async function openChat(phone, name, silent = false) {
         }
     }).catch(console.error);
     
-    // Regra: Ao abrir/iniciar a conversa, se o lead estiver em "Novos Leads" ('col-entrada'),
-    // move automaticamente para "Em Atendimento" ('col-contatado').
-    // A atribuição do atendente responsável (owner_id) passa pela trava de atendimento
-    // (claimLeadConversation) para evitar que dois atendentes atropelem o mesmo lead.
-    const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
+    // Ao abrir a conversa, apenas move o lead para "Em Atendimento" quando necessário.
+    // A atribuição do atendente acontece somente no envio da primeira mensagem.
 
     // Só limpa o banner da trava quando é uma abertura de verdade (troca de conversa) —
     // nas atualizações silenciosas (polling a cada 6s da própria conversa já aberta) isso
@@ -3794,7 +3795,6 @@ async function openChat(phone, name, silent = false) {
     }
 
     let activeColumn = 'col-entrada';
-    let leadForLock = null;
 
     if (typeof leads !== 'undefined') {
         let currentLead = leads.find(l => isSamePhone(l.telefone, phone));
@@ -3811,9 +3811,8 @@ async function openChat(phone, name, silent = false) {
             }
 
             activeColumn = currentLead.column || 'col-contatado';
-            leadForLock = currentLead;
         } else if (phone && !silent) {
-            // Se o lead ainda não existia no Kanban, cria direto em "Em Atendimento" com o atendente logado!
+            // Se o lead ainda não existia no Kanban, cria direto em "Em Atendimento" sem responsável.
             // Só roda numa abertura de verdade (silent=false) — nunca no polling de fundo
             // (a cada 5s, pra atualizar a conversa já aberta), senão um lead apagado
             // enquanto a conversa continua na tela era recriado sozinho a cada poll.
@@ -3823,7 +3822,7 @@ async function openChat(phone, name, silent = false) {
                 telefone: phone,
                 origem: 'WhatsApp Orgânico',
                 column: 'col-contatado',
-                owner_id: currentUser
+                owner_id: null
             };
             leads.push(newLead);
             if (typeof renderBoard === 'function') renderBoard();
@@ -3831,12 +3830,7 @@ async function openChat(phone, name, silent = false) {
             if (typeof saveLeadToServer === 'function') {
                 await saveLeadToServer(newLead).catch(console.error);
             }
-            leadForLock = newLead;
         }
-    }
-
-    if (leadForLock && leadForLock.id) {
-        await claimLeadConversation(leadForLock.id);
     }
 
     updateChatStageUI(activeColumn);
@@ -4094,6 +4088,11 @@ async function sendTemplateMessage() {
         return;
     }
 
+    const activeLead = typeof leads !== 'undefined'
+        ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
+        : null;
+    if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
+
     const modal = document.getElementById('modalSendTemplate');
 
     try {
@@ -4131,6 +4130,11 @@ async function sendActiveChatMessage() {
         return;
     }
 
+    const activeLead = typeof leads !== 'undefined'
+        ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
+        : null;
+    if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
+
     // Adiciona assinatura automática do atendente — mensagem primeiro, assinatura no final
     let msg = rawMsg;
     if (!rawMsg.startsWith('[FILE:') && !rawMsg.startsWith('[CAPTION:')) {
@@ -4165,9 +4169,8 @@ async function sendActiveChatMessage() {
     // REGRA DE NEGÓCIO:
     // Ao responder a mensagem do lead:
     // 1. Move a coluna para 'Em Atendimento' ('col-contatado') se estiver em 'col-entrada'
-    // 2. Renova a posse da conversa (owner_id/assigned_at) via trava de atendimento
+    // 2. Atribui a posse da conversa (owner_id/assigned_at) via trava de atendimento
     // ============================================
-    const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
     if (window.currentActiveChat && window.currentActiveChat.phone && typeof leads !== 'undefined') {
         const phone = window.currentActiveChat.phone;
         const name = window.currentActiveChat.name;
@@ -4187,7 +4190,6 @@ async function sendActiveChatMessage() {
                     body: JSON.stringify({ column_id: 'col-contatado' })
                 }).catch(console.error);
             }
-            renewLeadConversation(lead.id); // enviar mensagem conta como atividade: renova a posse da conversa
         } else {
             const newLead = {
                 id: Date.now().toString(),
@@ -4195,7 +4197,7 @@ async function sendActiveChatMessage() {
                 telefone: phone,
                 origem: 'WhatsApp Orgânico',
                 column: 'col-contatado',
-                owner_id: currentUser
+                owner_id: null
             };
             leads.push(newLead);
             if (typeof renderBoard === 'function') renderBoard();
