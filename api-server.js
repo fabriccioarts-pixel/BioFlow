@@ -848,6 +848,53 @@ async function callGeminiForWhatsappReply(phone) {
 
 // Chamado (sem await, "fire-and-forget") pelo webhook quando uma mensagem de
 // texto chega de um lead elegível (IA ligada, coluna inicial do funil).
+// Mesmas etiquetas padrão do frontend (wa_chat_logic.js DEFAULT_TAGS) — usadas
+// só como semente caso ninguém tenha criado nenhuma etiqueta ainda, pra
+// garantir a tag "Qualificado (IA)" sem apagar as etiquetas padrão de todo
+// mundo (whatsapp_custom_tags, se vazia, vira só a lista que a gente salvar).
+const WHATSAPP_DEFAULT_TAGS_SEED = [
+    { id: 'urgente', label: '🔥 Urgente', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' },
+    { id: 'vip', label: '⭐ VIP', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '#f59e0b' },
+    { id: 'aguardando', label: '⏳ Aguardando Resposta', bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '#3b82f6' },
+    { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', border: '#a855f7' },
+    { id: 'orcamento', label: '📄 Orçamento Enviado', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' },
+    { id: 'retorno', label: '🔄 Retorno', bg: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '#f97316' }
+];
+const WHATSAPP_AI_QUALIFIED_TAG_ID = 'ia-qualificado';
+
+// Garante que a etiqueta "Qualificado (IA)" existe na lista compartilhada de
+// etiquetas (crm_settings.whatsapp_custom_tags), criando-a (e semeando as
+// padrão, se a lista ainda estiver vazia) na primeira vez que for necessária.
+async function ensureQualifiedTagExists() {
+    const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+    let tags = [];
+    if (rows && rows[0] && rows[0].value) {
+        try { tags = JSON.parse(rows[0].value); } catch (e) {}
+    }
+    if (!Array.isArray(tags) || tags.length === 0) {
+        tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
+    }
+    if (!tags.some(t => t.id === WHATSAPP_AI_QUALIFIED_TAG_ID)) {
+        tags.push({ id: WHATSAPP_AI_QUALIFIED_TAG_ID, label: '🎯 Qualificado (IA)', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' });
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(tags)]
+        );
+    }
+    return WHATSAPP_AI_QUALIFIED_TAG_ID;
+}
+
+// Acrescenta a tag "Qualificado (IA)" ao lead sem duplicar e sem apagar as
+// etiquetas que ele já tinha.
+async function tagLeadAsQualified(leadId) {
+    const tagId = await ensureQualifiedTagExists();
+    const rows = await queryD1('SELECT tags FROM leads WHERE id = ?', [leadId]);
+    const currentTags = (rows?.[0]?.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (currentTags.includes(tagId)) return;
+    currentTags.push(tagId);
+    await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [currentTags.join(','), leadId]);
+}
+
 async function handleWhatsappAiAutoReply(leadId, phone) {
     try {
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
@@ -864,6 +911,7 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
 
         if (replyText.startsWith(WHATSAPP_AI_QUALIFIED_TOKEN)) {
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
+            await tagLeadAsQualified(leadId);
             const notas = await queryD1('SELECT notas FROM leads WHERE id = ?', [leadId]);
             const notaAtual = notas?.[0]?.notas || '';
             const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 IA identificou lead qualificado em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
