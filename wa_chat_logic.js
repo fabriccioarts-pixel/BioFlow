@@ -1506,13 +1506,22 @@ function renderContactsList(chats) {
             if (lead && Number(lead.ai_enabled) !== 0 && ['col-entrada', 'col-contatado'].includes(lead.column)) {
                 aiBadgeHTML = `<span title="IA respondendo automaticamente" style="display: inline-flex; align-items: center; font-size: 0.7rem; margin-left: 4px;">🤖</span>`;
             }
-            if (lead && lead.tags) {
-                const tagIds = parseLeadTags(lead.tags);
-                if (tagIds.length > 0) {
-                    leadTagsHTML = `<div style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.35rem;">` +
-                        tagIds.map(tId => getTagBadgeHTML(tId)).join('') +
-                        `</div>`;
-                }
+            const tagIds = (lead && lead.tags) ? parseLeadTags(lead.tags) : [];
+
+            // "Aguardando Resposta" calculado na hora (não fica salvo em lugar
+            // nenhum) — sempre que a última mensagem for do paciente e já
+            // fizer mais de 5 minutos sem ninguém (humano ou IA) ter
+            // respondido. Reaproveita a etiqueta padrão "aguardando" já
+            // existente, e não duplica se ela já tiver sido aplicada manualmente.
+            const lastMsgTs = parseD1TimestampMs(chat.last_timestamp || chat.timestamp || chat.last_interaction);
+            const lastMsgDirection = chat.last_direction || chat.direction;
+            const isAutoWaiting = lastMsgDirection === 'in' && lastMsgTs && (Date.now() - lastMsgTs) > 5 * 60 * 1000;
+            const displayTagIds = (isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds;
+
+            if (displayTagIds.length > 0) {
+                leadTagsHTML = `<div style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.35rem;">` +
+                    displayTagIds.map(tId => getTagBadgeHTML(tId)).join('') +
+                    `</div>`;
             }
             if (lead && lead.owner_id) {
                 const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
