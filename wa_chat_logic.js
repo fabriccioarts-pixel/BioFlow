@@ -2284,6 +2284,7 @@ function switchToManageTagsView(e) {
     const vManage = document.getElementById('tags-view-manage');
     if (vSelect) vSelect.style.display = 'none';
     if (vManage) vManage.style.display = 'block';
+    cancelEditCustomTag();
     renderManageTagsList();
 }
 
@@ -2293,6 +2294,7 @@ function switchToSelectTagsView(e) {
     const vManage = document.getElementById('tags-view-manage');
     if (vSelect) vSelect.style.display = 'block';
     if (vManage) vManage.style.display = 'none';
+    cancelEditCustomTag();
     renderTagsMenuOptions();
 }
 
@@ -2323,6 +2325,13 @@ function renderTagsMenuOptions() {
     container.innerHTML = html;
 }
 
+// Etiquetas que o próprio sistema depende pra funcionar — apagar quebraria um
+// recurso automático em vez de só remover uma etiqueta comum: "aguardando" é
+// usada pelo cálculo automático de "5 minutos sem resposta", e
+// "ia-qualificado" é usada pelo agente de IA pra marcar lead qualificado.
+const PROTECTED_TAG_IDS = ['aguardando', 'ia-qualificado'];
+let editingTagId = null;
+
 function renderManageTagsList() {
     const container = document.getElementById('manage-tags-list');
     if (!container) return;
@@ -2335,12 +2344,19 @@ function renderManageTagsList() {
 
     let html = '';
     tags.forEach(tag => {
+        const isProtected = PROTECTED_TAG_IDS.includes(tag.id);
+        const deleteBtnHTML = isProtected
+            ? `<i class="fa-solid fa-lock" style="color: var(--text-muted); padding: 0.1rem 0.3rem; font-size: 0.8rem;" title="Etiqueta usada pelo sistema — não pode ser excluída"></i>`
+            : `<button onclick="deleteCustomTag('${tag.id}')" style="background: none; border: none; color: var(--accent-danger); cursor: pointer; padding: 0.1rem 0.3rem; font-size: 0.85rem;" title="Excluir etiqueta"><i class="fa-solid fa-trash"></i></button>`;
         html += `
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.6rem; background: var(--bg-main); border-radius: 6px; border: 1px solid var(--border-color);">
                 <div style="display: flex; align-items: center; gap: 0.4rem;">
                     <span style="font-size: 0.75rem; font-weight: 600; padding: 0.15rem 0.4rem; border-radius: 10px; background: ${tag.bg}; color: ${tag.color}; border: 1px solid ${tag.border};">${tag.label}</span>
                 </div>
-                <button onclick="deleteCustomTag('${tag.id}')" style="background: none; border: none; color: var(--accent-danger); cursor: pointer; padding: 0.1rem 0.3rem; font-size: 0.85rem;" title="Excluir etiqueta"><i class="fa-solid fa-trash"></i></button>
+                <div style="display: flex; align-items: center; gap: 0.2rem;">
+                    <button onclick='startEditCustomTag(${JSON.stringify(tag.id)})' style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.1rem 0.3rem; font-size: 0.85rem;" title="Editar nome/cor"><i class="fa-solid fa-pen"></i></button>
+                    ${deleteBtnHTML}
+                </div>
             </div>
         `;
     });
@@ -2357,7 +2373,39 @@ function hexToRgba(hex, alpha = 0.15) {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function addNewCustomTag() {
+function startEditCustomTag(tagId) {
+    const tag = getAvailableTags().find(t => t.id === tagId);
+    if (!tag) return;
+    editingTagId = tagId;
+    const nameInput = document.getElementById('new-tag-name');
+    const colorInput = document.getElementById('new-tag-color');
+    const colorIcon = document.getElementById('tag-color-icon');
+    if (nameInput) nameInput.value = tag.label;
+    if (colorInput) colorInput.value = tag.color;
+    if (colorIcon) colorIcon.style.color = tag.color;
+
+    const saveBtn = document.getElementById('tag-save-btn');
+    if (saveBtn) saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> Salvar Alteração';
+    const cancelBtn = document.getElementById('tag-edit-cancel-btn');
+    if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+}
+
+function cancelEditCustomTag() {
+    editingTagId = null;
+    const nameInput = document.getElementById('new-tag-name');
+    const colorInput = document.getElementById('new-tag-color');
+    const colorIcon = document.getElementById('tag-color-icon');
+    if (nameInput) nameInput.value = '';
+    if (colorInput) colorInput.value = '#3b82f6';
+    if (colorIcon) colorIcon.style.color = '#3b82f6';
+
+    const saveBtn = document.getElementById('tag-save-btn');
+    if (saveBtn) saveBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Salvar';
+    const cancelBtn = document.getElementById('tag-edit-cancel-btn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+}
+
+function saveCustomTag() {
     const nameInput = document.getElementById('new-tag-name');
     const colorInput = document.getElementById('new-tag-color');
 
@@ -2369,23 +2417,25 @@ function addNewCustomTag() {
         return;
     }
 
-    const tagId = 'custom_' + Date.now();
     const bg = hexToRgba(hexColor, 0.15);
     const border = hexColor;
-
-    const newTag = {
-        id: tagId,
-        label: name,
-        bg: bg,
-        color: hexColor,
-        border: border
-    };
-
     const currentTags = getAvailableTags();
-    currentTags.push(newTag);
-    saveAvailableTags(currentTags);
 
-    if (nameInput) nameInput.value = '';
+    if (editingTagId) {
+        // Atualiza nome/cor no lugar — mantém o mesmo id, então os leads que já
+        // têm essa etiqueta atribuída continuam mostrando ela normalmente.
+        const idx = currentTags.findIndex(t => t.id === editingTagId);
+        if (idx !== -1) {
+            currentTags[idx] = { ...currentTags[idx], label: name, bg, color: hexColor, border };
+        }
+        saveAvailableTags(currentTags);
+        cancelEditCustomTag();
+    } else {
+        const newTag = { id: 'custom_' + Date.now(), label: name, bg, color: hexColor, border };
+        currentTags.push(newTag);
+        saveAvailableTags(currentTags);
+        if (nameInput) nameInput.value = '';
+    }
 
     renderManageTagsList();
     if (typeof renderBoard === 'function') renderBoard();
@@ -2397,6 +2447,10 @@ function addNewCustomTag() {
 }
 
 async function deleteCustomTag(tagId) {
+    if (PROTECTED_TAG_IDS.includes(tagId)) {
+        await customAlert('Essa etiqueta é usada pelo sistema (resposta automática ou agente de IA) e não pode ser excluída — mas o nome e a cor podem ser editados livremente.', 'Etiqueta Protegida');
+        return;
+    }
     if (!await customConfirm('Deseja realmente excluir esta etiqueta?', 'Excluir Etiqueta')) return;
     let tags = getAvailableTags();
     tags = tags.filter(t => t.id !== tagId);
