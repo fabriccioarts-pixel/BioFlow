@@ -1120,7 +1120,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 Controla, pra todo o sistema, se a IA responde automaticamente novas mensagens no WhatsApp (leads em Entrada/Contatado). Cada conversa também tem seu próprio interruptor no painel do chat.
             </p>
             <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; background: var(--bg-main); border: 1px solid var(--border-color); padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.25rem;">
-                <input type="checkbox" id="whatsapp-ai-global-toggle">
+                <span class="ui-switch">
+                    <input type="checkbox" id="whatsapp-ai-global-toggle">
+                    <span class="ui-switch-track"></span>
+                </span>
                 <span style="font-size: 0.9rem; color: var(--text-main);">IA de pré-qualificação ativa</span>
             </label>
 
@@ -2900,7 +2903,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div>
                     <div class="lead-panel-label"><i class="fa-solid fa-robot"></i> Agente de IA</div>
                     <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; background: var(--bg-card); border: 1px solid var(--border-color); padding: 0.6rem 0.8rem; border-radius: 8px;">
-                        <input type="checkbox" id="chat-ai-toggle" onchange="toggleChatAiEnabled(this.checked)">
+                        <span class="ui-switch">
+                            <input type="checkbox" id="chat-ai-toggle" onchange="toggleChatAiEnabled(this.checked)">
+                            <span class="ui-switch-track"></span>
+                        </span>
                         <span style="font-size: 0.85rem; color: var(--text-main);" id="chat-ai-toggle-label">IA respondendo esta conversa</span>
                     </label>
                 </div>

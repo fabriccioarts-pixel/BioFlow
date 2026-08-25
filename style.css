@@ -1609,6 +1609,59 @@ select.form-control option {
     transition: background-color 0.2s;
 }
 
+/* Switch genérico (liga/desliga) — usado no toggle de IA por conversa e
+   reaproveitável em qualquer outro liga/desliga do sistema. */
+.ui-switch {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+.ui-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ui-switch-track {
+    position: absolute;
+    inset: 0;
+    background: var(--header-btn-bg, rgba(255,255,255,0.12));
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.ui-switch-track::before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 2px;
+    top: 2px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.ui-switch input:checked + .ui-switch-track {
+    background: var(--accent-success, #10b981);
+    border-color: var(--accent-success, #10b981);
+}
+
+.ui-switch input:checked + .ui-switch-track::before {
+    transform: translateX(16px);
+    background: #fff;
+}
+
+.ui-switch input:disabled + .ui-switch-track {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Coluna de checkbox fica escondida até o atendente clicar em "Selecionar
    para Disparo" — evita poluir a lista quando o objetivo é só consultar. */
 .crm-table .rel-select-col {
