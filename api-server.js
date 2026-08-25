@@ -351,11 +351,13 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                 }
 
-                // Agente de IA de pré-qualificação — disparado sem "await" de propósito:
-                // a chamada ao Gemini pode levar segundos, e a Meta espera um 200 rápido
-                // nesse webhook (senão reentrega a mesma mensagem).
+                // Agente de IA de pré-qualificação — precisa de "await" aqui: na Vercel
+                // (serverless), a função é congelada assim que a resposta HTTP é
+                // enviada, então um "fire-and-forget" sem await nunca chegava a
+                // terminar (a chamada ao Gemini era interrompida no meio). A Meta
+                // tolera alguns segundos de resposta antes de reentregar a mensagem.
                 if (msg_type === 'text' && msg_body && resolvedLeadId) {
-                    handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro (fire-and-forget) no agente de IA:', e));
+                    await handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro no agente de IA:', e));
                 }
             } catch(e) {
                 console.error("Erro ao processar webhook no DB:", e);
