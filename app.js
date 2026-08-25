@@ -1181,6 +1181,21 @@ function findLeadFromActiveChat() {
     return leads.find(l => isSamePhone(l.telefone, phone)) || null;
 }
 
+async function toggleChatAiEnabled(checked) {
+    const lead = findLeadFromActiveChat();
+    if (!lead) return;
+    lead.ai_enabled = checked ? 1 : 0;
+    try {
+        await fetch(`/api/leads/${lead.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_enabled: checked })
+        });
+    } catch (e) {
+        console.error('Erro ao ligar/desligar a IA para o lead:', e);
+    }
+}
+
 function manageLeadFromChat() {
     if (!window.currentActiveChat || !window.currentActiveChat.phone) return;
 
@@ -1975,10 +1990,10 @@ function switchTab(tabId) {
         loadAudiences().then(updateCampaignLeadCount);
         loadDispatchHistory();
         const pricingBtn = document.getElementById('btn-whatsapp-pricing');
-        if (pricingBtn) {
-            const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
-            pricingBtn.style.display = isAdmin ? 'inline-flex' : 'none';
-        }
+        const aiToggleBtn = document.getElementById('btn-whatsapp-ai-toggle');
+        const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+        if (pricingBtn) pricingBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+        if (aiToggleBtn) aiToggleBtn.style.display = isAdmin ? 'inline-flex' : 'none';
     } else if (tabId === 'origem-leads') {
         const view = document.getElementById('view-origem-leads');
         if (view) view.style.display = 'flex';
@@ -5136,6 +5151,34 @@ function showDispatchConfirmModal({ templateName, category, recipientCount, cost
         cancelBtn.addEventListener('click', onCancel);
         modal.classList.add('active');
     });
+}
+
+async function openWhatsappAiToggleModal() {
+    try {
+        const res = await fetch('/api/settings/whatsapp-ai');
+        const json = await res.json();
+        document.getElementById('whatsapp-ai-global-toggle').checked = !!json.enabled;
+    } catch (e) {
+        console.error('Erro ao buscar configuração da IA:', e);
+    }
+    document.getElementById('modalWhatsappAiToggle').classList.add('active');
+}
+
+async function saveWhatsappAiToggle() {
+    const enabled = document.getElementById('whatsapp-ai-global-toggle').checked;
+    try {
+        const res = await fetch('/api/settings/whatsapp-ai', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar configuração');
+        closeModals();
+        await customAlert(enabled ? 'IA de atendimento ativada!' : 'IA de atendimento desativada.', 'Configuração Salva');
+    } catch (e) {
+        await customAlert('Erro ao salvar: ' + e.message, 'Erro');
+    }
 }
 
 async function openWhatsappPricingEditor() {

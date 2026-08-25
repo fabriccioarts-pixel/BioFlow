@@ -323,8 +323,10 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 const leadRows = await queryD1(`SELECT id, nome FROM leads WHERE telefone IN (${placeholders})`, variants);
 
                 // 3. Se não existe, cria um novo Lead no Kanban na coluna Novos (telefone sempre no formato canônico)
+                let resolvedLeadId = null;
                 if (!leadRows || leadRows.length === 0) {
                     const newLeadId = Date.now().toString();
+                    resolvedLeadId = newLeadId;
 
                     let notasAdicionais = '';
                     if (message_obj.referral) {
@@ -336,14 +338,24 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         [newLeadId, profileName, normalizePhoneBR(from), origemLead, '', '', 'col-entrada', '', '', notasAdicionais]
                     );
                     console.log(`Novo lead criado a partir do WhatsApp: ${profileName} (${from}) - Origem: ${origemLead}`);
-                } else if (profileName !== 'Lead WhatsApp') {
-                    // O nome do perfil nem sempre vem na primeira mensagem (depende de privacidade/tipo de mensagem).
-                    // Se o lead ainda está com o nome genérico e uma mensagem posterior trouxe o nome real, atualiza.
-                    const existingLead = leadRows[0];
-                    if (!existingLead.nome || existingLead.nome === 'Lead WhatsApp') {
-                        await queryD1('UPDATE leads SET nome = ? WHERE id = ?', [profileName, existingLead.id]);
-                        console.log(`Nome do lead atualizado a partir do WhatsApp: ${profileName} (${from})`);
+                } else {
+                    resolvedLeadId = leadRows[0].id;
+                    if (profileName !== 'Lead WhatsApp') {
+                        // O nome do perfil nem sempre vem na primeira mensagem (depende de privacidade/tipo de mensagem).
+                        // Se o lead ainda está com o nome genérico e uma mensagem posterior trouxe o nome real, atualiza.
+                        const existingLead = leadRows[0];
+                        if (!existingLead.nome || existingLead.nome === 'Lead WhatsApp') {
+                            await queryD1('UPDATE leads SET nome = ? WHERE id = ?', [profileName, existingLead.id]);
+                            console.log(`Nome do lead atualizado a partir do WhatsApp: ${profileName} (${from})`);
+                        }
                     }
+                }
+
+                // Agente de IA de pré-qualificação — disparado sem "await" de propósito:
+                // a chamada ao Gemini pode levar segundos, e a Meta espera um 200 rápido
+                // nesse webhook (senão reentrega a mesma mensagem).
+                if (msg_type === 'text' && msg_body && resolvedLeadId) {
+                    handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro (fire-and-forget) no agente de IA:', e));
                 }
             } catch(e) {
                 console.error("Erro ao processar webhook no DB:", e);
@@ -673,6 +685,18 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 [msg_id, to, 'out', db_message_body, 'sent', quoted_id || null]
             );
 
+            // Essa rota só é chamada pelo atendente logado no CRM (a IA manda mensagem
+            // direto por sendWhatsappTextInternal, sem passar por aqui) — então qualquer
+            // envio por aqui significa que um humano já entrou na conversa. Desliga o
+            // agente de IA pra esse lead, pra ele não responder por cima do atendente.
+            try {
+                const variants = phoneVariants(to);
+                const placeholders = variants.map(() => '?').join(', ');
+                await queryD1(`UPDATE leads SET ai_enabled = 0 WHERE telefone IN (${placeholders})`, variants);
+            } catch (e) {
+                console.error('Erro ao desligar a IA após envio manual:', e);
+            }
+
             // Registra o envio de template pra permitir bloquear reenvio do mesmo
             // template pro mesmo número em campanhas futuras.
             if (isTemplate && templateName) {
@@ -695,6 +719,145 @@ app.post('/api/whatsapp/send', async (req, res) => {
         res.status(500).json({ error: error.message || 'Erro interno do servidor.' });
     }
 });
+
+// ==========================================
+// AGENTE DE IA — pré-qualificação automática de leads no WhatsApp
+// ==========================================
+// Envio de texto simples reaproveitável pela rota HTTP e pela IA, sem duplicar
+// a lógica de mídia/template/reação de /api/whatsapp/send (que continua sendo
+// o único caminho pra esses casos, usados só pelo atendente humano no CRM).
+async function sendWhatsappTextInternal(to, text) {
+    const phone_id = process.env.META_WA_PHONE_ID;
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
+
+    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } })
+    });
+    const resultJson = await response.json();
+    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+
+    const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
+    await queryD1(
+        'INSERT INTO wa_messages (id, phone, direction, message, status) VALUES (?, ?, ?, ?, ?)',
+        [msg_id, to, 'out', text, 'sent']
+    );
+    return resultJson;
+}
+
+// Prompt fixo com a identidade e as regras da Natuclinic. Nunca revela ser IA
+// e nunca fala de preço — perguntar valor é justamente um dos gatilhos pra
+// considerar o lead qualificado e silenciar (token QUALIFICADO_SILENCIO).
+const WHATSAPP_AI_SYSTEM_PROMPT = `Você é uma atendente da Natuclinic, uma clínica de estética e saúde da mulher em Brasília (DF). Você conversa pelo WhatsApp com pacientes/leads que entraram em contato.
+
+UNIDADES:
+- Taguatinga Norte: QNE 1 Lote 17/20 Loja 02.
+- Planaltina-DF: Cond. Estância 1, Módulo C/E, Lt 1, em frente à SkyFit.
+
+HORÁRIO: Segunda a sexta, 8h às 18h. Sábado, 8h às 12h.
+
+SERVIÇOS OFERECIDOS:
+- Depilação a laser
+- Ozonioterapia
+- Nutrição Ortomolecular
+- Estética Regenerativa
+- Estética Facial - Harmonização e Preenchimento
+- Preenchimento de Glúteos
+- Remoção de Vasinhos (não varizes)
+- SPA (banheira hidromassagem, degustação, massagem corporal completa, até 2 pessoas)
+- Médica especialista em saúde da mulher
+- Ninfoescultura
+- Tratamento de incontinência em mulheres
+- Fortalecimento pélvico
+- Perfiloplastia
+- Soroterapia
+- Harmonização Corporal - Harmone Bee
+- Reset (Rejuvenescimento e reestruturação facial)
+- Bag de Ozônio
+- Reabilitação Intestinal - Enematerapia com ozônio
+
+REGRAS DE TOM:
+- Tom consultivo e humano. Frases curtas e objetivas.
+- Nunca, em nenhuma hipótese, diga que é uma inteligência artificial, robô, assistente virtual ou sistema automatizado. Converse como uma pessoa da equipe.
+- Sempre termine sua resposta com uma pergunta aberta, pra entender melhor a necessidade do paciente (o que ele busca, há quanto tempo, o que já tentou, etc.).
+- Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.
+
+REGRA CRÍTICA DE SILÊNCIO:
+Você NUNCA fala sobre valores/preços. Se o paciente perguntar quanto custa qualquer coisa, OU se em algum momento você julgar que já entendeu o suficiente da necessidade dele para um atendente humano assumir a conversa e fechar o procedimento, sua resposta deve ser EXATAMENTE a palavra:
+QUALIFICADO_SILENCIO
+(sem mais nada — nem pontuação, nem explicação). Isso sinaliza ao sistema que a IA deve parar de responder aquele contato.`;
+
+const WHATSAPP_AI_QUALIFIED_TOKEN = 'QUALIFICADO_SILENCIO';
+
+// Busca o histórico recente da conversa (as duas direções) e monta o formato
+// "contents" que a API do Gemini espera, pra IA responder com contexto.
+async function getWhatsappAiHistory(phone, limit = 12) {
+    const rows = await queryD1(
+        'SELECT direction, message FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC LIMIT ?',
+        [phone, limit]
+    );
+    return (rows || []).reverse().map(r => ({
+        role: r.direction === 'in' ? 'user' : 'model',
+        parts: [{ text: (r.message || '').startsWith('[FILE:') ? '[mídia enviada]' : (r.message || '') }]
+    }));
+}
+
+async function callGeminiForWhatsappReply(phone) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
+
+    const history = await getWhatsappAiHistory(phone);
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+        body: JSON.stringify({
+            systemInstruction: { parts: [{ text: WHATSAPP_AI_SYSTEM_PROMPT }] },
+            contents: history
+        })
+    });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error ? json.error.message : 'Erro desconhecido na API do Gemini');
+
+    const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('').trim() || '';
+    return text;
+}
+
+// Chamado (sem await, "fire-and-forget") pelo webhook quando uma mensagem de
+// texto chega de um lead elegível (IA ligada, coluna inicial do funil).
+async function handleWhatsappAiAutoReply(leadId, phone) {
+    try {
+        const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
+        const globalEnabled = globalSetting && globalSetting[0] ? globalSetting[0].value === '1' : true;
+        if (!globalEnabled) return;
+
+        const leadRows = await queryD1('SELECT ai_enabled, column_id FROM leads WHERE id = ?', [leadId]);
+        const lead = leadRows && leadRows[0];
+        if (!lead || Number(lead.ai_enabled) !== 1) return;
+        if (!['col-entrada', 'col-contatado'].includes(lead.column_id)) return;
+
+        const replyText = await callGeminiForWhatsappReply(phone);
+        if (!replyText) return;
+
+        if (replyText.startsWith(WHATSAPP_AI_QUALIFIED_TOKEN)) {
+            await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
+            const notas = await queryD1('SELECT notas FROM leads WHERE id = ?', [leadId]);
+            const notaAtual = notas?.[0]?.notas || '';
+            const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 IA identificou lead qualificado em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
+            await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
+            await queryD1(
+                'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                [`ai-qual-${leadId}-${Date.now()}`, `🤖 Lead qualificado pela IA — assumir conversa no WhatsApp.`]
+            );
+            return;
+        }
+
+        await sendWhatsappTextInternal(phone, replyText);
+    } catch (e) {
+        console.error('Erro no agente de IA do WhatsApp:', e);
+    }
+}
 
 // 3.8. Excluir Mensagem do WhatsApp (Localmente e na Meta se for enviada)
 app.post('/api/whatsapp/delete-message', async (req, res) => {
@@ -1478,6 +1641,36 @@ app.put('/api/settings/whatsapp-pricing', async (req, res) => {
     }
 });
 
+// Interruptor geral do agente de IA de pré-qualificação — além do controle
+// por lead (leads.ai_enabled), esse é o "desliga tudo" de emergência/manutenção.
+app.get('/api/settings/whatsapp-ai', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
+        const enabled = rows && rows[0] ? rows[0].value === '1' : true; // liga por padrão
+        res.json({ enabled });
+    } catch (e) {
+        console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
+    }
+});
+
+app.put('/api/settings/whatsapp-ai', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem ligar/desligar a IA.' });
+    }
+    try {
+        const enabled = req.body?.enabled ? '1' : '0';
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [enabled]
+        );
+        res.json({ success: true, enabled: enabled === '1' });
+    } catch (e) {
+        console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
+    }
+});
+
 // Etiquetas de lead (compartilhadas entre todos os atendentes) — antes viviam
 // só no localStorage do navegador de quem criava, então um lead marcado com
 // uma etiqueta custom não mostrava nada pra quem abrisse o CRM em outro
@@ -1528,6 +1721,12 @@ queryD1(`CREATE TABLE IF NOT EXISTS wa_dispatches (
     created_by TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
+
+// Liga/desliga o agente de IA de pré-qualificação por lead — auto-executável
+// (não preso na rota manual /api/init-db) pra nunca cair no mesmo problema do
+// lead_audiences, que ficou meses sem existir em produção por depender de
+// alguém chamar aquela rota manualmente.
+queryD1('ALTER TABLE leads ADD COLUMN ai_enabled INTEGER DEFAULT 1').catch(() => {});
 
 app.post('/api/whatsapp/dispatches', async (req, res) => {
     try {
@@ -2546,7 +2745,7 @@ app.post('/api/leads', async (req, res) => {
 // Atualizar dados de um lead (coluna e/ou notas)
 app.put('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
-    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out } = req.body;
+    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled } = req.body;
     try {
         const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [id]);
         const lead = leadRows && leadRows.length > 0 ? leadRows[0] : null;
@@ -2600,6 +2799,10 @@ app.put('/api/leads/:id', async (req, res) => {
         if (campaign_opt_out !== undefined) {
             updates.push('campaign_opt_out = ?');
             params.push(campaign_opt_out ? 1 : 0);
+        }
+        if (ai_enabled !== undefined) {
+            updates.push('ai_enabled = ?');
+            params.push(ai_enabled ? 1 : 0);
         }
 
         if (updates.length > 0) {

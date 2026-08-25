@@ -1499,9 +1499,13 @@ function renderContactsList(chats) {
         // Buscar etiquetas associadas ao lead + trava de atendimento (evita atropelo entre atendentes)
         let leadTagsHTML = '';
         let lockBadgeHTML = '';
+        let aiBadgeHTML = '';
         if (typeof leads !== 'undefined' && Array.isArray(leads)) {
             const phone = chat.phone;
             const lead = leads.find(l => isSamePhone(l.telefone, phone));
+            if (lead && Number(lead.ai_enabled) !== 0 && ['col-entrada', 'col-contatado'].includes(lead.column)) {
+                aiBadgeHTML = `<span title="IA respondendo automaticamente" style="display: inline-flex; align-items: center; font-size: 0.7rem; margin-left: 4px;">🤖</span>`;
+            }
             if (lead && lead.tags) {
                 const tagIds = parseLeadTags(lead.tags);
                 if (tagIds.length > 0) {
@@ -1568,6 +1572,7 @@ function renderContactsList(chats) {
                         <span style="display: flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden;">
                             ${pinnedHTML}
                             <strong style="color: var(--text-main); font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${displayName}</strong>
+                            ${aiBadgeHTML}
                             ${lockBadgeHTML}
                         </span>
                         <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; margin-left: 6px;">
@@ -1932,6 +1937,19 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     }
     container.dataset.renderedPhone = String(phone);
     leadPanelNotesDirty = false;
+
+    const aiToggle = document.getElementById('chat-ai-toggle');
+    const aiToggleLabel = document.getElementById('chat-ai-toggle-label');
+    if (aiToggle) {
+        const aiEnabled = lead ? Number(lead.ai_enabled) !== 0 : false;
+        aiToggle.checked = aiEnabled;
+        aiToggle.disabled = !lead;
+        if (aiToggleLabel) {
+            aiToggleLabel.textContent = !lead
+                ? 'IA respondendo esta conversa (sem lead vinculado)'
+                : 'IA respondendo esta conversa';
+        }
+    }
 
     const identityContainer = document.getElementById('chat-lead-identity');
     if (identityContainer) {

@@ -549,6 +549,9 @@
                 <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
                     <i class="fa-solid fa-clock-rotate-left" style="color: var(--accent-success);"></i> Histórico de Disparos
                 </h3>
+                <button class="btn-secondary" id="btn-whatsapp-ai-toggle" onclick="openWhatsappAiToggleModal()" style="display: none;" title="Ligar/desligar o agente de IA de pré-qualificação">
+                    <i class="fa-solid fa-robot"></i> IA de Atendimento
+                </button>
                 <button class="btn-secondary" id="btn-whatsapp-pricing" onclick="openWhatsappPricingEditor()" style="display: none;" title="Editar tarifas por mensagem">
                     <i class="fa-solid fa-tags"></i> Tarifas
                 </button>
@@ -1105,6 +1108,24 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="modal-actions">
                 <button class="btn-cancel" id="dispatch-cancel-btn">Cancelar</button>
                 <button class="btn-save" id="dispatch-confirm-btn"><i class="fa-solid fa-paper-plane"></i> Confirmar Disparo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal do Interruptor Geral da IA de Atendimento -->
+    <div class="modal-overlay" id="modalWhatsappAiToggle">
+        <div class="modal" style="max-width: 400px;">
+            <h2><i class="fa-solid fa-robot" style="color: var(--accent-primary);"></i> IA de Atendimento</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem 0;">
+                Controla, pra todo o sistema, se a IA responde automaticamente novas mensagens no WhatsApp (leads em Entrada/Contatado). Cada conversa também tem seu próprio interruptor no painel do chat.
+            </p>
+            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; background: var(--bg-main); border: 1px solid var(--border-color); padding: 0.75rem 1rem; border-radius: 8px;">
+                <input type="checkbox" id="whatsapp-ai-global-toggle">
+                <span style="font-size: 0.9rem; color: var(--text-main);">IA de pré-qualificação ativa</span>
+            </label>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
+                <button class="btn-save" onclick="saveWhatsappAiToggle()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
             </div>
         </div>
     </div>
@@ -2864,6 +2885,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Agente de IA (pré-qualificação automática) -->
+                <div>
+                    <div class="lead-panel-label"><i class="fa-solid fa-robot"></i> Agente de IA</div>
+                    <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; background: var(--bg-card); border: 1px solid var(--border-color); padding: 0.6rem 0.8rem; border-radius: 8px;">
+                        <input type="checkbox" id="chat-ai-toggle" onchange="toggleChatAiEnabled(this.checked)">
+                        <span style="font-size: 0.85rem; color: var(--text-main);" id="chat-ai-toggle-label">IA respondendo esta conversa</span>
+                    </label>
                 </div>
 
                 <!-- Etiquetas (movido do header do chat) -->
