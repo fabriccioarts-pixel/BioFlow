@@ -752,7 +752,11 @@ async function sendWhatsappTextInternal(to, text) {
 // Prompt fixo com a identidade e as regras da Natuclinic. Nunca revela ser IA
 // e nunca fala de preço — perguntar valor é justamente um dos gatilhos pra
 // considerar o lead qualificado e silenciar (token QUALIFICADO_SILENCIO).
-const WHATSAPP_AI_SYSTEM_PROMPT = `Você é uma atendente da Natuclinic, uma clínica de estética e saúde da mulher em Brasília (DF). Você conversa pelo WhatsApp com pacientes/leads que entraram em contato.
+// Parte editável (pela tela "Contexto da IA" no CRM, admin-only) — identidade,
+// unidades, horário, serviços, tom. Esse texto abaixo é só o valor PADRÃO,
+// usado enquanto ninguém salvar uma versão customizada em crm_settings
+// (chave 'whatsapp_ai_context').
+const WHATSAPP_AI_DEFAULT_CONTEXT = `Você é uma atendente da Natuclinic, uma clínica de estética e saúde da mulher em Brasília (DF). Você conversa pelo WhatsApp com pacientes/leads que entraram em contato.
 
 UNIDADES:
 - Taguatinga Norte: QNE 1 Lote 17/20 Loja 02.
@@ -784,7 +788,12 @@ REGRAS DE TOM:
 - Tom consultivo e humano. Frases curtas e objetivas.
 - Nunca, em nenhuma hipótese, diga que é uma inteligência artificial, robô, assistente virtual ou sistema automatizado. Converse como uma pessoa da equipe.
 - Sempre termine sua resposta com uma pergunta aberta, pra entender melhor a necessidade do paciente (o que ele busca, há quanto tempo, o que já tentou, etc.).
-- Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.
+- Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.`;
+
+// Parte FIXA, nunca editável pela tela — é o que faz o mecanismo de handoff
+// funcionar (token de silêncio). Sempre é anexada ao contexto, customizado ou
+// não, pra ninguém conseguir quebrar a qualificação sem querer ao editar o texto.
+const WHATSAPP_AI_SILENCE_RULE = `
 
 REGRA CRÍTICA DE SILÊNCIO:
 Você NUNCA fala sobre valores/preços. Se o paciente perguntar quanto custa qualquer coisa, OU se em algum momento você julgar que já entendeu o suficiente da necessidade dele para um atendente humano assumir a conversa e fechar o procedimento, sua resposta deve ser EXATAMENTE a palavra:
@@ -792,6 +801,15 @@ QUALIFICADO_SILENCIO
 (sem mais nada — nem pontuação, nem explicação). Isso sinaliza ao sistema que a IA deve parar de responder aquele contato.`;
 
 const WHATSAPP_AI_QUALIFIED_TOKEN = 'QUALIFICADO_SILENCIO';
+
+async function getWhatsappAiContext() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_context'");
+        return (rows && rows[0] && rows[0].value) ? rows[0].value : WHATSAPP_AI_DEFAULT_CONTEXT;
+    } catch (e) {
+        return WHATSAPP_AI_DEFAULT_CONTEXT;
+    }
+}
 
 // Busca o histórico recente da conversa (as duas direções) e monta o formato
 // "contents" que a API do Gemini espera, pra IA responder com contexto.
@@ -811,11 +829,13 @@ async function callGeminiForWhatsappReply(phone) {
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
 
     const history = await getWhatsappAiHistory(phone);
+    const context = await getWhatsappAiContext();
+    const systemPrompt = context + WHATSAPP_AI_SILENCE_RULE;
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
         body: JSON.stringify({
-            systemInstruction: { parts: [{ text: WHATSAPP_AI_SYSTEM_PROMPT }] },
+            systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: history
         })
     });
@@ -1670,6 +1690,40 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
+    }
+});
+
+// Contexto editável da IA (identidade, unidades, horário, serviços, tom) —
+// a regra crítica de silêncio (WHATSAPP_AI_SILENCE_RULE) NÃO é editável por
+// aqui, é sempre anexada pelo backend, pra ninguém quebrar o mecanismo de
+// handoff sem querer ao editar o texto.
+app.get('/api/settings/whatsapp-ai-context', async (req, res) => {
+    try {
+        const context = await getWhatsappAiContext();
+        res.json({ context });
+    } catch (e) {
+        console.error('Erro ao buscar contexto da IA:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar contexto.' });
+    }
+});
+
+app.put('/api/settings/whatsapp-ai-context', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem editar o contexto da IA.' });
+    }
+    try {
+        const context = (req.body?.context || '').trim();
+        if (!context) {
+            return res.status(400).json({ error: 'O contexto não pode ficar vazio.' });
+        }
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_context', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [context]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao salvar contexto da IA:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar contexto.' });
     }
 });
 

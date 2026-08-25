@@ -552,6 +552,9 @@
                 <button class="btn-secondary" id="btn-whatsapp-ai-toggle" onclick="openWhatsappAiToggleModal()" style="display: none;" title="Ligar/desligar o agente de IA de pré-qualificação">
                     <i class="fa-solid fa-robot"></i> IA de Atendimento
                 </button>
+                <button class="btn-secondary" id="btn-whatsapp-ai-context" onclick="openWhatsappAiContextEditor()" style="display: none;" title="Editar o que a IA sabe (unidades, horário, serviços, tom)">
+                    <i class="fa-solid fa-comment-dots"></i> Contexto da IA
+                </button>
                 <button class="btn-secondary" id="btn-whatsapp-pricing" onclick="openWhatsappPricingEditor()" style="display: none;" title="Editar tarifas por mensagem">
                     <i class="fa-solid fa-tags"></i> Tarifas
                 </button>
@@ -1108,6 +1111,23 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="modal-actions">
                 <button class="btn-cancel" id="dispatch-cancel-btn">Cancelar</button>
                 <button class="btn-save" id="dispatch-confirm-btn"><i class="fa-solid fa-paper-plane"></i> Confirmar Disparo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal do Contexto da IA (identidade, unidades, horário, serviços, tom) -->
+    <div class="modal-overlay" id="modalWhatsappAiContext">
+        <div class="modal" style="max-width: 640px;">
+            <h2><i class="fa-solid fa-comment-dots" style="color: var(--accent-primary);"></i> Contexto da IA</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1rem 0;">
+                Isso é o que a IA "sabe" sobre a clínica ao responder no WhatsApp — identidade, unidades, horário, serviços e tom de voz. Edite livremente. A regra de nunca falar de preço e de saber a hora de passar pro atendente é fixa e continua valendo, independente do que estiver escrito aqui.
+            </p>
+            <div class="form-group">
+                <textarea id="whatsapp-ai-context-textarea" class="form-control" style="width: 100%; min-height: 320px; font-family: inherit; font-size: 0.85rem; line-height: 1.5; resize: vertical;"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
+                <button class="btn-save" onclick="saveWhatsappAiContext()"><i class="fa-solid fa-floppy-disk"></i> Salvar Contexto</button>
             </div>
         </div>
     </div>

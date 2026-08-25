@@ -1991,9 +1991,11 @@ function switchTab(tabId) {
         loadDispatchHistory();
         const pricingBtn = document.getElementById('btn-whatsapp-pricing');
         const aiToggleBtn = document.getElementById('btn-whatsapp-ai-toggle');
+        const aiContextBtn = document.getElementById('btn-whatsapp-ai-context');
         const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
         if (pricingBtn) pricingBtn.style.display = isAdmin ? 'inline-flex' : 'none';
         if (aiToggleBtn) aiToggleBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+        if (aiContextBtn) aiContextBtn.style.display = isAdmin ? 'inline-flex' : 'none';
     } else if (tabId === 'origem-leads') {
         const view = document.getElementById('view-origem-leads');
         if (view) view.style.display = 'flex';
@@ -5151,6 +5153,34 @@ function showDispatchConfirmModal({ templateName, category, recipientCount, cost
         cancelBtn.addEventListener('click', onCancel);
         modal.classList.add('active');
     });
+}
+
+async function openWhatsappAiContextEditor() {
+    try {
+        const res = await fetch('/api/settings/whatsapp-ai-context');
+        const json = await res.json();
+        document.getElementById('whatsapp-ai-context-textarea').value = json.context || '';
+    } catch (e) {
+        console.error('Erro ao buscar contexto da IA:', e);
+    }
+    document.getElementById('modalWhatsappAiContext').classList.add('active');
+}
+
+async function saveWhatsappAiContext() {
+    const context = document.getElementById('whatsapp-ai-context-textarea').value;
+    try {
+        const res = await fetch('/api/settings/whatsapp-ai-context', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar contexto');
+        closeModals();
+        await customAlert('Contexto da IA atualizado!', 'Salvo com Sucesso');
+    } catch (e) {
+        await customAlert('Erro ao salvar: ' + e.message, 'Erro');
+    }
 }
 
 async function openWhatsappAiToggleModal() {
