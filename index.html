@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 
 <head>
     <meta charset="UTF-8">
@@ -22,16 +22,14 @@
     <!-- Flatpickr -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
     <link rel="stylesheet" href="style.css?v=3">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
 </head>
 
 <body>
     <!-- LOGIN OVERLAY -->
     <div id="login-overlay" class="modal-overlay active"
+        role="dialog" aria-modal="true" aria-label="Acesso Restrito"
         style="z-index: 9999; background: var(--bg-color); display: flex; align-items: center; justify-content: center;">
         <div class="modal" style="max-width: 400px; text-align: center;">
             <h2 style="margin-bottom: 1rem;"><i class="fa-solid fa-lock"></i> Acesso Restrito</h2>
@@ -45,11 +43,11 @@
 
             <form id="login-fields" onsubmit="event.preventDefault(); performLogin();">
                 <div class="form-group" style="text-align: left;">
-                    <label>Usuário</label>
+                    <label for="login-username">Usuário</label>
                     <input type="text" id="login-username" name="username" autocomplete="username" placeholder="ex: seu nome">
                 </div>
                 <div class="form-group" style="text-align: left;">
-                    <label>Senha</label>
+                    <label for="login-password">Senha</label>
                     <input type="password" id="login-password" name="password" autocomplete="current-password" placeholder="***">
                 </div>
 
@@ -63,11 +61,11 @@
                 <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Essa conta ainda usa uma
                     senha padrão. Defina uma senha nova para continuar.</p>
                 <div class="form-group" style="text-align: left;">
-                    <label>Nova senha</label>
+                    <label for="force-new-password">Nova senha</label>
                     <input type="password" id="force-new-password" autocomplete="new-password" placeholder="mínimo 6 caracteres">
                 </div>
                 <div class="form-group" style="text-align: left;">
-                    <label>Confirmar nova senha</label>
+                    <label for="force-confirm-password">Confirmar nova senha</label>
                     <input type="password" id="force-confirm-password" autocomplete="new-password" placeholder="repita a senha nova">
                 </div>
 
@@ -83,13 +81,14 @@
     </div>
 
     <!-- TOAST NOTIFICATIONS -->
+    <div id="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
 
     <header>
         <div class="sb-logo">
             <i class="fa-solid fa-dna"></i>
             <span style="font-weight: 700; font-size: 15px; color: var(--header-text); margin-left: 8px; letter-spacing: -0.01em;">BioFlow</span>
         </div>
-        <nav class="tabs-container sb-nav">
+        <nav class="tabs-container sb-nav" aria-label="Navegação principal">
             <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;">
                 <i class="fa-solid fa-briefcase"></i> CRM Vendas
                 <span id="kanban-entrada-badge"
@@ -197,7 +196,7 @@
 
     <!-- Envolve a barra superior + todas as views, pra elas empilharem em coluna
          ao lado da sidebar (que fica sozinha na linha do body). -->
-    <div class="app-content">
+    <div class="app-content" role="main">
 
     <!-- Barra superior minimalista — sino de notificações + badge da conta -->
     <div class="topbar-user" style="justify-content: flex-end; gap: 14px;">
@@ -223,12 +222,17 @@
                 <div
                     style="padding: 0.5rem; font-weight: bold; border-bottom: 1px solid var(--border-color); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
                     <span style="color: var(--text-main);">Notificações</span>
-                    <div>
-                        <i class="fa-solid fa-check-double"
-                            style="cursor: pointer; color: var(--text-muted); margin-right: 0.75rem;"
-                            title="Marcar tudo como lido" onclick="clearNotificationsBadge()"></i>
-                        <i class="fa-solid fa-trash-can" style="cursor: pointer; color: var(--accent-danger);"
-                            title="Limpar todas as notificações" onclick="clearAllNotifications()"></i>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <button type="button" onclick="clearNotificationsBadge()" aria-label="Marcar tudo como lido"
+                            style="background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px 6px;border-radius:5px;line-height:1;"
+                            title="Marcar tudo como lido">
+                            <i class="fa-solid fa-check-double"></i>
+                        </button>
+                        <button type="button" onclick="clearAllNotifications()" aria-label="Limpar todas as notificações"
+                            style="background:none;border:none;cursor:pointer;color:var(--accent-danger);padding:4px 6px;border-radius:5px;line-height:1;"
+                            title="Limpar todas as notificações">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
                     </div>
                 </div>
                 <div id="notifications-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
@@ -239,7 +243,7 @@
             <button class="user-chip" onclick="toggleUserMenu(event)" title="Minha conta">
                 <span id="topbar-display-name" class="user-chip-name">Carregando...</span>
                 <span class="user-badge">
-                    <img id="header-avatar-img" src="" alt="" style="display: none;">
+                    <img id="header-avatar-img" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="" style="display: none;">
                     <i id="header-avatar-fallback" class="fa-solid fa-user fallback"></i>
                 </span>
             </button>
@@ -313,7 +317,11 @@
 
             <label
                 style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-main); cursor: pointer; background: var(--bg-card); border: 1px solid var(--border-color); padding: 0.4rem 0.8rem; border-radius: 6px;">
-                <input type="checkbox" id="filter-has-schedule" onchange="renderBoard()"> 📅 Apenas Agendados
+                <span class="ui-switch">
+                    <input type="checkbox" id="filter-has-schedule" onchange="renderBoard()">
+                    <span class="ui-switch-track"></span>
+                </span>
+                📅 Apenas Agendados
             </label>
 
             <button onclick="clearKanbanFilters()" class="btn-secondary"
@@ -328,7 +336,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-inbox" style="color: #34d399;"></i> Entrada
+                            <i class="fa-solid fa-inbox" style="color: var(--accent-success);"></i> Entrada
                         </div>
                     </div>
                     <div class="column-stats" id="stats-entrada">
@@ -347,7 +355,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-brands fa-whatsapp" style="color: #fbbf24;"></i> Contatado
+                            <i class="fa-brands fa-whatsapp" style="color: var(--accent-warning);"></i> Contatado
                         </div>
                     </div>
                     <div class="column-stats" id="stats-contatado">
@@ -366,7 +374,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-file-invoice-dollar" style="color: #a78bfa;"></i> Orçado
+                            <i class="fa-solid fa-file-invoice-dollar" style="color: var(--accent-primary);"></i> Orçado
                         </div>
                     </div>
                     <div class="column-stats" id="stats-orcado">
@@ -385,7 +393,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-calendar-check" style="color: #2dd4bf;"></i> Agendado
+                            <i class="fa-solid fa-calendar-check" style="color: var(--accent-teal);"></i> Agendado
                         </div>
                     </div>
                     <div class="column-stats" id="stats-agendado">
@@ -404,7 +412,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-trophy" style="color: #10b981;"></i> Ganho
+                            <i class="fa-solid fa-trophy" style="color: var(--accent-success);"></i> Ganho
                         </div>
                     </div>
                     <div class="column-stats" id="stats-ganho">
@@ -423,7 +431,7 @@
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-xmark" style="color: #f87171;"></i> Perdido
+                            <i class="fa-solid fa-xmark" style="color: var(--accent-danger);"></i> Perdido
                         </div>
                     </div>
                     <div class="column-stats" id="stats-perdido">
@@ -473,7 +481,7 @@
 
                 <div class="utm-panel" style="grid-area: config; padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
                     <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
-                        <i class="fa-solid fa-sliders" style="color: #38bdf8;"></i> Configurar Disparo
+                        <i class="fa-solid fa-sliders" style="color: var(--accent-info);"></i> Configurar Disparo
                     </h3>
 
                     <div class="utm-field">
@@ -613,7 +621,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         <div style="display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 1.25rem; align-items: stretch;">
             <div class="utm-panel" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
                 <h3 id="campaign-form-title" style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
-                    <i class="fa-solid fa-circle-plus" style="color: #38bdf8;"></i> Nova Campanha
+                    <i class="fa-solid fa-circle-plus" style="color: var(--accent-info);"></i> Nova Campanha
                 </h3>
 
                 <div class="utm-field">
@@ -742,8 +750,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <input type="text" id="dash-daterange" placeholder="Período personalizado" readonly=""
                         style="background: transparent; border: none; outline: none; color: var(--text-main); font-size: 0.78rem; cursor: pointer; min-width: 180px; font-family: inherit;"
                         onclick="openDashDatepicker(this)">
-                    <i id="dash-daterange-clear" class="fa-solid fa-xmark" onclick="clearDashCustomRange()"
-                        style="color: var(--text-muted); font-size: 0.8rem; cursor: pointer; display: none;"></i>
+                    <button type="button" id="dash-daterange-clear" onclick="clearDashCustomRange()" aria-label="Limpar período"
+                        style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:0.8rem;padding:2px 4px;display:none;line-height:1;border-radius:4px;">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
                 </div>
                 <button id="dash-customize-btn" class="btn-secondary" onclick="toggleDashboardCustomizer()" title="Personalizar layout do dashboard">
                     <i class="fa-solid fa-sliders"></i> Personalizar
@@ -761,7 +771,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div
                     style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
                     <div
-                        style="background: rgba(56,189,248,0.12); border-radius: 10px; padding: 0.6rem; color: #38bdf8; font-size: 1.1rem;">
+                        style="background: var(--accent-info-tint); border-radius: 10px; padding: 0.6rem; color: var(--accent-info); font-size: 1.1rem;">
                         <i class="fa-solid fa-hourglass-half"></i>
                     </div>
                     <span
@@ -778,7 +788,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div
                     style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
                     <div
-                        style="background: rgba(16,185,129,0.12); border-radius: 10px; padding: 0.6rem; color: #34d399; font-size: 1.1rem;">
+                        style="background: var(--accent-success-tint); border-radius: 10px; padding: 0.6rem; color: var(--accent-success); font-size: 1.1rem;">
                         <i class="fa-solid fa-sack-dollar"></i>
                     </div>
                     <span
@@ -898,8 +908,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="dash-kpi-card"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
                 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
-                    <div style="background: rgba(249,115,22,0.12); border-radius: 10px; padding: 0.6rem; color: #f97316; font-size: 1.1rem;"><i class="fa-solid fa-user-clock"></i></div>
-                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #f97316; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">atenção</span>
+                    <div style="background: var(--accent-orange-tint); border-radius: 10px; padding: 0.6rem; color: var(--accent-orange); font-size: 1.1rem;"><i class="fa-solid fa-user-clock"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--accent-orange); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">atenção</span>
                 </div>
                 <div id="dash-sem-responsavel" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Sem Responsável</div>
@@ -907,8 +917,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="dash-kpi-card"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
                 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
-                    <div style="background: rgba(234,179,8,0.12); border-radius: 10px; padding: 0.6rem; color: #eab308; font-size: 1.1rem;"><i class="fa-solid fa-reply"></i></div>
-                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #eab308; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">WhatsApp</span>
+                    <div style="background: var(--accent-warning-tint); border-radius: 10px; padding: 0.6rem; color: var(--accent-warning); font-size: 1.1rem;"><i class="fa-solid fa-reply"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--accent-warning); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">WhatsApp</span>
                 </div>
                 <div id="dash-aguardando-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0</div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Aguardando Resposta</div>
@@ -916,8 +926,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="dash-kpi-card"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
                 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
-                    <div style="background: rgba(20,184,166,0.12); border-radius: 10px; padding: 0.6rem; color: #14b8a6; font-size: 1.1rem;"><i class="fa-solid fa-stopwatch"></i></div>
-                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: #14b8a6; padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">média</span>
+                    <div style="background: var(--accent-teal-tint); border-radius: 10px; padding: 0.6rem; color: var(--accent-teal); font-size: 1.1rem;"><i class="fa-solid fa-stopwatch"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--accent-teal); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">média</span>
                 </div>
                 <div id="dash-tempo-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">--</div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">1ª Resposta</div>
@@ -931,7 +941,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.6rem;">
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fa-solid fa-bullseye" style="color: #60a5fa;"></i> Meta de Receita
+                            <i class="fa-solid fa-bullseye" style="color: var(--accent-info);"></i> Meta de Receita
                         </h3>
                         <p id="dash-goal-subtitle" style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;"></p>
                     </div>
@@ -1017,7 +1027,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 class="dash-layout-card" data-dash-key="ranking"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border);">
                 <div class="dash-card-header" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;">
-                    <i class="fa-solid fa-trophy" style="color: #fbbf24; font-size: 1rem;"></i>
+                    <i class="fa-solid fa-trophy" style="color: var(--accent-warning); font-size: 1rem;"></i>
                     <div>
                         <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Ranking de
                             Atendentes</h3>
@@ -1032,7 +1042,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Novo Lead -->
-    <div class="modal-overlay" id="modalNewLead">
+    <div class="modal-overlay" id="modalNewLead" role="dialog" aria-modal="true">
         <div class="modal">
             <h2><i class="fa-solid fa-user-plus"></i> Cadastrar Paciente</h2>
             <div class="form-group">
@@ -1071,7 +1081,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal de Confirmação de Disparo (custo estimado antes de enviar) -->
-    <div class="modal-overlay" id="modalDispatchConfirm">
+    <div class="modal-overlay" id="modalDispatchConfirm" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 420px;">
             <h2><i class="fa-solid fa-paper-plane" style="color: var(--accent-primary);"></i> Confirmar Disparo</h2>
             <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem 0;">
@@ -1113,7 +1123,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal de Configuração do Agente de IA (interruptor geral + contexto) -->
-    <div class="modal-overlay" id="modalWhatsappAiSettings">
+    <div class="modal-overlay" id="modalWhatsappAiSettings" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 640px;">
             <h2><i class="fa-solid fa-robot" style="color: var(--accent-primary);"></i> Agente de IA</h2>
             <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1rem 0;">
@@ -1143,7 +1153,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal de Tarifas do Disparo de WhatsApp -->
-    <div class="modal-overlay" id="modalWhatsappPricing">
+    <div class="modal-overlay" id="modalWhatsappPricing" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 420px;">
             <h2><i class="fa-solid fa-tags" style="color: var(--accent-primary);"></i> Tarifas do Disparo</h2>
             <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem 0;">
@@ -1169,7 +1179,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Agendamento (Integração) -->
-    <div class="modal-overlay" id="modalAgendamento">
+    <div class="modal-overlay" id="modalAgendamento" role="dialog" aria-modal="true">
         <div class="modal">
             <h2><i class="fa-solid fa-robot" style="color: var(--accent-primary)"></i> Integração Amigo App</h2>
             <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem;">
@@ -2177,7 +2187,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 5 / 6; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Retorno - Laudelina da Silva Campos"
                         onclick="openPatientDetailsModal('226620073', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             09:00 - 09:20 | Retorno</strong>
                         Laudelina da Silva Campos
                     </div>
@@ -2186,7 +2196,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 5 / 6; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Consulta Ortomolecular - João Roberto Machado de Souza"
                         onclick="openPatientDetailsModal('229457321', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 09:00 - 09:20
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 09:00 - 09:20
                             | Consulta Ortomolecular</strong>
                         João Roberto Machado de Souza
                     </div>
@@ -2195,7 +2205,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 7 / 8; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Retorno - Sheyla Cristine Ugiett de Oliveira"
                         onclick="openPatientDetailsModal('227559785', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             09:40 - 10:00 | Retorno</strong>
                         Sheyla Cristine Ugiett de Oliveira
                     </div>
@@ -2204,7 +2214,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 8 / 9; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c3-bg); border: 1px solid var(--agenda-c3-border); border-left: 4px solid var(--agenda-c3-border); color: var(--agenda-c3-text);"
                         data-tooltip="Retorno (sem valor) - Geany Ferreira da Silva"
                         onclick="openPatientDetailsModal('225727057', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             10:00 - 10:20 | Retorno (sem valor)</strong>
                         Geany Ferreira da Silva
                     </div>
@@ -2213,7 +2223,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 9 / 10; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Consulta Ortomolecular - Jocean De Lima Barros Carvalho"
                         onclick="openPatientDetailsModal('228677969', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             10:20 - 10:40 | Consulta Ortomolecular</strong>
                         Jocean De Lima Barros Carvalho
                     </div>
@@ -2222,7 +2232,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 20 / 21; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c3-bg); border: 1px solid var(--agenda-c3-border); border-left: 4px solid var(--agenda-c3-border); color: var(--agenda-c3-text);"
                         data-tooltip="Retorno (sem valor) - Alex Fabiano de Melo Pisa"
                         onclick="openPatientDetailsModal('224477008', event)">
-                        <strong><i class="fa-solid fa-user-clock" style="color: #3b82f6;" title="Na Clínica"></i> 14:00
+                        <strong><i class="fa-solid fa-user-clock" style="color: var(--accent-info);" title="Na Clínica"></i> 14:00
                             - 14:20 | Retorno (sem valor)</strong>
                         Alex Fabiano de Melo Pisa
                     </div>
@@ -2231,7 +2241,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 21 / 22; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Consulta Ortomolecular - Fabiula Nogueira Vasconcelos"
                         onclick="openPatientDetailsModal('228970565', event)">
-                        <strong><i class="fa-solid fa-user-clock" style="color: #3b82f6;" title="Na Clínica"></i> 14:20
+                        <strong><i class="fa-solid fa-user-clock" style="color: var(--accent-info);" title="Na Clínica"></i> 14:20
                             - 14:40 | Consulta Ortomolecular</strong>
                         Fabiula Nogueira Vasconcelos
                     </div>
@@ -2240,7 +2250,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 22 / 23; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Consulta Ortomolecular - Ester Muniz Santos"
                         onclick="openPatientDetailsModal('229581663', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 14:40 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 14:40 -
                             15:00 | Consulta Ortomolecular</strong>
                         Ester Muniz Santos
                     </div>
@@ -2249,7 +2259,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 24 / 25; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Consulta Ortomolecular - Maria de Lourdes Firmino de Souza"
                         onclick="openPatientDetailsModal('229462435', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 15:20 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 15:20 -
                             15:40 | Consulta Ortomolecular</strong>
                         Maria de Lourdes Firmino de Souza
                     </div>
@@ -2258,7 +2268,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 27 / 28; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Retorno - Micaelle Carvalho dos Santos"
                         onclick="openPatientDetailsModal('228214764', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 16:20 - 16:40
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 16:20 - 16:40
                             | Retorno</strong>
                         Micaelle Carvalho dos Santos
                     </div>
@@ -2267,7 +2277,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 2; grid-row: 28 / 29; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c3-bg); border: 1px solid var(--agenda-c3-border); border-left: 4px solid var(--agenda-c3-border); color: var(--agenda-c3-text);"
                         data-tooltip="Retorno (sem valor) - Yae Hiramatsu"
                         onclick="openPatientDetailsModal('229485401', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 16:40 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 16:40 -
                             17:00 | Retorno (sem valor)</strong>
                         Yae Hiramatsu
                     </div>
@@ -2285,7 +2295,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 4; grid-row: 10 / 11; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Retorno - Mikaella Feitoza Carvalho"
                         onclick="openPatientDetailsModal('229577577', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 10:40 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 10:40 -
                             11:10 | Retorno</strong>
                         Mikaella Feitoza Carvalho
                     </div>
@@ -2294,7 +2304,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 4; grid-row: 20 / 21; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Retorno - Naziro Pereira Valverde"
                         onclick="openPatientDetailsModal('223545225', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 14:00 - 14:20
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 14:00 - 14:20
                             | Retorno</strong>
                         Naziro Pereira Valverde
                     </div>
@@ -2303,7 +2313,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 4; grid-row: 26 / 29; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c4-bg); border: 1px solid var(--agenda-c4-border); border-left: 4px solid var(--agenda-c4-border); color: var(--agenda-c4-text);"
                         data-tooltip="Consulta Estética - Gizslia Moura Barbosa"
                         onclick="openPatientDetailsModal('228043183', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 16:00 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 16:00 -
                             17:00 | Consulta Estética</strong>
                         Gizslia Moura Barbosa
                     </div>
@@ -2312,7 +2322,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 3 / 5; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c5-bg); border: 1px solid var(--agenda-c5-border); border-left: 4px solid var(--agenda-c5-border); color: var(--agenda-c5-text);"
                         data-tooltip="Trio Metilador - Wilian Gomes do Carmo"
                         onclick="openPatientDetailsModal('228823021', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             08:30 - 09:00 | Trio Metilador</strong>
                         Wilian Gomes do Carmo
                     </div>
@@ -2321,7 +2331,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 5 / 8; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c1-bg); border: 1px solid var(--agenda-c1-border); border-left: 4px solid var(--agenda-c1-border); color: var(--agenda-c1-text);"
                         data-tooltip="Reabilitação Intestinal - Edna Jose Ferreira Batista"
                         onclick="openPatientDetailsModal('228630548', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             09:00 - 10:00 | Reabilitação Intestinal</strong>
                         Edna Jose Ferreira Batista
                     </div>
@@ -2330,7 +2340,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 5 / 6; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c5-bg); border: 1px solid var(--agenda-c5-border); border-left: 4px solid var(--agenda-c5-border); color: var(--agenda-c5-text);"
                         data-tooltip="Glutationa Injetável - Sheyla Cristine Ugiett de Oliveira"
                         onclick="openPatientDetailsModal('227560513', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             09:00 - 09:30 | Glutationa Injetável</strong>
                         Sheyla Cristine Ugiett de Oliveira
                     </div>
@@ -2339,7 +2349,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 8 / 9; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c5-bg); border: 1px solid var(--agenda-c5-border); border-left: 4px solid var(--agenda-c5-border); color: var(--agenda-c5-text);"
                         data-tooltip="Trio Metilador - Rachel de Sousa Ferreira"
                         onclick="openPatientDetailsModal('229579904', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             10:00 - 10:30 | Trio Metilador</strong>
                         Rachel de Sousa Ferreira
                     </div>
@@ -2348,7 +2358,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 9 / 10; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c4-bg); border: 1px solid var(--agenda-c4-border); border-left: 4px solid var(--agenda-c4-border); color: var(--agenda-c4-text);"
                         data-tooltip="Pool de Complexo B Composto - JONAS DE LIMA BARROS"
                         onclick="openPatientDetailsModal('229599206', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             10:20 - 10:45 | Pool de Complexo B Composto</strong>
                         JONAS DE LIMA BARROS
                     </div>
@@ -2357,7 +2367,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 11 / 14; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c1-bg); border: 1px solid var(--agenda-c1-border); border-left: 4px solid var(--agenda-c1-border); color: var(--agenda-c1-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Reabilitação Intestinal - Eleonora Maria dos Ramos Silva Barros"
                         onclick="openPatientDetailsModal('228679829', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 11:00 - 12:00
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 11:00 - 12:00
                             | Reabilitação Intestinal</strong>
                         Eleonora Maria dos Ramos Silva Barros
                     </div>
@@ -2366,7 +2376,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 11 / 12; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c7-bg); border: 1px solid var(--agenda-c7-border); border-left: 4px solid var(--agenda-c7-border); color: var(--agenda-c7-text);"
                         data-tooltip="Ozônio - Intermediária - Gabriel Teles da Cruz Mendes"
                         onclick="openPatientDetailsModal('222816281', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             11:00 - 11:30 | Ozônio - Intermediária</strong>
                         Gabriel Teles da Cruz Mendes
                     </div>
@@ -2375,7 +2385,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 13 / 14; width: calc(78% - 4px); margin-left: 2%; z-index: 12; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c5-bg); border: 1px solid var(--agenda-c5-border); border-left: 4px solid var(--agenda-c5-border); color: var(--agenda-c5-text);"
                         data-tooltip="MSM Terapia Nutricional - Jocean De Lima Barros Carvalho"
                         onclick="openPatientDetailsModal('229624448', event)">
-                        <strong><i class="fa-solid fa-user-clock" style="color: #3b82f6;" title="Na Clínica"></i> 11:40
+                        <strong><i class="fa-solid fa-user-clock" style="color: var(--accent-info);" title="Na Clínica"></i> 11:40
                             - 11:55 | MSM Terapia Nutricional</strong>
                         Jocean De Lima Barros Carvalho
                     </div>
@@ -2384,7 +2394,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 20 / 23; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c1-bg); border: 1px solid var(--agenda-c1-border); border-left: 4px solid var(--agenda-c1-border); color: var(--agenda-c1-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Reabilitação Intestinal - Orlandina Maria da Silva Soares"
                         onclick="openPatientDetailsModal('225660122', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 14:00 - 15:00
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 14:00 - 15:00
                             | Reabilitação Intestinal</strong>
                         Orlandina Maria da Silva Soares
                     </div>
@@ -2393,7 +2403,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 20 / 21; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c7-bg); border: 1px solid var(--agenda-c7-border); border-left: 4px solid var(--agenda-c7-border); color: var(--agenda-c7-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Alfa Lipoico Ampola - André Luiz de  Arruda"
                         onclick="openPatientDetailsModal('227679129', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 14:00 - 14:30
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 14:00 - 14:30
                             | Alfa Lipoico Ampola</strong>
                         André Luiz de Arruda
                     </div>
@@ -2402,7 +2412,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 27 / 28; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c5-bg); border: 1px solid var(--agenda-c5-border); border-left: 4px solid var(--agenda-c5-border); color: var(--agenda-c5-text);"
                         data-tooltip="Trio Metilador - Alcione Souza dos Reis"
                         onclick="openPatientDetailsModal('229210179', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 16:20 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 16:20 -
                             16:50 | Trio Metilador</strong>
                         Alcione Souza dos Reis
                     </div>
@@ -2420,7 +2430,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 5; grid-row: 29 / 32; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c1-bg); border: 1px solid var(--agenda-c1-border); border-left: 4px solid var(--agenda-c1-border); color: var(--agenda-c1-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Reabilitação Intestinal - Hyses de Cássia Queiroz Pinheiro"
                         onclick="openPatientDetailsModal('224819522', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 17:00 - 18:00
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 17:00 - 18:00
                             | Reabilitação Intestinal</strong>
                         Hyses de Cássia Queiroz Pinheiro
                     </div>
@@ -2429,7 +2439,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 5 / 8; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Depilação a Laser - Anadir Lopes Dos Santos"
                         onclick="openPatientDetailsModal('224526558', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             09:00 - 10:00 | Depilação a Laser</strong>
                         Anadir Lopes Dos Santos
                     </div>
@@ -2438,7 +2448,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 11 / 14; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Depilação a Laser - Kenia Marista da Conceicao Ribeiro"
                         onclick="openPatientDetailsModal('224406575', event)">
-                        <strong><i class="fa-solid fa-check-double" style="color: #10b981;" title="Finalizado"></i>
+                        <strong><i class="fa-solid fa-check-double" style="color: var(--accent-success);" title="Finalizado"></i>
                             11:00 - 12:00 | Depilação a Laser</strong>
                         Kenia Marista da Conceicao Ribeiro
                     </div>
@@ -2447,7 +2457,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 20 / 24; width: calc(78% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text); opacity: 0.5; text-decoration: line-through; border: 1px solid #ef4444;"
                         data-tooltip="Limpeza de Pele - Geanes Santos Fonseca"
                         onclick="openPatientDetailsModal('225015212', event)">
-                        <strong><i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i> 14:00 - 15:30
+                        <strong><i class="fa-solid fa-ban" style="color: var(--accent-danger);" title="Cancelado"></i> 14:00 - 15:30
                             | Limpeza de Pele</strong>
                         Geanes Santos Fonseca
                     </div>
@@ -2456,7 +2466,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 20 / 23; width: calc(78% - 4px); margin-left: 20%; z-index: 11; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Depilação a Laser - João Bezerra"
                         onclick="openPatientDetailsModal('224668531', event)">
-                        <strong><i class="fa-solid fa-user-clock" style="color: #3b82f6;" title="Na Clínica"></i> 14:00
+                        <strong><i class="fa-solid fa-user-clock" style="color: var(--accent-info);" title="Na Clínica"></i> 14:00
                             - 15:00 | Depilação a Laser</strong>
                         João Bezerra
                     </div>
@@ -2465,7 +2475,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 20 / 21; width: calc(78% - 4px); margin-left: 2%; z-index: 12; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c4-bg); border: 1px solid var(--agenda-c4-border); border-left: 4px solid var(--agenda-c4-border); color: var(--agenda-c4-text);"
                         data-tooltip="Tirzepatida - Hudelson Ramiro Milhomem"
                         onclick="openPatientDetailsModal('228432610', event)">
-                        <strong><i class="fa-solid fa-user-clock" style="color: #3b82f6;" title="Na Clínica"></i> 14:00
+                        <strong><i class="fa-solid fa-user-clock" style="color: var(--accent-info);" title="Na Clínica"></i> 14:00
                             - 14:15 | Tirzepatida</strong>
                         Hudelson Ramiro Milhomem
                     </div>
@@ -2474,7 +2484,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 21 / 22; width: calc(78% - 4px); margin-left: 20%; z-index: 13; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c4-bg); border: 1px solid var(--agenda-c4-border); border-left: 4px solid var(--agenda-c4-border); color: var(--agenda-c4-text);"
                         data-tooltip="Tirzepatida - Marcelo Barros de Sousa"
                         onclick="openPatientDetailsModal('228909112', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 14:20 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 14:20 -
                             14:35 | Tirzepatida</strong>
                         Marcelo Barros de Sousa
                     </div>
@@ -2483,7 +2493,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 23 / 26; width: calc(78% - 4px); margin-left: 2%; z-index: 14; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c2-bg); border: 1px solid var(--agenda-c2-border); border-left: 4px solid var(--agenda-c2-border); color: var(--agenda-c2-text);"
                         data-tooltip="Depilação a Laser - Caroline Barbosa dos Santos"
                         onclick="openPatientDetailsModal('226804705', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 15:00 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 15:00 -
                             16:00 | Depilação a Laser</strong>
                         Caroline Barbosa dos Santos
                     </div>
@@ -2492,7 +2502,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="grid-column: 6; grid-row: 26 / 38; width: calc(96% - 4px); margin-left: 2%; z-index: 10; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); background: var(--agenda-c1-bg); border: 1px solid var(--agenda-c1-border); border-left: 4px solid var(--agenda-c1-border); color: var(--agenda-c1-text);"
                         data-tooltip="LipoCrioBee Advanced - ELEN DE OLIVEIRA"
                         onclick="openPatientDetailsModal('228377174', event)">
-                        <strong><i class="fa-solid fa-check" style="color: #10b981;" title="Confirmado"></i> 16:00 -
+                        <strong><i class="fa-solid fa-check" style="color: var(--accent-success);" title="Confirmado"></i> 16:00 -
                             20:00 | LipoCrioBee Advanced</strong>
                         ELEN DE OLIVEIRA
                     </div>
@@ -2512,7 +2522,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Detalhes do Paciente -->
-    <div class="modal-overlay" id="modalPatientDetails">
+    <div class="modal-overlay" id="modalPatientDetails" role="dialog" aria-modal="true">
         <div class="modal">
             <h2><i class="fa-solid fa-address-card" style="color: var(--accent-primary)"></i> Detalhes do Agendamento
             </h2>
@@ -2654,7 +2664,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span id="chat-active-phone-number">+55 00 00000-0000</span>
                             <span id="chat-active-online-status"
-                                style="font-size: 0.8rem; font-weight: 600; color: #22c55e;"></span>
+                                style="font-size: 0.8rem; font-weight: 600; color: var(--accent-success);"></span>
                         </p>
                     </div>
                 </div>
@@ -2662,7 +2672,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <!-- Banner de Trava de Atendimento (conversa em atendimento por outro atendente) -->
             <div id="chat-lock-banner"
-                style="display: none; align-items: center; gap: 0.6rem; padding: 0.7rem 2rem; background: rgba(251, 191, 36, 0.12); border-bottom: 1px solid rgba(251, 191, 36, 0.35); color: #fbbf24; font-size: 0.85rem; font-weight: 600;">
+                style="display: none; align-items: center; gap: 0.6rem; padding: 0.7rem 2rem; background: rgba(251, 191, 36, 0.12); border-bottom: 1px solid rgba(251, 191, 36, 0.35); color: var(--accent-warning); font-size: 0.85rem; font-weight: 600;">
                 <i class="fa-solid fa-lock"></i>
                 <span id="chat-lock-banner-text">Esta conversa está em atendimento por outro atendente.</span>
             </div>
@@ -2696,14 +2706,14 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
                             onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                             onmouseout="this.style.background='transparent'">
-                            <i class="fa-solid fa-image" style="color: #3b82f6; font-size: 1rem;"></i> Enviar Imagem /
+                            <i class="fa-solid fa-image" style="color: var(--accent-info); font-size: 1rem;"></i> Enviar Imagem /
                             Foto
                         </div>
                         <div onclick="triggerDocUpload()"
                             style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
                             onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                             onmouseout="this.style.background='transparent'">
-                            <i class="fa-solid fa-file-pdf" style="color: #ef4444; font-size: 1rem;"></i> Enviar
+                            <i class="fa-solid fa-file-pdf" style="color: var(--accent-danger); font-size: 1rem;"></i> Enviar
                             Documento / PDF
                         </div>
                         <div style="height: 1px; background: var(--border-color); margin: 0.2rem 0;"></div>
@@ -2711,14 +2721,14 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
                             onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                             onmouseout="this.style.background='transparent'">
-                            <i class="fa-solid fa-bolt-lightning" style="color: #fbbf24; font-size: 1rem;"></i>
+                            <i class="fa-solid fa-bolt-lightning" style="color: var(--accent-warning); font-size: 1rem;"></i>
                             Respostas Rápidas (/)
                         </div>
                         <div onclick="toggleAttachMenu(); openTemplateModal();"
                             style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
                             onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                             onmouseout="this.style.background='transparent'">
-                            <i class="fa-regular fa-file-lines" style="color: #60a5fa; font-size: 1rem;"></i>
+                            <i class="fa-regular fa-file-lines" style="color: var(--accent-info); font-size: 1rem;"></i>
                             Enviar Template Pré-Aprovado
                         </div>
                     </div>
@@ -2791,7 +2801,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.7rem;">
                         <h3
                             style="font-size: 1rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fa-solid fa-image" style="color: #3b82f6;"></i> Enviar Imagem com Legenda
+                            <i class="fa-solid fa-image" style="color: var(--accent-info);"></i> Enviar Imagem com Legenda
                         </h3>
                         <button type="button" onclick="closeImagePreviewModal()"
                             style="background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;"><i
@@ -2801,7 +2811,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <!-- Thumbnail da Imagem -->
                     <div
                         style="width: 100%; max-height: 220px; border-radius: 10px; overflow: hidden; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.08);">
-                        <img id="image-preview-thumbnail" src=""
+                        <img id="image-preview-thumbnail" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="Pré-visualização da imagem"
                             style="max-width: 100%; max-height: 220px; object-fit: contain; display: block;">
                     </div>
 
@@ -2969,7 +2979,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                             style="position: relative; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; flex-shrink: 0;"
                                             title="Escolher cor da etiqueta">
                                             <i class="fa-solid fa-palette" id="tag-color-icon"
-                                                style="color: #3b82f6; font-size: 0.95rem;"></i>
+                                                style="color: var(--accent-info); font-size: 0.95rem;"></i>
                                             <input type="color" id="new-tag-color" value="#3b82f6"
                                                 style="position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer;"
                                                 oninput="document.getElementById('tag-color-icon').style.color = this.value">
@@ -3017,7 +3027,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </main>
 
     <!-- Modal Nova Conversa Whatsapp -->
-    <div class="modal-overlay" id="modalNewChat">
+    <div class="modal-overlay" id="modalNewChat" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 450px; width: 90%;">
             <h2><i class="fa-solid fa-comment-medical" style="color: var(--accent-success)"></i> Nova Conversa</h2>
 
@@ -3035,7 +3045,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Enviar Template -->
-    <div class="modal-overlay" id="modalSendTemplate">
+    <div class="modal-overlay" id="modalSendTemplate" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 500px; width: 90%;">
             <h2><i class="fa-regular fa-file-lines" style="color: var(--accent-warning)"></i> Enviar Template</h2>
             <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem; line-height: 1.5;">A Meta
@@ -3065,7 +3075,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Editar Lead -->
-    <div class="modal-overlay" id="modalLeadNotes">
+    <div class="modal-overlay" id="modalLeadNotes" role="dialog" aria-modal="true">
         <div class="modal">
             <h2><i class="fa-solid fa-user-pen" style="color: var(--accent-warning)"></i> Editar Lead</h2>
 
@@ -3134,7 +3144,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Orçamento -->
-    <div class="modal-overlay" id="modalOrcamento">
+    <div class="modal-overlay" id="modalOrcamento" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 520px; width: 90%;">
             <h2><i class="fa-solid fa-file-invoice-dollar" style="color: var(--accent-info)"></i> Orçamento do Paciente
             </h2>
@@ -3186,7 +3196,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
     <!-- Modal Meu Perfil -->
     <!-- Modal Equipe (presença online) -->
-    <div class="modal-overlay" id="modalEquipe">
+    <div class="modal-overlay" id="modalEquipe" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 380px; width: 90%;">
             <h2><i class="fa-solid fa-circle-nodes" style="color: var(--accent-primary)"></i> Equipe</h2>
             <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Quem está online agora e quando foi visto por último.</p>
@@ -3197,14 +3207,14 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         </div>
     </div>
 
-    <div class="modal-overlay" id="modalMeuPerfil">
+    <div class="modal-overlay" id="modalMeuPerfil" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 440px; width: 90%;">
             <h2><i class="fa-solid fa-circle-user" style="color: var(--accent-primary)"></i> Meu Perfil</h2>
 
             <div id="perfil-avatar-display"
                 style="display: flex; flex-direction: column; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem;">
                 <div style="position: relative; width: 84px; height: 84px;">
-                    <img id="perfil-avatar-preview" src="" alt=""
+                    <img id="perfil-avatar-preview" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="Foto de perfil"
                         style="display: none; width: 84px; height: 84px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-color);">
                     <i id="perfil-avatar-fallback" class="fa-solid fa-circle-user"
                         style="font-size: 84px; color: var(--text-muted); line-height: 1;"></i>
@@ -3223,7 +3233,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 style="display: none; flex-direction: column; align-items: center; gap: 0.65rem; margin-bottom: 1.5rem;">
                 <div id="perfil-crop-viewport"
                     style="position: relative; width: 220px; height: 220px; border-radius: 50%; overflow: hidden; background: #000; cursor: grab; border: 2px solid var(--border-color); touch-action: none;">
-                    <img id="perfil-crop-image" src="" alt="" draggable="false"
+                    <img id="perfil-crop-image" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="" draggable="false"
                         style="position: absolute; user-select: none; -webkit-user-drag: none; pointer-events: none;">
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.6rem; width: 220px;">
@@ -3273,7 +3283,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Gestão de Usuários -->
-    <div class="modal-overlay" id="modalUsuarios">
+    <div class="modal-overlay" id="modalUsuarios" role="dialog" aria-modal="true">
         <div class="modal" style="max-width: 600px; width: 90%;">
             <h2><i class="fa-solid fa-users-gear" style="color: var(--accent-warning)"></i> Gestão de Acessos</h2>
 
@@ -3328,7 +3338,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- Modal Gerenciar Respostas Rápidas (Textos + Áudios, tudo pelo atalho "/") -->
-    <div id="modalQuickReplies" class="modal-overlay">
+    <div id="modalQuickReplies" class="modal-overlay" role="dialog" aria-modal="true">
         <div class="modal"
             style="max-width: 650px; width: 90%; max-height: 85vh; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
@@ -3444,14 +3454,14 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div>
 
     <!-- MODAL DE CONFIGURAÇÕES DO CRM -->
-    <div id="modal-settings" class="modal-overlay" style="display: none;">
+    <div id="modal-settings" class="modal-overlay" role="dialog" aria-modal="true" style="display: none;">
         <div class="modal"
             style="max-width: 580px; width: 90%; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); padding: 1.5rem;">
             <div
                 style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1.2rem;">
                 <h2
                     style="font-size: 1.2rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 0.6rem; margin: 0;">
-                    <i class="fa-solid fa-gear" style="color: #60a5fa;"></i> Configurações do CRM
+                    <i class="fa-solid fa-gear" style="color: var(--accent-info);"></i> Configurações do CRM
                 </h2>
                 <button type="button" onclick="closeSettingsModal()"
                     style="background: none; border: none; color: var(--text-muted); font-size: 1.3rem; cursor: pointer;"><i
@@ -3482,7 +3492,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="background: var(--bg-main); padding: 1.1rem; border-radius: 10px; border: 1px solid var(--border-color);">
                         <h4
                             style="font-size: 0.95rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fa-solid fa-user-gear" style="color: #38bdf8;"></i> Identificador do Atendente
+                            <i class="fa-solid fa-user-gear" style="color: var(--accent-info);"></i> Identificador do Atendente
                             (WhatsApp)
                         </h4>
 
@@ -3519,7 +3529,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.4rem;">
                             Prévia da Mensagem para o Lead no WhatsApp:</div>
                         <div id="signature-preview-box"
-                            style="font-size: 0.85rem; color: #f4f4f5; font-family: inherit; white-space: pre-wrap; line-height: 1.4; background: #0f766e; padding: 0.75rem 0.9rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12);">
+                            style="font-size: 0.85rem; color: var(--text-main); font-family: inherit; white-space: pre-wrap; line-height: 1.4; background: #0f766e; padding: 0.75rem 0.9rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12);">
                             Olá! Como posso te ajudar hoje?
 
                             _Fabrício – Natuclinic_</div>
@@ -3615,7 +3625,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     style="display: none; flex-direction: column; gap: 1rem;">
                     <div style="background: var(--bg-main); padding: 1.1rem; border-radius: 10px; border: 1px solid var(--border-color);">
                         <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fa-solid fa-circle-plus" style="color: #38bdf8;"></i> Nova Unidade
+                            <i class="fa-solid fa-circle-plus" style="color: var(--accent-info);"></i> Nova Unidade
                         </h4>
                         <div style="display: flex; gap: 0.6rem; align-items: flex-end;">
                             <div class="form-group" style="margin: 0; flex: 1; text-align: left;">
@@ -3657,6 +3667,108 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="wa_chat_logic.js"></script>
     <script src="app.js"></script>
 
+    <!-- Acessibilidade: aria-labelledby + focus trap em todos os modais -->
+    <script>
+    (function () {
+        // ── aria-labelledby ──────────────────────────────────────────────────────
+        // role="dialog" e aria-modal="true" já estão no markup; aqui associamos
+        // o aria-labelledby ao primeiro heading de cada overlay.
+        document.querySelectorAll('.modal-overlay').forEach(function (overlay) {
+            var heading = overlay.querySelector('h2, h3');
+            if (heading) {
+                if (!heading.id) heading.id = 'modal-label-' + overlay.id;
+                overlay.setAttribute('aria-labelledby', heading.id);
+            }
+        });
+
+        // ── Focus Trap ───────────────────────────────────────────────────────────
+        // Ativa um focus trap quando qualquer .modal-overlay recebe a classe
+        // "active" e restaura o foco ao elemento disparador ao fechar.
+        var FOCUSABLE = [
+            'a[href]',
+            'button:not([disabled])',
+            'input:not([disabled])',
+            'select:not([disabled])',
+            'textarea:not([disabled])',
+            '[tabindex]:not([tabindex="-1"])'
+        ].join(', ');
+
+        var trapMap = new Map();
+
+        function getFocusable(modal) {
+            return Array.from(modal.querySelectorAll(FOCUSABLE)).filter(function (el) {
+                return el.offsetParent !== null && !el.closest('[hidden]');
+            });
+        }
+
+        function activateTrap(modal) {
+            if (trapMap.has(modal)) return;
+            var previousFocus = document.activeElement;
+
+            function handler(e) {
+                if (e.key === 'Escape') {
+                    modal.classList.remove('active');
+                    return;
+                }
+                if (e.key !== 'Tab') return;
+                var focusable = getFocusable(modal);
+                if (!focusable.length) { e.preventDefault(); return; }
+                var first = focusable[0];
+                var last  = focusable[focusable.length - 1];
+                var active = document.activeElement;
+                if (e.shiftKey) {
+                    if (active === first || !modal.contains(active)) {
+                        e.preventDefault(); last.focus();
+                    }
+                } else {
+                    if (active === last || !modal.contains(active)) {
+                        e.preventDefault(); first.focus();
+                    }
+                }
+            }
+
+            modal.addEventListener('keydown', handler);
+            trapMap.set(modal, { previousFocus: previousFocus, handler: handler });
+
+            var focusable = getFocusable(modal);
+            if (focusable.length) {
+                setTimeout(function () { focusable[0].focus(); }, 50);
+            } else {
+                modal.setAttribute('tabindex', '-1');
+                setTimeout(function () { modal.focus(); }, 50);
+            }
+        }
+
+        function deactivateTrap(modal) {
+            var trap = trapMap.get(modal);
+            if (!trap) return;
+            modal.removeEventListener('keydown', trap.handler);
+            trapMap.delete(modal);
+            modal.removeAttribute('tabindex');
+            if (trap.previousFocus && typeof trap.previousFocus.focus === 'function') {
+                setTimeout(function () { trap.previousFocus.focus(); }, 0);
+            }
+        }
+
+        var observer = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+                var target = mutation.target;
+                if (!target.classList.contains('modal-overlay')) return;
+                if (target.classList.contains('active')) {
+                    activateTrap(target);
+                } else {
+                    deactivateTrap(target);
+                }
+            });
+        });
+
+        document.querySelectorAll('.modal-overlay').forEach(function (modal) {
+            observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
+            if (modal.classList.contains('active')) activateTrap(modal);
+        });
+    })();
+    </script>
+
     <!-- Menu Flutuante Global de Ações da Mensagem -->
     <!-- Menu de Contexto (botão direito) das conversas: não lido, favorito, fixar, arquivar -->
     <div id="chat-context-menu" style="
@@ -3676,7 +3788,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <div id="msg-global-dropdown" style="
         display: none;
         position: fixed;
-        background: #1c1c1e;
+        background: var(--bg-card);
         border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 12px;
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -3684,7 +3796,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         width: 220px;
         overflow: visible;
         font-family: inherit;
-        color: #f4f4f5;
+        color: var(--text-main);
     ">
         <!-- Barra de Reações Rápida -->
         <div style="
@@ -3692,7 +3804,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             justify-content: space-around;
             padding: 0.6rem 0.7rem;
             border-bottom: 1px solid rgba(255,255,255,0.08);
-            background: #09090b;
+            background: var(--header-bg);
             border-radius: 12px 12px 0 0;
             font-size: 1.35rem;
         ">
@@ -3721,7 +3833,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; border-bottom: 1px solid rgba(255,255,255,0.05);"
                 onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                 onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-circle-info" style="width: 16px; text-align: center; color: #a1a1aa;"></i> Dados
+                <i class="fa-solid fa-circle-info" style="width: 16px; text-align: center; color: var(--text-muted);"></i> Dados
                 da mensagem
             </div>
             <div onclick="triggerMsgAction('responder')"
@@ -3735,23 +3847,23 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
                 onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                 onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-download" style="width: 16px; text-align: center; color: #a855f7;"></i> Baixar
+                <i class="fa-solid fa-download" style="width: 16px; text-align: center; color: var(--accent-primary);"></i> Baixar
                 Mídia
             </div>
             <div onclick="triggerMsgAction('encaminhar')"
                 style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
                 onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                 onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-share" style="width: 16px; text-align: center; color: #3b82f6;"></i> Encaminhar
+                <i class="fa-solid fa-share" style="width: 16px; text-align: center; color: var(--accent-info);"></i> Encaminhar
             </div>
             <div onclick="triggerMsgAction('favoritar')"
                 style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
                 onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                 onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-star" style="width: 16px; text-align: center; color: #eab308;"></i> Favoritar
+                <i class="fa-solid fa-star" style="width: 16px; text-align: center; color: var(--accent-warning);"></i> Favoritar
             </div>
             <div onclick="triggerMsgAction('apagar')"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; color: #ef4444;"
+                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; color: var(--accent-danger);"
                 onmouseover="this.style.background='rgba(239,68,68,0.1)'"
                 onmouseout="this.style.background='transparent'">
                 <i class="fa-solid fa-trash" style="width: 16px; text-align: center;"></i> Apagar
@@ -3763,7 +3875,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <div id="card-global-dropdown" style="
         display: none;
         position: fixed;
-        background: #1c1c1e;
+        background: var(--bg-card);
         border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 12px;
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -3771,7 +3883,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         width: 180px;
         overflow: hidden;
         font-family: inherit;
-        color: #f4f4f5;
+        color: var(--text-main);
     ">
         <div style="padding: 0.4rem 0;">
             <div onclick="triggerCardAction('chat')"
@@ -3792,11 +3904,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
                 onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                 onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-file-invoice-dollar" style="width: 16px; text-align: center; color: #a78bfa;"></i>
+                <i class="fa-solid fa-file-invoice-dollar" style="width: 16px; text-align: center; color: var(--accent-primary);"></i>
                 Orçamento
             </div>
             <div onclick="triggerCardAction('excluir')"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; color: #f87171; border-top: 1px solid rgba(255,255,255,0.05);"
+                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; color: var(--accent-danger); border-top: 1px solid rgba(255,255,255,0.05);"
                 onmouseover="this.style.background='rgba(248,113,113,0.1)'"
                 onmouseout="this.style.background='transparent'">
                 <i class="fa-solid fa-trash" style="width: 16px; text-align: center;"></i> Excluir
@@ -3817,14 +3929,14 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         justify-content: center;
     ">
         <div style="
-            background: #18181b;
+            background: var(--bg-card);
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 12px;
             width: 90%;
             max-width: 400px;
             padding: 1.5rem;
             box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-            color: #f4f4f5;
+            color: var(--text-main);
         ">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--accent-success);"><i
@@ -3842,13 +3954,13 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <div style="margin-bottom: 1.2rem;">
                 <label
-                    style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; color: #a1a1aa;">Selecione
+                    style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-muted);">Selecione
                     o Contato / Lead:</label>
                 <select id="forward-lead-select" style="
                     width: 100%;
-                    background: #09090b;
+                    background: var(--header-bg);
                     border: 1px solid rgba(255,255,255,0.15);
-                    color: #f4f4f5;
+                    color: var(--text-main);
                     padding: 0.6rem 0.8rem;
                     border-radius: 8px;
                     outline: none;

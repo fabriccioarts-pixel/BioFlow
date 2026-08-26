@@ -2015,6 +2015,21 @@ function switchTab(tabId) {
     const campFlyout = document.getElementById('campanhas-flyout');
     if (campFlyout) campFlyout.style.display = 'none';
 
+    const tabTitles = {
+        kanban: 'CRM Vendas',
+        agenda: 'Agenda Completa',
+        chat: 'Atendimento',
+        dashboard: 'Dashboard',
+        campanhas: 'Campanhas',
+        'origem-leads': 'UTMs',
+        posvenda: 'Pós-Venda',
+        faltantes: 'Faltantes',
+        sumidos: 'Sumidos',
+        aniversariantes: 'Aniversariantes',
+        historico: 'Histórico',
+    };
+    if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
+
     if (tabId === 'historico') {
         if (!window.location.pathname.includes('historico.html')) {
             window.location.href = 'historico.html';
@@ -2153,6 +2168,14 @@ function switchTab(tabId) {
                 fetchRelacionamento();
             }
         }
+    }
+
+    const incomingView = document.getElementById(`view-${tabId}`);
+    if (incomingView) {
+        incomingView.classList.remove('is-entering');
+        void incomingView.offsetWidth;
+        incomingView.classList.add('is-entering');
+        incomingView.addEventListener('animationend', () => incomingView.classList.remove('is-entering'), { once: true });
     }
 }
 
@@ -3775,6 +3798,10 @@ async function fetchNotifications() {
                     if (badge) {
                         badge.innerText = unreadNotifications;
                         badge.style.display = 'flex';
+                        badge.classList.remove('badge-popping');
+                        void badge.offsetWidth;
+                        badge.classList.add('badge-popping');
+                        badge.addEventListener('animationend', () => badge.classList.remove('badge-popping'), { once: true });
                     }
                 }
             }
@@ -5776,4 +5803,31 @@ window.triggerCardAction = function(action) {
     } else if (action === 'excluir') {
         deleteLead(leadId);
     }
-};
+}
+
+function showToast(message, type = 'success', duration = 3500) {
+    const iconMap = {
+        success: 'fa-circle-check',
+        error:   'fa-circle-xmark',
+        warning: 'fa-triangle-exclamation',
+        info:    'fa-circle-info',
+    };
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML =
+        `<span class="toast-icon"><i class="fa-solid ${iconMap[type] || iconMap.info}"></i></span>` +
+        `<span class="toast-msg">${message}</span>`;
+
+    container.appendChild(toast);
+
+    const dismiss = () => {
+        toast.classList.add('is-leaving');
+        toast.addEventListener('animationend', () => toast.remove(), { once: true });
+    };
+
+    const timer = setTimeout(dismiss, duration);
+    toast.addEventListener('click', () => { clearTimeout(timer); dismiss(); });
+}
