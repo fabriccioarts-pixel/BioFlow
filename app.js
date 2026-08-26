@@ -637,11 +637,10 @@ card.addEventListener('pointerdown', (e) => startKanbanCardDrag(e, lead.id, card
 
 // 1. Procedimento de Interesse (Extração com fallback inteligente)
 let procedimentoName = '';
-if (lead.orcamento) {
-try {
-const orc = typeof lead.orcamento === 'string' ? JSON.parse(lead.orcamento) : lead.orcamento;
-procedimentoName = orc.procedimento || '';
-} catch(e) {}
+const orcItems = parseOrcamentoArray(lead.orcamento);
+if (orcItems.length > 0) {
+procedimentoName = orcItems[orcItems.length - 1].procedimento || '';
+if (orcItems.length > 1) procedimentoName += ` (+${orcItems.length - 1})`;
 }
 if (!procedimentoName && lead.notas) {
 const keywords = ["Botox", "Preenchimento", "Harmonização", "Bioestimulador", "Limpeza de pele", "Laser", "Depilação", "Corporal"];
@@ -669,7 +668,7 @@ let metadataIconsHTML = '';
 if (lead.notas) {
 metadataIconsHTML += `<i class="fa-regular fa-note-sticky" style="color: var(--accent-warning); margin-right: 4px;" title="Possui observações salvas"></i> `;
 }
-if (lead.orcamento) {
+if (orcItems.length > 0) {
 metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: #a78bfa; margin-right: 4px;" title="Orçamento Gerado"></i> `;
 }
 if (lead.agendamento) {
@@ -750,11 +749,8 @@ columnLeads.forEach(l => {
 let val = 0;
 if (l.valor_recebido) {
 val = parseFloat(l.valor_recebido) || 0;
-} else if (l.orcamento) {
-try {
-const orc = typeof l.orcamento === 'string' ? JSON.parse(l.orcamento) : l.orcamento;
-val = parseFloat(orc.valor) || 0;
-} catch(e) {}
+} else {
+val = parseOrcamentoArray(l.orcamento).reduce((sum, item) => sum + (parseFloat(item.valor) || 0), 0);
 }
 totalVal += val;
 });
@@ -1373,26 +1369,90 @@ function parseCurrencyBRLInput(masked) {
     return isNaN(num) ? '' : num.toFixed(2);
 }
 
+function parseOrcamentoArray(raw) {
+    if (!raw) return [];
+    let parsed;
+    try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return []; }
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+        return [{ id: 'legacy', ...parsed }];
+    }
+    return [];
+}
+
+function renderOrcamentoItemsList(id) {
+    const lead = leads.find(l => l.id === id);
+    const items = lead ? parseOrcamentoArray(lead.orcamento) : [];
+    const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+    const container = document.getElementById('orc-items-list');
+
+    if (items.length === 0) {
+        container.innerHTML = `<div style="color: var(--text-secondary); font-size: 0.85rem; padding: 0.5rem 0;">Nenhum procedimento orçado ainda.</div>`;
+        return;
+    }
+
+    container.innerHTML = items.map(item => {
+        const valorFmt = item.valor ? formatCurrencyBRLValue(item.valor) : '0,00';
+        const descontoTxt = item.desconto ? ` &middot; ${item.desconto}% desconto` : '';
+        const meta = [item.created_by, item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : ''].filter(Boolean).join(' em ');
+        const actions = (isAdmin && item.id !== 'legacy') ? `
+            <button class="btn-icon" title="Editar" onclick="editOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-info); padding: 0.25rem;"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn-icon" title="Excluir" onclick="deleteOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-danger); padding: 0.25rem;"><i class="fa-solid fa-trash"></i></button>
+        ` : '';
+        return `
+            <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem;">
+                <div>
+                    <div style="font-weight: 600;">${item.procedimento || '(sem nome)'}</div>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">R$ ${valorFmt}${descontoTxt}</div>
+                    ${item.condicoes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.15rem;">${item.condicoes}</div>` : ''}
+                    ${meta ? `<div style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7; margin-top: 0.25rem;">${meta}</div>` : ''}
+                </div>
+                <div style="display: flex; flex-shrink: 0;">${actions}</div>
+            </div>
+        `;
+    }).join('');
+}
+
 function openOrcamentoModal(id) {
     const lead = leads.find(l => l.id === id);
     if (!lead) return;
     document.getElementById('orc-lead-id').value = id;
-    
-    // Parse if it exists
-    let orc = {};
-    try {
-        orc = lead.orcamento ? (typeof lead.orcamento === 'string' ? JSON.parse(lead.orcamento) : lead.orcamento) : {};
-    } catch(e) {}
-
-    document.getElementById('orc-procedimento').value = orc.procedimento || '';
-    document.getElementById('orc-valor').value = orc.valor ? formatCurrencyBRLValue(orc.valor) : '';
-    document.getElementById('orc-desconto').value = orc.desconto || '';
-    document.getElementById('orc-condicoes').value = orc.condicoes || '';
-    
+    cancelEditOrcamentoItem();
+    renderOrcamentoItemsList(id);
     document.getElementById('modalOrcamento').classList.add('active');
 }
 
-async function saveOrcamento() {
+function cancelEditOrcamentoItem() {
+    document.getElementById('orc-editing-id').value = '';
+    document.getElementById('orc-procedimento').value = '';
+    document.getElementById('orc-valor').value = '';
+    document.getElementById('orc-desconto').value = '';
+    document.getElementById('orc-condicoes').value = '';
+    document.getElementById('orc-form-title').innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Procedimento';
+    document.getElementById('orc-save-btn').innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Procedimento';
+    document.getElementById('orc-save-btn').setAttribute('onclick', 'addOrcamentoItem()');
+    document.getElementById('orc-cancel-edit-btn').style.display = 'none';
+}
+
+function editOrcamentoItem(orcId) {
+    const id = document.getElementById('orc-lead-id').value;
+    const lead = leads.find(l => l.id === id);
+    if (!lead) return;
+    const item = parseOrcamentoArray(lead.orcamento).find(i => i.id === orcId);
+    if (!item) return;
+
+    document.getElementById('orc-editing-id').value = orcId;
+    document.getElementById('orc-procedimento').value = item.procedimento || '';
+    document.getElementById('orc-valor').value = item.valor ? formatCurrencyBRLValue(item.valor) : '';
+    document.getElementById('orc-desconto').value = item.desconto || '';
+    document.getElementById('orc-condicoes').value = item.condicoes || '';
+    document.getElementById('orc-form-title').innerHTML = '<i class="fa-solid fa-pen"></i> Editar Procedimento';
+    document.getElementById('orc-save-btn').innerHTML = '<i class="fa-solid fa-save"></i> Salvar Alterações';
+    document.getElementById('orc-save-btn').setAttribute('onclick', 'updateOrcamentoItem()');
+    document.getElementById('orc-cancel-edit-btn').style.display = 'inline-block';
+}
+
+async function addOrcamentoItem() {
     const id = document.getElementById('orc-lead-id').value;
     const procedimento = document.getElementById('orc-procedimento').value;
     // O campo mostra "1.000,00" (máscara BRL), mas é armazenado como número puro
@@ -1400,34 +1460,83 @@ async function saveOrcamento() {
     const valor = parseCurrencyBRLInput(document.getElementById('orc-valor').value);
     const desconto = document.getElementById('orc-desconto').value;
     const condicoes = document.getElementById('orc-condicoes').value;
-    
-    const lead = leads.find(l => l.id === id);
-    if (lead) {
-        const orc = { procedimento, valor, desconto, condicoes };
-        lead.orcamento = JSON.stringify(orc);
-        
-        // Ensure it is in col-orcado locally
-        if (lead.column !== 'col-orcado') {
-            lead.column = 'col-orcado';
-        }
+    if (!procedimento) return;
 
+    const lead = leads.find(l => l.id === id);
+    if (!lead) return;
+
+    try {
+        const res = await fetch(`/api/leads/${id}/orcamentos`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ procedimento, valor, desconto, condicoes })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro ao adicionar orçamento');
+
+        lead.orcamento = JSON.stringify(data.items);
+        lead.column = 'col-orcado';
         renderBoard();
-        
-        try {
-            await fetch(`/api/leads/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                   column_id: lead.column,
-                   orcamento: lead.orcamento 
-                })
-            });
-        } catch (e) {
-            console.error('Erro ao salvar orcamento', e);
-        }
+        cancelEditOrcamentoItem();
+        renderOrcamentoItemsList(id);
+    } catch (e) {
+        console.error('Erro ao salvar orcamento', e);
+        alert(e.message || 'Erro ao adicionar orçamento');
     }
-    
-    document.getElementById('modalOrcamento').classList.remove('active');
+}
+
+async function updateOrcamentoItem() {
+    const id = document.getElementById('orc-lead-id').value;
+    const orcId = document.getElementById('orc-editing-id').value;
+    if (!orcId) return addOrcamentoItem();
+
+    const procedimento = document.getElementById('orc-procedimento').value;
+    const valor = parseCurrencyBRLInput(document.getElementById('orc-valor').value);
+    const desconto = document.getElementById('orc-desconto').value;
+    const condicoes = document.getElementById('orc-condicoes').value;
+
+    const lead = leads.find(l => l.id === id);
+    if (!lead) return;
+
+    try {
+        const res = await fetch(`/api/leads/${id}/orcamentos/${orcId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ procedimento, valor, desconto, condicoes })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro ao editar orçamento');
+
+        lead.orcamento = JSON.stringify(data.items);
+        renderBoard();
+        cancelEditOrcamentoItem();
+        renderOrcamentoItemsList(id);
+    } catch (e) {
+        console.error('Erro ao editar orcamento', e);
+        alert(e.message || 'Erro ao editar orçamento');
+    }
+}
+
+async function deleteOrcamentoItem(orcId) {
+    const id = document.getElementById('orc-lead-id').value;
+    if (!await customConfirm('Deseja realmente excluir este procedimento orçado?', 'Excluir Orçamento')) return;
+
+    const lead = leads.find(l => l.id === id);
+    if (!lead) return;
+
+    try {
+        const res = await fetch(`/api/leads/${id}/orcamentos/${orcId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro ao excluir orçamento');
+
+        lead.orcamento = JSON.stringify(data.items);
+        renderBoard();
+        cancelEditOrcamentoItem();
+        renderOrcamentoItemsList(id);
+    } catch (e) {
+        console.error('Erro ao excluir orcamento', e);
+        alert(e.message || 'Erro ao excluir orçamento');
+    }
 }
 
 async function deleteLead(id) {
@@ -4486,11 +4595,8 @@ function renderDashboard() {
 
     leads.forEach(lead => {
         let val = parseFloat(lead.valor_recebido) || 0;
-        if (!val && lead.orcamento) {
-            try {
-                const orc = typeof lead.orcamento === 'string' ? JSON.parse(lead.orcamento) : lead.orcamento;
-                val = parseFloat(orc.valor) || 0;
-            } catch(e) {}
+        if (!val) {
+            val = parseOrcamentoArray(lead.orcamento).reduce((sum, item) => sum + (parseFloat(item.valor) || 0), 0);
         }
         const inPeriod = isInPeriod(lead.created_at);
         const leadPhone = String(lead.telefone || '').replace(/\D/g, '');
@@ -5609,7 +5715,7 @@ window.toggleCardDropdown = function(event, leadId) {
     const orcItem = document.getElementById('card-menu-item-orc');
     if (orcItem && lead) {
         // Exibe o item de orçamento apenas se o lead estiver na coluna de orçado ou já tiver orçamento
-        if (lead.column === 'col-orcado' || lead.orcamento) {
+        if (lead.column === 'col-orcado' || parseOrcamentoArray(lead.orcamento).length > 0) {
             orcItem.style.display = 'flex';
         } else {
             orcItem.style.display = 'none';

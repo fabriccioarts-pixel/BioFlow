@@ -2955,6 +2955,112 @@ app.put('/api/leads/:id', async (req, res) => {
     }
 });
 
+// ==== ORÇAMENTOS (múltiplos procedimentos por lead) ====
+// leads.orcamento passou de "um objeto único" pra "um array de itens" — essa
+// função lê qualquer um dos dois formatos, convertendo o antigo (objeto sem
+// id, de antes dessa mudança) em uma lista de 1 item só pra exibição/edição,
+// sem precisar de uma migração em massa no banco.
+function parseOrcamentoArray(raw) {
+    if (!raw) return [];
+    let parsed;
+    try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return []; }
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+        return [{ id: 'legacy', ...parsed }];
+    }
+    return [];
+}
+
+// Qualquer atendente pode adicionar um procedimento orçado — não apaga os
+// que já existem (diferente do PUT /api/leads/:id genérico, que sobrescrevia
+// o campo "orcamento" inteiro).
+app.post('/api/leads/:id/orcamentos', async (req, res) => {
+    const { id } = req.params;
+    const { procedimento, valor, desconto, condicoes } = req.body;
+    try {
+        const leadRows = await queryD1('SELECT orcamento FROM leads WHERE id = ?', [id]);
+        if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
+
+        const items = parseOrcamentoArray(leadRows[0].orcamento);
+        const newItem = {
+            id: `orc-${Date.now()}`,
+            procedimento: procedimento || '',
+            valor: valor || '',
+            desconto: desconto || '',
+            condicoes: condicoes || '',
+            created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+            created_by: req.user?.username || null
+        };
+        items.push(newItem);
+
+        await queryD1(
+            'UPDATE leads SET orcamento = ?, column_id = ?, data_valor = ? WHERE id = ?',
+            [JSON.stringify(items), 'col-orcado', newItem.created_at, id]
+        );
+
+        try {
+            if (newItem.procedimento) {
+                await queryD1('UPDATE agendamentos_financeiro SET procedimento = ? WHERE lead_id = ?', [newItem.procedimento, id]);
+            }
+        } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
+
+        res.status(201).json({ success: true, item: newItem, items });
+    } catch (e) {
+        console.error('Erro ao adicionar orçamento:', e);
+        res.status(500).json({ error: 'Erro interno ao adicionar orçamento.' });
+    }
+});
+
+// Editar e excluir um procedimento já orçado é só pra admin — evita que um
+// orçamento fechado com o paciente seja alterado/apagado por engano.
+app.put('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem editar um orçamento já registrado.' });
+    }
+    const { id, orcId } = req.params;
+    const { procedimento, valor, desconto, condicoes } = req.body;
+    try {
+        const leadRows = await queryD1('SELECT orcamento FROM leads WHERE id = ?', [id]);
+        if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
+
+        const items = parseOrcamentoArray(leadRows[0].orcamento);
+        const idx = items.findIndex(i => i.id === orcId);
+        if (idx === -1) return res.status(404).json({ error: 'Procedimento orçado não encontrado' });
+
+        items[idx] = { ...items[idx], procedimento, valor, desconto, condicoes };
+        await queryD1('UPDATE leads SET orcamento = ? WHERE id = ?', [JSON.stringify(items), id]);
+
+        try {
+            if (procedimento) {
+                await queryD1('UPDATE agendamentos_financeiro SET procedimento = ? WHERE lead_id = ?', [procedimento, id]);
+            }
+        } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
+
+        res.json({ success: true, items });
+    } catch (e) {
+        console.error('Erro ao editar orçamento:', e);
+        res.status(500).json({ error: 'Erro interno ao editar orçamento.' });
+    }
+});
+
+app.delete('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem excluir um orçamento já registrado.' });
+    }
+    const { id, orcId } = req.params;
+    try {
+        const leadRows = await queryD1('SELECT orcamento FROM leads WHERE id = ?', [id]);
+        if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
+
+        const items = parseOrcamentoArray(leadRows[0].orcamento).filter(i => i.id !== orcId);
+        await queryD1('UPDATE leads SET orcamento = ? WHERE id = ?', [JSON.stringify(items), id]);
+        res.json({ success: true, items });
+    } catch (e) {
+        console.error('Erro ao excluir orçamento:', e);
+        res.status(500).json({ error: 'Erro interno ao excluir orçamento.' });
+    }
+});
+
 // ==== TRAVA DE ATENDIMENTO (evita que dois atendentes atropelem o mesmo lead) ====
 // Enquanto um atendente estiver ativo numa conversa, ela fica travada para ele.
 // Após LOCK_TIMEOUT_MINUTES sem renovação (heartbeat), a trava expira e a conversa
