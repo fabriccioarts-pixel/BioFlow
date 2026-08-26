@@ -1845,6 +1845,9 @@ queryD1(`CREATE TABLE IF NOT EXISTS wa_dispatches (
 // alguém chamar aquela rota manualmente.
 queryD1('ALTER TABLE leads ADD COLUMN ai_enabled INTEGER DEFAULT 1').catch(() => {});
 
+// Guarda qual atendente fechou (criou) o orçamento, pra aparecer no relatório de Histórico.
+queryD1('ALTER TABLE agendamentos_financeiro ADD COLUMN orcado_por TEXT').catch(() => {});
+
 app.post('/api/whatsapp/dispatches', async (req, res) => {
     try {
         const { template_name, category, target_column, total_leads, success_count, fail_count, cost_total } = req.body || {};
@@ -3000,7 +3003,10 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
 
         try {
             if (newItem.procedimento) {
-                await queryD1('UPDATE agendamentos_financeiro SET procedimento = ? WHERE lead_id = ?', [newItem.procedimento, id]);
+                await queryD1(
+                    'UPDATE agendamentos_financeiro SET procedimento = ?, orcado_por = ? WHERE lead_id = ?',
+                    [newItem.procedimento, newItem.created_by, id]
+                );
             }
         } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
 
@@ -3742,7 +3748,8 @@ async function getMergedAgendamentos(startDate, endDate) {
             valor_primario: (local && local.valor_primario) || '',
             valor_secundario: (local && local.valor_secundario) || '',
             status_pagamento: (local && local.status_pagamento) || 'Pendente',
-            agendado_por: (local && local.agendado_por) || '-'
+            agendado_por: (local && local.agendado_por) || '-',
+            orcado_por: (local && local.orcado_por) || '-'
         };
     });
 
@@ -3765,7 +3772,8 @@ async function getMergedAgendamentos(startDate, endDate) {
             valor_primario: row.valor_primario || '',
             valor_secundario: row.valor_secundario || '',
             status_pagamento: row.status_pagamento || 'Pendente',
-            agendado_por: row.agendado_por || '-'
+            agendado_por: row.agendado_por || '-',
+            orcado_por: row.orcado_por || '-'
         });
     });
 

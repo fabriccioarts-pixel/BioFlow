@@ -1394,7 +1394,13 @@ function renderOrcamentoItemsList(id) {
     container.innerHTML = items.map(item => {
         const valorFmt = item.valor ? formatCurrencyBRLValue(item.valor) : '0,00';
         const descontoTxt = item.desconto ? ` &middot; ${item.desconto}% desconto` : '';
-        const meta = [item.created_by, item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : ''].filter(Boolean).join(' em ');
+        const whenTxt = item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : '';
+        const creatorHTML = item.created_by ? `
+            <div style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-secondary); opacity: 0.85; margin-top: 0.3rem;">
+                ${typeof renderAvatarHTML === 'function' ? renderAvatarHTML(resolveDisplayName(item.created_by), avatarMap[item.created_by] || null, null, 16) : ''}
+                <span>${escapeHtml(resolveDisplayName(item.created_by))}${whenTxt ? ` em ${whenTxt}` : ''}</span>
+            </div>
+        ` : (whenTxt ? `<div style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7; margin-top: 0.25rem;">${whenTxt}</div>` : '');
         const actions = (isAdmin && item.id !== 'legacy') ? `
             <button class="btn-icon" title="Editar" onclick="editOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-info); padding: 0.25rem;"><i class="fa-solid fa-pen"></i></button>
             <button class="btn-icon" title="Excluir" onclick="deleteOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-danger); padding: 0.25rem;"><i class="fa-solid fa-trash"></i></button>
@@ -1405,7 +1411,7 @@ function renderOrcamentoItemsList(id) {
                     <div style="font-weight: 600;">${item.procedimento || '(sem nome)'}</div>
                     <div style="font-size: 0.85rem; color: var(--text-secondary);">R$ ${valorFmt}${descontoTxt}</div>
                     ${item.condicoes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.15rem;">${item.condicoes}</div>` : ''}
-                    ${meta ? `<div style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7; margin-top: 0.25rem;">${meta}</div>` : ''}
+                    ${creatorHTML}
                 </div>
                 <div style="display: flex; flex-shrink: 0;">${actions}</div>
             </div>

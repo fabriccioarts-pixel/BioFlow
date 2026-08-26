@@ -245,6 +245,12 @@
                 </select>
             </div>
             <div class="form-group" style="margin: 0; flex: 1; min-width: 140px;">
+                <label style="font-size: 0.8rem;">Quem Orçou</label>
+                <select id="filtro-orcado" class="form-control" onchange="aplicarFiltros()">
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 1; min-width: 140px;">
                 <label style="font-size: 0.8rem;">Origem</label>
                 <select id="filtro-origem" class="form-control" onchange="aplicarFiltros()">
                     <option value="">Todas</option>
@@ -293,11 +299,12 @@
                     <th>Valor Secundário</th>
                     <th>Status Pagamento</th>
                     <th>Agendado Por</th>
+                    <th>Orçado Por</th>
                     <th id="th-acoes" style="display: none; text-align: center; width: 100px;">Ações</th>
                 </tr>
             </thead>
             <tbody id="historico-tbody">
-                <tr><td colspan="9" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>
+                <tr><td colspan="10" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>
             </tbody>
         </table>
     </div>
@@ -452,7 +459,7 @@
 
         async function carregarHistorico() {
             const isAdmin = loggedUser && loggedUser.role === 'admin';
-            const colspanVal = isAdmin ? 10 : 9;
+            const colspanVal = isAdmin ? 11 : 10;
             const tbody = document.getElementById('historico-tbody');
             tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>`;
 
@@ -515,6 +522,11 @@
             selAgendado.innerHTML = '<option value="">Todos</option>';
             agendados.forEach(a => selAgendado.innerHTML += `<option value="${a}">${a}</option>`);
 
+            const orcados = [...new Set(window.historicoData.map(d => d.orcado_por).filter(o => o && o !== '-'))];
+            const selOrcado = document.getElementById('filtro-orcado');
+            selOrcado.innerHTML = '<option value="">Todos</option>';
+            orcados.forEach(o => selOrcado.innerHTML += `<option value="${o}">${o}</option>`);
+
             const unidades = [...new Set(window.historicoData.map(d => d.unidade))].filter(Boolean);
             const selUnidade = document.getElementById('filtro-unidade');
             selUnidade.innerHTML = '<option value="">Todas</option>';
@@ -523,6 +535,7 @@
 
         function aplicarFiltros() {
             const fAgendado = document.getElementById('filtro-agendado').value;
+            const fOrcado = document.getElementById('filtro-orcado').value;
             const fOrigem = document.getElementById('filtro-origem').value;
             const fUnidade = document.getElementById('filtro-unidade').value;
             const fNome = document.getElementById('filtro-nome').value.toLowerCase();
@@ -536,6 +549,9 @@
                 // Filtro Quem Agendou
                 const ag = row.agendado_por || 'Sistema';
                 if (fAgendado && ag !== fAgendado) return false;
+
+                // Filtro Quem Orçou
+                if (fOrcado && row.orcado_por !== fOrcado) return false;
 
                 // Filtro Origem
                 if (fOrigem && row.origem !== fOrigem) return false;
@@ -564,6 +580,7 @@
 
         function limparFiltros() {
             document.getElementById('filtro-agendado').value = '';
+            document.getElementById('filtro-orcado').value = '';
             document.getElementById('filtro-origem').value = '';
             document.getElementById('filtro-unidade').value = '';
             document.getElementById('filtro-nome').value = '';
@@ -582,7 +599,7 @@
             tbody.innerHTML = '';
             
             const isAdmin = loggedUser && loggedUser.role === 'admin';
-            const colspanVal = isAdmin ? 10 : 9;
+            const colspanVal = isAdmin ? 11 : 10;
             
             if(!dataToRender || dataToRender.length === 0) {
                 let emptyRows = '';
@@ -636,6 +653,7 @@
                         </select>
                     </td>
                     <td><span style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">${row.agendado_por || 'Sistema'}</span></td>
+                    <td>${row.orcado_por && row.orcado_por !== '-' ? `<span style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">${row.orcado_por}</span>` : '-'}</td>
                     ${isAdmin ? `
                     <td>
                         <div style="display: flex; gap: 0.5rem; justify-content: center;">
