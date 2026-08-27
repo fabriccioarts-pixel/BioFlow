@@ -16,10 +16,9 @@
     <!-- Chart.js for Dashboard -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-    <!-- Flatpickr -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
+    <!-- Air Datepicker -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
+    <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -62,7 +61,7 @@
         </div>
 
         <div class="actions" style="display: flex; gap: 1rem; align-items: center;">
-            <button class="btn-secondary" onclick="openMktReportModal()" title="Relatório de Marketing" style="display: flex; align-items: center; gap: 0.5rem; background: #6c5ce7; color: white; border: 1px solid white; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            <button class="btn-primary" onclick="openMktReportModal()" title="Relatório de Marketing">
                 <i class="fa-solid fa-chart-pie"></i> Relatório MKT
             </button>
             <button class="btn-secondary" id="theme-toggle" onclick="toggleTheme()" title="Mudar Tema" style="padding: 0.5rem; width: 40px; height: 40px; justify-content: center;">
@@ -92,10 +91,10 @@
                 <button class="btn-secondary" style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-color);" onclick="changeAgendaDate(1)"><i class="fa-solid fa-chevron-right"></i></button>
                 <button class="btn-secondary" style="border: 1px solid var(--border-color); padding: 0.4rem 1rem; border-radius: 6px; background: transparent; font-weight: 500; font-size: 0.9rem; color: var(--text-color);" onclick="resetAgendaDate()">Hoje</button>
                 <div style="position: relative;">
-                    <button class="btn-secondary" style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-color);" onclick="document.getElementById('hidden-date-picker')._flatpickr.open()"><i class="fa-regular fa-calendar-check"></i></button>
+                    <button class="btn-secondary" data-adp-trigger style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-color);" onclick="document.getElementById('hidden-date-picker')._adpInstance && document.getElementById('hidden-date-picker')._adpInstance.show()"><i class="fa-regular fa-calendar-check"></i></button>
                     <input type="date" id="hidden-date-picker" onchange="jumpToDate(this.value)" style="position: absolute; opacity: 0; width: 10px; height: 10px; bottom: 0; right: 0; pointer-events: none; border: none; padding: 0; z-index: -1;">
                 </div>
-                <div class="agenda-loader" style="display: none; margin-left: 0.5rem;"><i class="fa-solid fa-circle-notch spin"></i></div>
+                <div class="agenda-loader" style="display: none; margin-left: 0.5rem;"><span class="amicro-loader"><span></span><span></span><span></span></span></div>
             </div>
         </div>
 
@@ -115,26 +114,30 @@
     <div class="modal-overlay" id="modalNewLead">
         <div class="modal">
             <h2><i class="fa-solid fa-user-plus"></i> Cadastrar Paciente</h2>
-            <div class="form-group">
-                <label>Nome do Paciente</label>
-                <input type="text" id="nl-nome" placeholder="Ex: Maria da Silva">
+            <p class="modal-subtitle">Preencha os dados para registrar um novo lead no CRM.</p>
+            <div class="form-grid">
+                <div class="form-group full">
+                    <label>Nome do Paciente</label>
+                    <input type="text" id="nl-nome" placeholder="Ex: Maria da Silva">
+                </div>
+                <div class="form-group">
+                    <label>WhatsApp <span class="required">*</span></label>
+                    <input type="text" id="nl-telefone" placeholder="(61) 99999-9999">
+                </div>
+                <div class="form-group">
+                    <label>Data de Nascimento</label>
+                    <input type="date" id="lead-born" class="form-control" required>
+                </div>
+                <div class="form-group full">
+                    <label>Origem</label>
+                    <select id="lead-origem" class="form-control">
+                        <option value="Meta Ads">Meta Ads (Facebook/Insta)</option>
+                        <option value="Google Meu Negócio">Google Meu Negócio</option>
+                        <option value="Indicação">Indicação</option>
+                    </select>
+                </div>
             </div>
-            <div class="form-group">
-                <label>WhatsApp</label>
-                <input type="text" id="nl-telefone" placeholder="(61) 99999-9999">
-            </div>
-            <div class="form-group">
-                <label>Data de Nascimento</label>
-                <input type="date" id="lead-born" class="form-control" required>
-            </div>
-            <div class="form-group">
-                <label>Origem (Opcional)</label>
-                <select id="lead-origem" class="form-control">
-                    <option value="Meta Ads">Meta Ads (Facebook/Insta)</option>
-                    <option value="Google Meu Negócio">Google Meu Negócio</option>
-                    <option value="Indicação">Indicação</option>
-                </select>
-            </div>
+            <div class="modal-separator"></div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
                 <button class="btn-save" onclick="saveNewLead()">Salvar Lead</button>
@@ -204,7 +207,7 @@
             </form>
 
             <div class="integration-loader" id="integrationLoader">
-                <i class="fa-solid fa-circle-notch spin"></i> Chamando API da Vercel (Seguro)...
+                <span class="amicro-loader"><span></span><span></span><span></span></span> Chamando API da Vercel (Seguro)...
             </div>
 
             <div class="modal-actions" id="integrationActions">

@@ -1,9 +1,14 @@
 .env
 node_modules/
 .vercel/
-.claude/scheduled_tasks.lock
 
 .vercel
+
+# Ferramentas de assistentes de código (config local, não versionar)
+.claude/
+.codex/
+.impeccable/
+.agents/
 
 # Dados de paciente / PII — nunca versionar
 aniversariantes.csv

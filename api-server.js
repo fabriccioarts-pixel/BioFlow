@@ -338,6 +338,18 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         [newLeadId, profileName, normalizePhoneBR(from), origemLead, '', '', 'col-entrada', '', '', notasAdicionais]
                     );
                     console.log(`Novo lead criado a partir do WhatsApp: ${profileName} (${from}) - Origem: ${origemLead}`);
+
+                    // Notifica a equipe que um novo lead entrou no funil.
+                    try {
+                        const leadName = (profileName && profileName !== 'Lead WhatsApp') ? profileName : 'Lead WhatsApp';
+                        const notifMsg = `🌱 Novo lead: ${leadName} — ${origemLead || 'WhatsApp'}`;
+                        await queryD1(
+                            'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                            [`lead-${newLeadId}`, notifMsg]
+                        );
+                    } catch (e) {
+                        console.error('Falha ao registrar notificação de novo lead:', e.message);
+                    }
                 } else {
                     resolvedLeadId = leadRows[0].id;
                     if (profileName !== 'Lead WhatsApp') {
@@ -363,6 +375,22 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 console.error("Erro ao processar webhook no DB:", e);
             }
         }
+
+        // Handle message status updates: sent → delivered → read
+        const allChanges = body.entry?.[0]?.changes ?? [];
+        for (const change of allChanges) {
+            const statuses = change.value?.statuses;
+            if (!statuses) continue;
+            for (const s of statuses) {
+                if (!['sent', 'delivered', 'read', 'failed'].includes(s.status)) continue;
+                try {
+                    await queryD1('UPDATE wa_messages SET status = ? WHERE id = ?', [s.status, s.id]);
+                } catch(e) {
+                    console.error('Erro ao atualizar status da mensagem:', e);
+                }
+            }
+        }
+
         res.sendStatus(200);
     } else {
         res.sendStatus(404);
@@ -934,6 +962,16 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
                 [`ai-qual-${leadId}-${Date.now()}`, `🤖 Lead qualificado pela IA — assumir conversa no WhatsApp.`]
             );
             return;
+        }
+
+        // Atraso configurável antes de responder (deixa mais humano / dá janela
+        // pro atendente assumir). Não se aplica ao handoff de qualificação acima.
+        const replyDelay = await getWhatsappAiReplyDelay();
+        if (replyDelay > 0) {
+            await new Promise(r => setTimeout(r, replyDelay * 1000));
+            // Se um atendente desligou a IA desse lead durante a espera, aborta.
+            const stillOn = await queryD1('SELECT ai_enabled FROM leads WHERE id = ?', [leadId]);
+            if (!stillOn || !stillOn[0] || Number(stillOn[0].ai_enabled) !== 1) return;
         }
 
         await sendWhatsappAiReplyInChunks(phone, replyText);
@@ -1726,11 +1764,27 @@ app.put('/api/settings/whatsapp-pricing', async (req, res) => {
 
 // Interruptor geral do agente de IA de pré-qualificação — além do controle
 // por lead (leads.ai_enabled), esse é o "desliga tudo" de emergência/manutenção.
+// Tempo (em segundos) que a IA espera antes de mandar a resposta automática —
+// deixa a conversa mais humana e dá uma janela pra um atendente assumir. É
+// limitado a WHATSAPP_AI_MAX_DELAY: como a resposta ainda é gerada dentro do
+// webhook (função serverless), um valor alto faz o WhatsApp reentregar a mensagem.
+const WHATSAPP_AI_MAX_DELAY = 15;
+function clampAiDelay(v) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(n, WHATSAPP_AI_MAX_DELAY);
+}
+async function getWhatsappAiReplyDelay() {
+    const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_reply_delay'");
+    return rows && rows[0] ? clampAiDelay(rows[0].value) : 0;
+}
+
 app.get('/api/settings/whatsapp-ai', async (req, res) => {
     try {
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const enabled = rows && rows[0] ? rows[0].value === '1' : true; // liga por padrão
-        res.json({ enabled });
+        const delaySeconds = await getWhatsappAiReplyDelay();
+        res.json({ enabled, delaySeconds, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -1747,7 +1801,17 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
             "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [enabled]
         );
-        res.json({ success: true, enabled: enabled === '1' });
+        let delaySeconds;
+        if (req.body?.delaySeconds !== undefined) {
+            delaySeconds = clampAiDelay(req.body.delaySeconds);
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_reply_delay', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [String(delaySeconds)]
+            );
+        } else {
+            delaySeconds = await getWhatsappAiReplyDelay();
+        }
+        res.json({ success: true, enabled: enabled === '1', delaySeconds });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
@@ -2763,6 +2827,37 @@ app.post('/api/clear-notif', async (req, res) => {
     }
 });
 
+// ==== KANBAN SSE (Server-Sent Events para sincronização em tempo real) ====
+
+const sseClients = new Set();
+
+function broadcastLeadsUpdate(action = 'updated', leadId = null) {
+    const payload = `data: ${JSON.stringify({ action, leadId, ts: Date.now() })}\n\n`;
+    for (const client of sseClients) {
+        try { client.write(payload); } catch (_) { sseClients.delete(client); }
+    }
+}
+
+app.get('/api/kanban/events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    res.write(': connected\n\n');
+    sseClients.add(res);
+
+    const keepAlive = setInterval(() => {
+        try { res.write(': ping\n\n'); } catch (_) {}
+    }, 25000);
+
+    req.on('close', () => {
+        clearInterval(keepAlive);
+        sseClients.delete(res);
+    });
+});
+
 // ==== ROTAS DO KANBAN (LEADS) ====
 
 // Buscar todos os leads
@@ -2855,6 +2950,7 @@ app.post('/api/leads', async (req, res) => {
             'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, tags, valor_recebido, orcamento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [id, nome, telefone ? normalizePhoneBR(telefone) : '', origem || '', born || '', owner_id || null, column_id || 'col-entrada', fb_click_id || '', email || '', notas || '', tags || '', valor_recebido || null, orcamento || '']
         );
+        broadcastLeadsUpdate('created', id);
         res.json({ success: true, id });
     } catch (e) {
         console.error(e);
@@ -2874,6 +2970,13 @@ app.put('/api/leads/:id', async (req, res) => {
 
         const updates = [];
         const params = [];
+
+        // Auto-assign: se o lead não tem dono e um usuário logado está interagindo com ele (arrastando, editando, orçando)
+        if (!lead.owner_id && req.user && req.user.username) {
+            updates.push('owner_id = ?');
+            params.push(req.user.username);
+            updates.push('assigned_at = CURRENT_TIMESTAMP');
+        }
 
         if (column_id !== undefined) {
             updates.push('column_id = ?');
@@ -2951,6 +3054,7 @@ app.put('/api/leads/:id', async (req, res) => {
             sendMetaCapiEvent('Lead', lead);
         }
 
+        broadcastLeadsUpdate('updated', id);
         res.json({ success: true });
     } catch (e) {
         console.error(e);
@@ -2979,9 +3083,9 @@ function parseOrcamentoArray(raw) {
 // o campo "orcamento" inteiro).
 app.post('/api/leads/:id/orcamentos', async (req, res) => {
     const { id } = req.params;
-    const { procedimento, valor, desconto, condicoes } = req.body;
+    const { procedimento, valor, desconto, formaPagamento, condicoes } = req.body;
     try {
-        const leadRows = await queryD1('SELECT orcamento FROM leads WHERE id = ?', [id]);
+        const leadRows = await queryD1('SELECT orcamento, owner_id FROM leads WHERE id = ?', [id]);
         if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
 
         const items = parseOrcamentoArray(leadRows[0].orcamento);
@@ -2990,15 +3094,25 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
             procedimento: procedimento || '',
             valor: valor || '',
             desconto: desconto || '',
+            formaPagamento: formaPagamento || '',
             condicoes: condicoes || '',
             created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
             created_by: req.user?.username || null
         };
         items.push(newItem);
 
+        let updateOwnerSql = '';
+        const params = [JSON.stringify(items), 'col-orcado', newItem.created_at];
+        
+        if (!leadRows[0].owner_id && req.user && req.user.username) {
+            updateOwnerSql = ', owner_id = ?, assigned_at = CURRENT_TIMESTAMP';
+            params.push(req.user.username);
+        }
+        params.push(id);
+
         await queryD1(
-            'UPDATE leads SET orcamento = ?, column_id = ?, data_valor = ? WHERE id = ?',
-            [JSON.stringify(items), 'col-orcado', newItem.created_at, id]
+            `UPDATE leads SET orcamento = ?, column_id = ?, data_valor = ? ${updateOwnerSql} WHERE id = ?`,
+            params
         );
 
         try {
@@ -3024,7 +3138,7 @@ app.put('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
         return res.status(403).json({ error: 'Apenas administradores podem editar um orçamento já registrado.' });
     }
     const { id, orcId } = req.params;
-    const { procedimento, valor, desconto, condicoes } = req.body;
+    const { procedimento, valor, desconto, formaPagamento, condicoes } = req.body;
     try {
         const leadRows = await queryD1('SELECT orcamento FROM leads WHERE id = ?', [id]);
         if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
@@ -3033,7 +3147,7 @@ app.put('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
         const idx = items.findIndex(i => i.id === orcId);
         if (idx === -1) return res.status(404).json({ error: 'Procedimento orçado não encontrado' });
 
-        items[idx] = { ...items[idx], procedimento, valor, desconto, condicoes };
+        items[idx] = { ...items[idx], procedimento, valor, desconto, formaPagamento, condicoes };
         await queryD1('UPDATE leads SET orcamento = ? WHERE id = ?', [JSON.stringify(items), id]);
 
         try {
@@ -3092,6 +3206,7 @@ app.post('/api/leads/:id/claim', async (req, res) => {
         if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
 
         if (lead.owner_id === username) {
+            broadcastLeadsUpdate('updated', id);
             return res.json({ success: true, owner_id: lead.owner_id, assigned_at: lead.assigned_at });
         }
         return res.status(409).json({ error: 'Conversa em atendimento por outro atendente.', owner_id: lead.owner_id, assigned_at: lead.assigned_at });
@@ -3172,6 +3287,7 @@ app.post('/api/leads/:id/transfer', async (req, res) => {
         if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
 
         if (lead.owner_id === to) {
+            broadcastLeadsUpdate('updated', id);
             return res.json({ success: true, owner_id: lead.owner_id, assigned_at: lead.assigned_at });
         }
         return res.status(409).json({ error: 'Você não está mais com essa conversa pra poder transferir.', owner_id: lead.owner_id, assigned_at: lead.assigned_at });
@@ -3341,11 +3457,26 @@ app.post('/api/agendar', async (req, res) => {
     }
 });
 
+app.get('/api/leads/:id/agendamentos', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const rows = await queryD1(
+            'SELECT * FROM agendamentos_financeiro WHERE lead_id = ? ORDER BY created_at DESC',
+            [id]
+        );
+        res.json(rows || []);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
 // Deletar um lead
 app.delete('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
     try {
         await queryD1('DELETE FROM leads WHERE id = ?', [id]);
+        broadcastLeadsUpdate('deleted', id);
         res.json({ success: true });
     } catch (e) {
         console.error(e);

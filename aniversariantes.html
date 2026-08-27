@@ -97,7 +97,7 @@
                     <tbody id="list-aniversariantes-hoje">
                         <tr>
                             <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
-                                <i class="fa-solid fa-circle-notch spin"></i> Consultando a API...
+                                <span class="amicro-loader"><span></span><span></span><span></span></span> Consultando a API...
                             </td>
                         </tr>
                     </tbody>
@@ -138,7 +138,7 @@
                     <tbody id="list-aniversariantes-mes">
                         <tr>
                             <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 3rem;">
-                                <i class="fa-solid fa-circle-notch spin"></i> Carregando...
+                                <span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...
                             </td>
                         </tr>
                     </tbody>
@@ -151,26 +151,30 @@
     <div class="modal-overlay" id="modalNewLead">
         <div class="modal">
             <h2><i class="fa-solid fa-user-plus"></i> Cadastrar Paciente</h2>
-            <div class="form-group">
-                <label>Nome do Paciente</label>
-                <input type="text" id="nl-nome" placeholder="Ex: Maria da Silva">
+            <p class="modal-subtitle">Preencha os dados para registrar um novo lead no CRM.</p>
+            <div class="form-grid">
+                <div class="form-group full">
+                    <label>Nome do Paciente</label>
+                    <input type="text" id="nl-nome" placeholder="Ex: Maria da Silva">
+                </div>
+                <div class="form-group">
+                    <label>WhatsApp <span class="required">*</span></label>
+                    <input type="text" id="nl-telefone" placeholder="(61) 99999-9999">
+                </div>
+                <div class="form-group">
+                    <label>Data de Nascimento</label>
+                    <input type="date" id="lead-born" class="form-control" required>
+                </div>
+                <div class="form-group full">
+                    <label>Origem</label>
+                    <select id="lead-origem" class="form-control">
+                        <option value="Meta Ads">Meta Ads (Facebook/Insta)</option>
+                        <option value="Google Meu Negócio">Google Meu Negócio</option>
+                        <option value="Indicação">Indicação</option>
+                    </select>
+                </div>
             </div>
-            <div class="form-group">
-                <label>WhatsApp</label>
-                <input type="text" id="nl-telefone" placeholder="(61) 99999-9999">
-            </div>
-            <div class="form-group">
-                <label>Data de Nascimento</label>
-                <input type="date" id="lead-born" class="form-control" required>
-            </div>
-            <div class="form-group">
-                <label>Origem (Opcional)</label>
-                <select id="lead-origem" class="form-control">
-                    <option value="Meta Ads">Meta Ads (Facebook/Insta)</option>
-                    <option value="Google Meu Negócio">Google Meu Negócio</option>
-                    <option value="Indicação">Indicação</option>
-                </select>
-            </div>
+            <div class="modal-separator"></div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
                 <button class="btn-save" onclick="saveNewLead()">Salvar Lead</button>
@@ -240,7 +244,7 @@
             </form>
 
             <div class="integration-loader" id="integrationLoader">
-                <i class="fa-solid fa-circle-notch spin"></i> Chamando API da Vercel (Seguro)...
+                <span class="amicro-loader"><span></span><span></span><span></span></span> Chamando API da Vercel (Seguro)...
             </div>
 
             <div class="modal-actions" id="integrationActions">

@@ -1,3 +1,17 @@
+// === THEME MANAGER ===
+function initTheme() {
+    const savedTheme = localStorage.getItem('crm_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+}
+initTheme();
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('crm_theme', next);
+}
+
 // === DADOS DO KANBAN (LOCAL) ===
 let leads = [];
 let loggedUser = JSON.parse(localStorage.getItem('crm_user'));
@@ -60,13 +74,12 @@ function initApp() {
         startNotificationPolling();
         loadAudiences();
 
-        // Sincronização contínua do Kanban em tempo real para todos os atendentes
+        // SSE para sincronização instantânea; polling de 30s como fallback
+        initKanbanSSE();
         if (!window.kanbanSyncInterval) {
             window.kanbanSyncInterval = setInterval(() => {
-                if (loggedUser) {
-                    fetchLeadsFromServer(true);
-                }
-            }, 5000);
+                if (loggedUser) fetchLeadsFromServer(true);
+            }, 30000);
         }
         
         if (loggedUser.role === 'admin' || loggedUser.username === 'admin') {
@@ -226,6 +239,28 @@ function toggleTheme() {
         }
     }
 }
+// === KANBAN SSE — sincronização em tempo real ===
+function initKanbanSSE() {
+    if (window._kanbanSSE) return;
+    const es = new EventSource('/api/kanban/events');
+    window._kanbanSSE = es;
+
+    es.onmessage = (e) => {
+        try {
+            const { action } = JSON.parse(e.data);
+            if (loggedUser && ['created', 'updated', 'deleted'].includes(action)) {
+                fetchLeadsFromServer(true);
+            }
+        } catch (_) {}
+    };
+
+    es.onerror = () => {
+        es.close();
+        window._kanbanSSE = null;
+        setTimeout(initKanbanSSE, 10000);
+    };
+}
+
 // === CONEXÃO COM O BANCO DE DADOS ===
 async function fetchLeadsFromServer(silent = false) {
     try {
@@ -833,6 +868,7 @@ function updateKanbanCardDrag(event) {
         draggedCardId = state.id;
         sourceColumnId = leads.find(l => l.id === state.id).column;
         state.card.classList.add('dragging');
+        document.body.classList.add('kanban-dragging-body');
         state.card.setPointerCapture?.(state.pointerId);
 
         kanbanDragGhost = state.card.cloneNode(true);
@@ -843,8 +879,9 @@ function updateKanbanCardDrag(event) {
     }
 
     if (!kanbanDragGhost) return;
-    kanbanDragGhost.style.left = `${event.clientX - state.offsetX}px`;
-    kanbanDragGhost.style.top = `${event.clientY - state.offsetY}px`;
+    const x = event.clientX - state.offsetX;
+    const y = event.clientY - state.offsetY;
+    kanbanDragGhost.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(2deg) scale(1.04)`;
 
     // Destaca a coluna que está por baixo do cursor agora.
     const stack = document.elementsFromPoint(event.clientX, event.clientY);
@@ -862,12 +899,18 @@ function finishKanbanCardDrag(event) {
     const state = kanbanPointerDrag;
     if (state.moving) {
         state.card.classList.remove('dragging');
+        document.body.classList.remove('kanban-dragging-body');
         if (kanbanDragGhost) { kanbanDragGhost.remove(); kanbanDragGhost = null; }
         if (kanbanHoveredColumn) {
             const targetColumnId = kanbanHoveredColumn.id;
             kanbanHoveredColumn.classList.remove('kanban-drop-hover');
             kanbanHoveredColumn = null;
             drop(event, targetColumnId);
+        }
+    } else {
+        // Was a click (not a drag) — open lead profile
+        if (!event.target.closest('.card-options-btn') && !event.target.closest('.card-dropdown')) {
+            openLeadProfile(state.id);
         }
     }
     kanbanPointerDrag = null;
@@ -941,7 +984,7 @@ return;
 }
 
 // Mostra estado de carregando
-dropdown.innerHTML = `<div style="padding:0.8rem 1rem; color:var(--text-muted); font-size:0.85rem;"><i class="fa-solid fa-spinner fa-spin"></i> Buscando pacientes...</div>`;
+dropdown.innerHTML = `<div style="padding:0.8rem 1rem; color:var(--text-muted); font-size:0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Buscando pacientes...</div>`;
 dropdown.style.display = 'block';
 
 // Debounce: aguarda 500ms após o usuário parar de digitar para chamar a API
@@ -955,8 +998,9 @@ const pacientes = data.pacientes || [];
 
 // Também busca nos leads locais do CRM (instantâneo)
 const termoLower = termo.toLowerCase();
+const termoDigits = termo.replace(/\D/g, '');
 const doLeads = (leads || [])
-.filter(l => l.nome && l.nome.toLowerCase().includes(termoLower))
+.filter(l => (l.nome && l.nome.toLowerCase().includes(termoLower)) || (termoDigits.length >= 3 && (l.telefone || '').replace(/\D/g, '').includes(termoDigits)))
 .map(l => ({ nome: l.nome, telefone: l.telefone || '', fonte: 'CRM' }));
 
 // Junta resultados (Amigo App + CRM local), sem duplicatas
@@ -967,22 +1011,32 @@ const doAmigo = pacientes
 
 const todos = [...doLeads, ...doAmigo];
 
+const novoRow = `<div class="agx-pac-item agx-pac-new" onclick="document.getElementById('ag-patient-dropdown').style.display='none'; window.selectedPatientId=null;">
+<i class="fa-solid fa-plus" style="font-size:0.72rem;"></i> Cadastrar novo paciente${termo ? ': “' + termo.replace(/</g, '&lt;').trim() + '”' : ''}</div>`;
+
 if (todos.length === 0) {
-dropdown.innerHTML = `<div style="padding:0.8rem 1rem; color:var(--text-muted); font-size:0.85rem;"><i class="fa-solid fa-user-slash"></i> Nenhum paciente encontrado. Preencha para cadastrar.</div>`;
+dropdown.innerHTML = `<div style="padding:0.8rem 1rem; color:var(--text-muted); font-size:0.85rem;"><i class="fa-solid fa-user-slash"></i> Nenhum paciente encontrado.</div>` + novoRow;
 return;
 }
 
+const fmtBorn = (b) => {
+if (!b) return '';
+const s = String(b).split('T')[0];
+const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+return m ? ` · <i class="fa-regular fa-cake-candles" style="font-size:0.7rem;"></i> ${m[3]}/${m[2]}/${m[1]}` : '';
+};
+
 dropdown.innerHTML = todos.map(r => `
-<div onclick="selecionarPaciente('${r.nome.replace(/'/g, "\\'")}', '${(r.telefone || '').replace(/'/g, "\\'")}', '${r.id || ''}', '${(r.email || '').replace(/'/g, "\\'")}', '${(r.born || '').replace(/'/g, "\\'")}')"
-style="padding: 0.7rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); transition: background 0.15s;"
-onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
-<div style="font-weight: 600; color: var(--text-color);">${r.nome}</div>
-<div style="font-size: 0.8rem; color: var(--text-muted);">
-<i class="fa-solid fa-phone" style="font-size:0.7rem;"></i> ${r.telefone || 'Sem telefone'} 
-&nbsp;<span style="background: ${r.fonte === 'CRM' ? 'rgba(99,102,241,0.2)' : 'rgba(251,146,60,0.2)'}; color: ${r.fonte === 'CRM' ? 'var(--accent-primary)' : '#fb923c'}; font-size:0.7rem; padding: 1px 6px; border-radius: 4px;">${r.fonte}</span>
+<div class="agx-pac-item" onclick="selecionarPaciente('${r.nome.replace(/'/g, "\\'")}', '${(r.telefone || '').replace(/'/g, "\\'")}', '${r.id || ''}', '${(r.email || '').replace(/'/g, "\\'")}', '${(r.born || '').replace(/'/g, "\\'")}')"
+style="padding: 0.6rem 0.7rem; cursor: pointer; border-radius: 7px; transition: background 0.15s;"
+onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'">
+<div style="font-weight: 600; color: var(--text-main); font-size:0.85rem;">${r.nome}</div>
+<div style="font-size: 0.78rem; color: var(--text-muted); margin-top:1px;">
+<i class="fa-solid fa-phone" style="font-size:0.7rem;"></i> ${r.telefone || 'Sem telefone'}${fmtBorn(r.born)}
+&nbsp;<span style="background: ${r.fonte === 'CRM' ? 'color-mix(in srgb, var(--accent-primary) 18%, transparent)' : 'rgba(251,146,60,0.2)'}; color: ${r.fonte === 'CRM' ? 'var(--accent-primary)' : '#fb923c'}; font-size:0.68rem; padding: 1px 6px; border-radius: 4px;">${r.fonte}</span>
 </div>
 </div>
-`).join('');
+`).join('') + novoRow;
 
 } catch(e) {
 dropdown.innerHTML = `<div style="padding:0.8rem 1rem; color:var(--accent-danger); font-size:0.85rem;"><i class="fa-solid fa-triangle-exclamation"></i> Erro ao buscar. Tente novamente.</div>`;
@@ -1387,36 +1441,52 @@ function renderOrcamentoItemsList(id) {
     const container = document.getElementById('orc-items-list');
 
     if (items.length === 0) {
-        container.innerHTML = `<div style="color: var(--text-secondary); font-size: 0.85rem; padding: 0.5rem 0;">Nenhum procedimento orçado ainda.</div>`;
+        container.innerHTML = `<div class="orcx-empty"><i class="fa-regular fa-folder-open"></i><span>Nenhum procedimento orçado ainda.<br>Adicione o primeiro no formulário abaixo.</span></div>`;
         return;
     }
 
     container.innerHTML = items.map(item => {
         const valorFmt = item.valor ? formatCurrencyBRLValue(item.valor) : '0,00';
-        const descontoTxt = item.desconto ? ` &middot; ${item.desconto}% desconto` : '';
+        const descontoTxt = item.desconto ? ` &middot; <span class="orcx-disc">${item.desconto}% desconto</span>` : '';
+        const formaTxt = item.formaPagamento ? ` &middot; ${escapeHtml(item.formaPagamento)}` : '';
         const whenTxt = item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : '';
         const creatorHTML = item.created_by ? `
-            <div style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-secondary); opacity: 0.85; margin-top: 0.3rem;">
+            <div style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-muted); opacity: 0.9; margin-top: 0.35rem;">
                 ${typeof renderAvatarHTML === 'function' ? renderAvatarHTML(resolveDisplayName(item.created_by), avatarMap[item.created_by] || null, null, 16) : ''}
                 <span>${escapeHtml(resolveDisplayName(item.created_by))}${whenTxt ? ` em ${whenTxt}` : ''}</span>
             </div>
-        ` : (whenTxt ? `<div style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7; margin-top: 0.25rem;">${whenTxt}</div>` : '');
+        ` : (whenTxt ? `<div style="font-size: 0.75rem; color: var(--text-muted); opacity: 0.75; margin-top: 0.25rem;">${whenTxt}</div>` : '');
         const actions = (isAdmin && item.id !== 'legacy') ? `
-            <button class="btn-icon" title="Editar" onclick="editOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-info); padding: 0.25rem;"><i class="fa-solid fa-pen"></i></button>
-            <button class="btn-icon" title="Excluir" onclick="deleteOrcamentoItem('${item.id}')" style="background:none; border:none; cursor:pointer; color: var(--accent-danger); padding: 0.25rem;"><i class="fa-solid fa-trash"></i></button>
+            <button title="Editar" onclick="editOrcamentoItem('${item.id}')"><i class="fa-solid fa-pen"></i></button>
+            <button class="orcx-del" title="Excluir" onclick="deleteOrcamentoItem('${item.id}')"><i class="fa-solid fa-trash"></i></button>
         ` : '';
         return `
-            <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem;">
+            <div class="orcx-item">
                 <div>
-                    <div style="font-weight: 600;">${item.procedimento || '(sem nome)'}</div>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary);">R$ ${valorFmt}${descontoTxt}</div>
-                    ${item.condicoes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.15rem;">${item.condicoes}</div>` : ''}
+                    <div class="orcx-item-name">${item.procedimento || '(sem nome)'}</div>
+                    <div class="orcx-item-meta">R$ ${valorFmt}${descontoTxt}${formaTxt}</div>
+                    ${item.condicoes ? `<div class="orcx-item-cond">${item.condicoes}</div>` : ''}
                     ${creatorHTML}
                 </div>
-                <div style="display: flex; flex-shrink: 0;">${actions}</div>
+                <div class="orcx-item-actions">${actions}</div>
             </div>
         `;
     }).join('');
+}
+
+// Prévia do valor com desconto no modal de Orçamento (apenas visual).
+function orcUpdatePreview() {
+    const box = document.getElementById('orc-preview');
+    const out = document.getElementById('orc-preview-value');
+    if (!box || !out) return;
+    const valorEl = document.getElementById('orc-valor');
+    const descEl = document.getElementById('orc-desconto');
+    const valor = parseFloat(parseCurrencyBRLInput(valorEl ? valorEl.value : '')) || 0;
+    const desc = Math.min(Math.max(parseFloat(descEl ? descEl.value : '') || 0, 0), 100);
+    if (valor <= 0) { box.hidden = true; return; }
+    const final = valor * (1 - desc / 100);
+    out.textContent = 'R$ ' + final.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    box.hidden = false;
 }
 
 function openOrcamentoModal(id) {
@@ -1425,6 +1495,7 @@ function openOrcamentoModal(id) {
     document.getElementById('orc-lead-id').value = id;
     cancelEditOrcamentoItem();
     renderOrcamentoItemsList(id);
+    orcUpdatePreview();
     document.getElementById('modalOrcamento').classList.add('active');
 }
 
@@ -1433,11 +1504,13 @@ function cancelEditOrcamentoItem() {
     document.getElementById('orc-procedimento').value = '';
     document.getElementById('orc-valor').value = '';
     document.getElementById('orc-desconto').value = '';
+    document.getElementById('orc-forma-pagamento').value = '';
     document.getElementById('orc-condicoes').value = '';
     document.getElementById('orc-form-title').innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Procedimento';
     document.getElementById('orc-save-btn').innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Procedimento';
     document.getElementById('orc-save-btn').setAttribute('onclick', 'addOrcamentoItem()');
     document.getElementById('orc-cancel-edit-btn').style.display = 'none';
+    orcUpdatePreview();
 }
 
 function editOrcamentoItem(orcId) {
@@ -1451,11 +1524,15 @@ function editOrcamentoItem(orcId) {
     document.getElementById('orc-procedimento').value = item.procedimento || '';
     document.getElementById('orc-valor').value = item.valor ? formatCurrencyBRLValue(item.valor) : '';
     document.getElementById('orc-desconto').value = item.desconto || '';
+    document.getElementById('orc-forma-pagamento').value = item.formaPagamento || '';
     document.getElementById('orc-condicoes').value = item.condicoes || '';
     document.getElementById('orc-form-title').innerHTML = '<i class="fa-solid fa-pen"></i> Editar Procedimento';
     document.getElementById('orc-save-btn').innerHTML = '<i class="fa-solid fa-save"></i> Salvar Alterações';
     document.getElementById('orc-save-btn').setAttribute('onclick', 'updateOrcamentoItem()');
     document.getElementById('orc-cancel-edit-btn').style.display = 'inline-block';
+    orcUpdatePreview();
+    const formEl = document.querySelector('#modalOrcamento .orcx-form');
+    if (formEl) formEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 async function addOrcamentoItem() {
@@ -1465,6 +1542,7 @@ async function addOrcamentoItem() {
     // ("1000.00") pra continuar compatível com todo lugar que faz parseFloat(orc.valor).
     const valor = parseCurrencyBRLInput(document.getElementById('orc-valor').value);
     const desconto = document.getElementById('orc-desconto').value;
+    const formaPagamento = document.getElementById('orc-forma-pagamento').value;
     const condicoes = document.getElementById('orc-condicoes').value;
     if (!procedimento) return;
 
@@ -1475,7 +1553,7 @@ async function addOrcamentoItem() {
         const res = await fetch(`/api/leads/${id}/orcamentos`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ procedimento, valor, desconto, condicoes })
+            body: JSON.stringify({ procedimento, valor, desconto, formaPagamento, condicoes })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Erro ao adicionar orçamento');
@@ -1499,6 +1577,7 @@ async function updateOrcamentoItem() {
     const procedimento = document.getElementById('orc-procedimento').value;
     const valor = parseCurrencyBRLInput(document.getElementById('orc-valor').value);
     const desconto = document.getElementById('orc-desconto').value;
+    const formaPagamento = document.getElementById('orc-forma-pagamento').value;
     const condicoes = document.getElementById('orc-condicoes').value;
 
     const lead = leads.find(l => l.id === id);
@@ -1508,7 +1587,7 @@ async function updateOrcamentoItem() {
         const res = await fetch(`/api/leads/${id}/orcamentos/${orcId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ procedimento, valor, desconto, condicoes })
+            body: JSON.stringify({ procedimento, valor, desconto, formaPagamento, condicoes })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Erro ao editar orçamento');
@@ -1668,7 +1747,7 @@ function resetAgendamentoForm() {
         if (el) el.value = '';
     });
     const confirmBtn = document.querySelector('#integrationActions .btn-save');
-    if (confirmBtn) confirmBtn.innerText = "Agendar no Sistema";
+    if (confirmBtn) confirmBtn.innerText = "Enviar para o Amigo App →";
 }
 
 function openAgendamentoModal(cardId) {
@@ -1814,7 +1893,7 @@ function openEditAgendamentoModal() {
     if (placeSelect && att.place) placeSelect.value = att.place.id;
     
     const confirmBtn = document.querySelector('#integrationActions .btn-save');
-    if (confirmBtn) confirmBtn.innerText = "Atualizar no Amigo App";
+    if (confirmBtn) confirmBtn.innerText = "Atualizar no Amigo App →";
     
     document.getElementById('modalAgendamento').classList.add('active');
 }
@@ -1929,7 +2008,7 @@ async function confirmAgendamento() {
         
         // Reseta o botão de confirmação e id
         const confirmBtn = document.querySelector('#integrationActions .btn-save');
-        if (confirmBtn) confirmBtn.innerText = "Agendar no Sistema";
+        if (confirmBtn) confirmBtn.innerText = "Enviar para o Amigo App →";
         window.currentEditingAttendanceId = null;
         window.currentEditingAttendance = null;
         
@@ -1965,12 +2044,26 @@ function openSidebarFlyout(flyoutId, triggerId) {
     }
 
     const rect = trigger.getBoundingClientRect();
-    const gap = 8;
-    flyout.style.left = Math.round(rect.right + gap) + 'px';
+    const gap = 10;
+    const sidebar = trigger.closest('header');
+    // Mantém a sidebar aberta enquanto o flyout estiver visível — evita o
+    // "buraco" entre a barra recolhida e o flyout ao mover o mouse.
+    if (sidebar) sidebar.classList.add('sb-flyout-open');
+    // Ancora SEMPRE na borda da sidebar já expandida (232px = CSS
+    // header.sb-collapsed:hover { width: 232px }). Não medir getBoundingClientRect
+    // da sidebar aqui: a largura está em transição e mediria um valor menor,
+    // jogando o flyout por cima do menu.
+    const EXPANDED_SIDEBAR_W = 232;
+    const sidebarLeft = sidebar ? sidebar.getBoundingClientRect().left : 0;
+    const measuredRight = sidebar ? sidebar.getBoundingClientRect().right : rect.right;
+    // usa o maior entre a largura-alvo e a medida atual — nunca sob a barra
+    const anchorRight = Math.max(sidebarLeft + EXPANDED_SIDEBAR_W, measuredRight);
+    flyout.style.left = Math.round(anchorRight + gap) + 'px';
     flyout.style.top = Math.round(rect.top) + 'px';
     flyout.style.display = 'flex';
     flyout.style.flexDirection = 'column';
-    flyout.style.zIndex = '9999';
+    // Acima da sidebar (que fica em z-index 10000 quando expandida no hover).
+    flyout.style.zIndex = '10001';
 
     // Reinicia a animação de abertura toda vez (remove + força reflow + adiciona de novo).
     flyout.classList.remove('sb-flyout-visible');
@@ -1990,7 +2083,20 @@ function scheduleCloseSidebarFlyout(flyoutId) {
     sidebarFlyoutCloseTimers[flyoutId] = setTimeout(() => {
         const flyout = document.getElementById(flyoutId);
         if (flyout) flyout.style.display = 'none';
+        releaseSidebarFlyoutPin();
     }, 250);
+}
+
+// Só solta a sidebar quando NENHUM flyout de submenu está visível.
+function releaseSidebarFlyoutPin() {
+    const anyOpen = ['relacionamento-flyout', 'campanhas-flyout'].some(fid => {
+        const f = document.getElementById(fid);
+        return f && f.style.display && f.style.display !== 'none';
+    });
+    if (!anyOpen) {
+        const header = document.querySelector('header');
+        if (header) header.classList.remove('sb-flyout-open');
+    }
 }
 
 function cancelCloseSidebarFlyout(flyoutId) {
@@ -2010,10 +2116,13 @@ function scheduleCloseCampanhasFlyout() { scheduleCloseSidebarFlyout('campanhas-
 function cancelCloseCampanhasFlyout() { cancelCloseSidebarFlyout('campanhas-flyout'); }
 
 function switchTab(tabId) {
+    if (window.closeAllAirDatepickers) window.closeAllAirDatepickers();
     const relFlyout = document.getElementById('relacionamento-flyout');
     if (relFlyout) relFlyout.style.display = 'none';
     const campFlyout = document.getElementById('campanhas-flyout');
     if (campFlyout) campFlyout.style.display = 'none';
+    const sbHeader = document.querySelector('header');
+    if (sbHeader) sbHeader.classList.remove('sb-flyout-open');
 
     const tabTitles = {
         kanban: 'CRM Vendas',
@@ -2384,7 +2493,7 @@ async function startRelacionamentoCampaign(tipo) {
                 <span id="rel-bulk-progress-text-${tipo}" style="font-size: 0.8rem; color: var(--text-muted);">0 / ${recipients.length} processados</span>
             </div>
             <div style="height: 6px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; margin-bottom: 0.5rem;">
-                <div id="rel-bulk-progress-bar-${tipo}" style="height: 100%; width: 0%; background: var(--accent-primary); transition: width .2s;"></div>
+                <div id="rel-bulk-progress-bar-${tipo}" style="height: 100%; width: 100%; transform: scaleX(0); transform-origin: left center; background: var(--accent-primary); transition: transform .2s;"></div>
             </div>
             <div id="rel-bulk-log-${tipo}" style="max-height: 140px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 0.5rem;"></div>
         </div>
@@ -2592,7 +2701,7 @@ async function openUsuariosModal() {
 
 async function loadUsers() {
     const tbody = document.getElementById('usuarios-tbody');
-    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 1rem;"><i class="fa-solid fa-spinner spin"></i> Carregando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 1rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>';
     
     try {
         const res = await fetch('/api/users');
@@ -3035,7 +3144,7 @@ async function renderAgendaGrid() {
                     
                     const zIndex = 10 + index;
                     
-                    const inlineStyle = `grid-column: ${col}; grid-row: ${rowStart} / ${rowEnd}; width: calc(${widthPct}% - 4px); margin-left: ${leftPct}%; z-index: ${zIndex}; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); ${extraStyles}`;
+                    const inlineStyle = `grid-column: ${col}; grid-row: ${rowStart} / ${rowEnd}; width: calc(${widthPct}% - 4px); margin-left: ${leftPct}%; z-index: ${zIndex}; box-shadow: none; ${extraStyles}`;
                     
                     const html = `
                         <div class="agenda-block" style="${inlineStyle}" data-tooltip="${title} - ${subtitle}" onclick="openPatientDetailsModal('${att.id}', event)">
@@ -3067,7 +3176,7 @@ async function renderAgendaGrid() {
                 
                 const lineHtml = `
                     <div id="timeline-indicator" style="grid-row: ${rowStart}; grid-column: 1 / -1; position: relative; pointer-events: none; z-index: 50;">
-                        <div style="position: absolute; top: ${topPct}%; left: 0; right: 0; border-top: 1.5px solid #ef4444; box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);"></div>
+                        <div style="position: absolute; top: ${topPct}%; left: 0; right: 0; border-top: 1.5px solid #ef4444; box-shadow: none;"></div>
                         <div style="position: absolute; top: ${topPct}%; left: 0; transform: translateY(-50%); width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 6px solid #ef4444;"></div>
                     </div>
                 `;
@@ -3231,7 +3340,7 @@ async function uploadNovaPlanilha(event) {
 
     const btnLabel = event.target.previousElementSibling;
     const oldText = btnLabel.innerHTML;
-    btnLabel.innerHTML = '<i class="fa-solid fa-circle-notch spin"></i> Salvando...';
+    btnLabel.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando...';
 
     try {
         const res = await fetch('/api/aniversariantes/upload', {
@@ -3334,7 +3443,7 @@ async function openEquipeModal() {
     if (modal) modal.classList.add('active');
     const listEl = document.getElementById('equipe-list');
     if (!listEl) return;
-    listEl.innerHTML = '<div style="text-align:center; padding:1.5rem; color: var(--text-muted);"><i class="fa-solid fa-circle-notch spin"></i> Carregando...</div>';
+    listEl.innerHTML = '<div style="text-align:center; padding:1.5rem; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</div>';
 
     try {
         const res = await fetch('/api/users/presence');
@@ -3782,13 +3891,28 @@ async function fetchNotifications() {
                         else timeStr = n.created_at.split(' ')[1].slice(0,5);
                     }
                     
+                    // Tipo da notificação (só pra cor/ícone) — inferido da mensagem.
+                    let ntype = 'success';
+                    if (/novo lead/i.test(n.message)) ntype = 'lead';
+                    else if (/qualificad|\bIA\b/i.test(n.message)) ntype = 'ai';
+                    else if (/entrou no sistema|saiu do sistema|entrou na conversa/i.test(n.message)) ntype = 'user';
+
+                    // O ícone tipado já comunica o status — tira emoji/traço do começo da frase.
+                    let cleanMsg = n.message;
+                    try { cleanMsg = n.message.replace(/^[^\p{L}\p{N}("']+/u, '').trim() || n.message; } catch (e) {}
+
+                    const typeIcon = ntype === 'ai' ? 'fa-robot'
+                        : ntype === 'lead' ? 'fa-user-plus'
+                        : ntype === 'user' ? 'fa-right-to-bracket'
+                        : 'fa-check';
+
                     const iconHTML = n.avatar_url
-                        ? `<img src="${n.avatar_url}" alt="" style="width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0;">`
-                        : `<i class="fa-solid fa-check-circle" style="color: var(--accent-success); flex-shrink: 0;"></i>`;
+                        ? `<img class="notif-avatar" src="${n.avatar_url}" alt="">`
+                        : `<span class="notif-icon notif-icon--${ntype}"><i class="fa-solid ${typeIcon}"></i></span>`;
 
                     const item = document.createElement('div');
-                    item.style = "padding: 0.75rem; border-radius: 6px; background: var(--bg-card); color: var(--text-main); font-size: 0.85rem; border-left: 4px solid var(--accent-success); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.05);";
-                    item.innerHTML = `${iconHTML} <div><strong>${timeStr}</strong> - ${escapeHtml(n.message)}</div>`;
+                    item.className = 'notif-item';
+                    item.innerHTML = `${iconHTML}<div class="notif-body"><span class="notif-time">${timeStr}</span><p class="notif-text">${escapeHtml(cleanMsg)}</p></div>`;
                     listContainer.prepend(item);
                 }
                 
@@ -3830,7 +3954,7 @@ function toggleNotificationsMenu(event) {
         // Cresce pra direita a partir do sino (não pra esquerda — senão, com o sino
         // perto da sidebar, o painel de 320px voltava a cobrir a própria sidebar).
         // Com limites pra nunca estourar nenhuma borda da tela.
-        const panelWidth = 320;
+        const panelWidth = 340;
         const margin = 12;
         let left = anchor.left;
         if (left + panelWidth > window.innerWidth - margin) {
@@ -3851,6 +3975,24 @@ function toggleNotificationsMenu(event) {
     }
 }
 
+// Fecha o painel de notificações ao clicar fora dele (ou apertar Esc).
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('notifications-dropdown');
+    if (!menu || menu.style.display === 'none' || !menu.style.display) return;
+    if (menu.contains(e.target)) return;
+    // O próprio sino já abre/fecha pelo toggle — não interferir.
+    if (e.target.closest('.sb-icon-btn[title="Notificações"]')) return;
+    menu.style.display = 'none';
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const menu = document.getElementById('notifications-dropdown');
+    if (menu && menu.style.display && menu.style.display !== 'none') {
+        menu.style.display = 'none';
+    }
+});
+
 function clearNotificationsBadge() {
     unreadNotifications = 0;
     const badge = document.getElementById('nav-notification-badge');
@@ -3865,7 +4007,7 @@ async function clearAllNotifications() {
         await fetch('/api/clear-notif', { method: 'POST' });
         const listContainer = document.getElementById('notifications-list');
         if (listContainer) {
-            listContainer.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Nenhuma notificação ainda.</div>';
+            listContainer.innerHTML = '<div class="notif-empty">Nenhuma notificação ainda.</div>';
         }
         seenNotifications.clear();
         clearNotificationsBadge();
@@ -3923,45 +4065,59 @@ window.customConfirm = function(message, title = 'Confirmação') {
     });
 };
 
-const initFlatpickr = () => {
-    if (typeof flatpickr !== "undefined") {
-        flatpickr("input[type=date]", {
-            locale: "pt",
-            dateFormat: "Y-m-d",
-            onChange: function(selectedDates, dateStr, instance) {
-                // Seta o valor visualmente / no DOM
-                instance.element.value = dateStr;
-                
-                // Puxa o onchange original (que deve ser jumpToDate(this.value))
-                const onChangeAttr = instance.element.getAttribute('onchange');
+const airDatepickerLocalePt = {
+    days: ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'],
+    daysShort: ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'],
+    daysMin: ['Do','Se','Te','Qu','Qu','Se','Sa'],
+    months: ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'],
+    monthsShort: ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'],
+    today: 'Hoje', clear: 'Limpar', dateFormat: 'dd/MM/yyyy', timeFormat: 'HH:mm', firstDay: 0
+};
+
+const initAirDatepicker = () => {
+    if (typeof AirDatepicker === "undefined") return;
+    document.querySelectorAll('input[type=date]').forEach(input => {
+        if (input._adpInstance) return;
+        input._adpInstance = new AirDatepicker(input, {
+            locale: airDatepickerLocalePt,
+            dateFormat: 'yyyy-MM-dd',
+            autoClose: true,
+            onSelect({ formattedDate, datepicker }) {
+                const onChangeAttr = datepicker.$el.getAttribute('onchange');
                 if (onChangeAttr) {
-                    // Substitui o this.value pela data em string
-                    const executableStr = onChangeAttr.replace(/this.value/g, "'" + dateStr + "'");
-                    try {
-                        eval(executableStr);
-                    } catch(e) {
-                        console.error('Error executing flatpickr onchange:', e);
-                    }
+                    const executableStr = onChangeAttr.replace(/this\.value/g, "'" + formattedDate + "'");
+                    try { eval(executableStr); } catch(e) { console.error('AirDatepicker onchange error:', e); }
                 } else {
-                    instance.element.dispatchEvent(new Event('change', { bubbles: true }));
+                    datepicker.$el.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             }
         });
-    }
+        // Prevent browser's native date picker from opening alongside Air Datepicker
+        input.type = 'text';
+        input.readOnly = true;
+    });
 };
+window._initAirDatepicker = initAirDatepicker;
 if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initFlatpickr);
+    document.addEventListener("DOMContentLoaded", initAirDatepicker);
 } else {
-    initFlatpickr();
+    initAirDatepicker();
 }
-window.addEventListener("DOMContentLoaded", () => {
-    if (typeof flatpickr !== "undefined") {
-        flatpickr("input[type=date]", {
-            locale: "pt",
-            dateFormat: "Y-m-d"
-        });
-    }
-});
+
+// Fecha qualquer Air Datepicker aberto (usado ao clicar fora e ao trocar de aba)
+window.closeAllAirDatepickers = () => {
+    document.querySelectorAll('input').forEach(inp => {
+        if (inp._adpInstance && inp._adpInstance.visible) inp._adpInstance.hide();
+    });
+};
+
+// Clicar fora do calendário (ou do botão que o abre) fecha o datepicker.
+// O Air Datepicker não fecha sozinho quando é aberto via .show() programático.
+document.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.air-datepicker')) return;
+    if (e.target.closest('[data-adp-trigger]')) return;
+    window.closeAllAirDatepickers();
+}, true);
 
 // === DASHBOARD PRESET / DATE-RANGE HELPERS ===
 let dashCustomRange = null; // { start: Date, end: Date } or null
@@ -3987,30 +4143,24 @@ function setDashPreset(btn, preset) {
 }
 
 function openDashDatepicker(inputEl) {
-    if (dashFpInstance) { dashFpInstance.open(); return; }
-    dashFpInstance = flatpickr(inputEl, {
-        mode: 'range',
-        dateFormat: 'd/m/Y',
-        locale: 'pt',
-        allowInput: false,
-        disableMobile: true,
-        onChange: function(selectedDates) {
-            if (selectedDates.length === 2) {
-                dashCustomRange = { start: selectedDates[0], end: selectedDates[1] };
+    if (dashFpInstance) { dashFpInstance.show(); return; }
+    dashFpInstance = new AirDatepicker(inputEl, {
+        locale: airDatepickerLocalePt,
+        dateFormat: 'dd/MM/yyyy',
+        range: true,
+        multipleDatesSeparator: ' – ',
+        onSelect({ date }) {
+            if (Array.isArray(date) && date.length === 2) {
+                dashCustomRange = { start: date[0], end: date[1] };
                 dashActivePeriod = 'custom';
-
-                // Deactivate preset buttons
                 document.querySelectorAll('.dash-preset-btn').forEach(b => b.classList.remove('active'));
-
-                // Show clear X
                 const clearBtn = document.getElementById('dash-daterange-clear');
                 if (clearBtn) clearBtn.style.display = '';
-
                 renderDashboard();
             }
         }
     });
-    dashFpInstance.open();
+    dashFpInstance.show();
 }
 
 function clearDashCustomRange() {
@@ -4704,9 +4854,6 @@ function renderDashboard() {
     const rankingBody = el('dash-ranking-body');
     if (rankingBody) {
         const medals = ['🥇', '🥈', '🥉'];
-        // Barra proporcional ao maior número de leads do ranking — antes usava o
-        // "leads" de quem tinha mais receita, o que deixava as barras sem sentido
-        // quando a receita empatava (ex.: tudo zerado).
         const maxLeads = Math.max(...rankingArray.map(r => r.leads), 1);
         rankingBody.innerHTML = rankingArray.length === 0
             ? '<div style="color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 1rem;">Nenhum atendente ainda.</div>'
@@ -4714,18 +4861,40 @@ function renderDashboard() {
                 const conv = r.leads > 0 ? Math.round((r.agendamentos / r.leads) * 100) : 0;
                 const barPct = Math.round((r.leads / maxLeads) * 100);
                 const medal = medals[idx] || (idx + 1) + 'º';
-                return `<div style="display: flex; align-items: center; gap: 1rem; padding: 0.85rem 1rem; background: var(--header-btn-bg); border-radius: 12px; border: 1px solid var(--header-btn-border);">
-                    <div style="font-size: 1.3rem; min-width: 2rem; text-align: center;">${medal}</div>
-                    <div style="flex: 1; min-width: 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.35rem;">
-                            <span style="font-weight: 700; color: var(--text-main); font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;">${r.name}</span>
-                            <span style="font-size: 0.78rem; color: var(--text-muted);">${r.leads} leads &middot; ${conv}% conversão</span>
+                
+                const displayName = typeof resolveDisplayName === 'function' ? resolveDisplayName(r.name) : r.name;
+                const avatarUrl = (typeof avatarMap !== 'undefined' && avatarMap[r.name]) ? avatarMap[r.name] : null;
+                
+                let avatarHtml = '';
+                if (typeof renderAvatarHTML === 'function') {
+                    avatarHtml = renderAvatarHTML(displayName, avatarUrl, null, 32);
+                } else {
+                    const charArray = Array.from(displayName.trim());
+                    let initial1 = charArray[0] || '';
+                    let initial2 = charArray[1] || '';
+                    if (initial1.match(/[\uD800-\uDFFF]/)) { initial1 = 'U'; initial2 = 'S'; }
+                    const initials = (initial1 + initial2).toUpperCase();
+                    avatarHtml = `<div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-main); color: var(--text-main); display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; border: 1px solid var(--border-color);">${initials}</div>`;
+                }
+
+                return `<div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem; background: var(--header-btn-bg); border-radius: 12px; border: 1px solid var(--header-btn-border);">
+                    <div style="font-size: 1.1rem; width: 1.5rem; text-align: center; flex-shrink: 0;">${medal}</div>
+                    
+                    <div style="flex-shrink: 0;">
+                        ${avatarHtml}
+                    </div>
+
+                    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;">
+                            <span style="font-weight: 700; color: var(--text-main); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;" title="${displayName}">${displayName}</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0;">${r.leads} leads &middot; ${conv}% conv.</span>
                         </div>
-                        <div style="height: 5px; background: var(--header-btn-bg); border-radius: 99px; overflow: hidden;">
+                        <div style="height: 5px; background: var(--border-color); border-radius: 99px; overflow: hidden;">
                             <div style="height: 100%; width: ${barPct}%; background: var(--accent-primary); border-radius: 99px;"></div>
                         </div>
                     </div>
-                    <div style="text-align: right; white-space: nowrap;">
+                    
+                    <div style="text-align: right; white-space: nowrap; flex-shrink: 0; margin-left: 0.25rem;">
                         <div style="font-weight: 700; color: #10b981; font-size: 0.9rem;">R$ ${r.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                         <div style="font-size: 0.72rem; color: var(--text-muted);">${r.agendamentos} agend.</div>
                     </div>
@@ -4779,7 +4948,7 @@ function renderDashboardGoal(receitaTotal) {
     const pct = Math.min(100, Math.max(0, (receitaTotal / cachedDashGoal) * 100));
     const bar = document.getElementById('dash-goal-bar');
     if (bar) {
-        bar.style.width = pct + '%';
+        bar.style.transform = 'scaleX(' + (pct / 100).toFixed(4) + ')';
         // Gradiente azul -> verde conforme a receita se aproxima da meta
         const start = [59, 130, 246]; // azul
         const end = [16, 185, 129]; // verde
@@ -4853,7 +5022,7 @@ let cachedUnidades = [];
 
 async function loadUnidades() {
     const listEl = document.getElementById('unidades-list');
-    if (listEl) listEl.innerHTML = `<div style="text-align:center; padding: 1rem 0; color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando...</div>`;
+    if (listEl) listEl.innerHTML = `<div style="text-align:center; padding: 1rem 0; color: var(--text-muted); font-size: 0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</div>`;
 
     try {
         const res = await fetch('/api/unidades');
@@ -5032,6 +5201,10 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     const ctxLeads = document.getElementById('leadsChart');
     if (ctxLeads) {
         if (leadsChartInst) leadsChartInst.destroy();
+        const leadsGrad = ctxLeads.getContext('2d').createLinearGradient(0, 0, 0, ctxLeads.offsetHeight || 220);
+        leadsGrad.addColorStop(0,   'rgba(167, 139, 250, 0.38)');
+        leadsGrad.addColorStop(0.65,'rgba(167, 139, 250, 0.08)');
+        leadsGrad.addColorStop(1,   'rgba(167, 139, 250, 0)');
         leadsChartInst = new Chart(ctxLeads, {
             type: 'line',
             data: {
@@ -5039,27 +5212,62 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 datasets: [{
                     label: 'Novos Leads',
                     data: counts,
-                    borderColor: '#60a5fa',
-                    backgroundColor: (ctx) => {
-                        const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 260);
-                        gradient.addColorStop(0, 'rgba(96,165,250,0.35)');
-                        gradient.addColorStop(1, 'rgba(96,165,250,0)');
-                        return gradient;
-                    },
-                    tension: 0.45,
+                    borderColor: '#a78bfa',
+                    tension: 0.4,
                     fill: true,
-                    pointBackgroundColor: '#60a5fa',
-                    pointRadius: 4,
+                    backgroundColor: leadsGrad,
+                    pointBackgroundColor: '#a78bfa',
+                    pointBorderColor: '#ffffff',
+                    pointBorderWidth: 2,
+                    pointRadius: 0,
                     pointHoverRadius: 6,
                     borderWidth: 2
                 }]
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: { 
+                    legend: { display: false }, 
+                    tooltip: { 
+                        backgroundColor: 'rgba(9, 9, 11, 0.95)',
+                        titleColor: '#a1a1aa',
+                        bodyColor: '#fafafa',
+                        borderColor: 'rgba(39, 39, 42, 1)',
+                        borderWidth: 1,
+                        padding: 12,
+                        cornerRadius: 8,
+                        displayColors: true,
+                        boxPadding: 6,
+                        usePointStyle: true,
+                        titleFont: { size: 12, weight: 'normal', family: 'Inter, sans-serif' },
+                        bodyFont: { size: 14, weight: 'bold', family: 'Inter, sans-serif' }
+                    } 
+                },
                 scales: {
-                    x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 } } },
-                    y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 }, stepSize: 1 }, beginAtZero: true }
+                    x: { 
+                        grid: { display: false, drawBorder: false }, 
+                        ticks: { 
+                            color: 'rgba(255, 255, 255, 0.5)', 
+                            font: { size: 11 },
+                            maxTicksLimit: 5, // Sparse x-axis labels
+                            maxRotation: 0
+                        },
+                        border: { display: false }
+                    },
+                    y: { 
+                        grid: { 
+                            color: 'rgba(255, 255, 255, 0.05)', // Super subtle grid
+                            drawBorder: false,
+                            borderDash: [5, 5] // Dashed lines
+                        }, 
+                        ticks: { display: false }, // Hide Y-axis numbers completely
+                        beginAtZero: true,
+                        border: { display: false }
+                    }
                 }
             }
         });
@@ -5077,30 +5285,118 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         else if (l.column === 'col-perdido') colPerd++;
     });
 
-    const ctxFunnel = document.getElementById('funnelChart');
-    if (ctxFunnel) {
-        if (funnelChartInst) funnelChartInst.destroy();
-        funnelChartInst = new Chart(ctxFunnel, {
-            type: 'bar',
-            data: {
-                labels: ['Entrada', 'Contatado', 'Orçado', 'Agendado', 'Ganho', 'Perdido'],
-                datasets: [{
-                    label: 'Quantidade',
-                    data: [colEnt, colCont, colOrc, colAgen, colGanho, colPerd],
-                    backgroundColor: ['rgba(96,165,250,0.8)', 'rgba(245,158,11,0.8)', 'rgba(56,189,248,0.8)', 'rgba(167,139,250,0.8)', 'rgba(16,185,129,0.8)', 'rgba(239,68,68,0.8)'],
-                    borderRadius: 8,
-                    borderSkipped: false
-                }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
-                scales: {
-                    x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
-                    y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 }, stepSize: 1 }, beginAtZero: true }
-                }
+    const funnelContainer = document.getElementById('funnelChart');
+    if (funnelContainer) {
+        if (funnelChartInst) { funnelChartInst.destroy(); funnelChartInst = null; }
+        
+        funnelContainer.innerHTML = '';
+        funnelContainer.style.position = 'relative';
+        funnelContainer.style.display = 'flex';
+        funnelContainer.style.flexDirection = 'row';
+        
+        const data = [
+            { label: 'Entrada', value: colEnt },
+            { label: 'Contatado', value: colCont },
+            { label: 'Orçado', value: colOrc },
+            { label: 'Agendado', value: colAgen },
+            { label: 'Ganho', value: colGanho }
+        ];
+
+        const n = data.length;
+        const formatValue = (val) => val >= 1000 ? (val/1000).toFixed(1).replace('.0','') + 'k' : val.toString();
+        const maxVal = Math.max(...data.map(d => d.value), 1);
+
+        let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
+            <defs>
+                <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%"   stop-color="#c4b5fd"/>
+                    <stop offset="100%" stop-color="#7c3aed"/>
+                </linearGradient>
+            </defs>`;
+        
+        const w = 100 / n;
+        
+        // Define multipliers and opacities for the 3 layers
+        const layers = [
+            { mult: 1.0, op: 0.15 },
+            { mult: 0.65, op: 0.35 },
+            { mult: 0.3, op: 0.8 }
+        ];
+        
+        // Calculate heights at boundaries (x = 0, w, 2w... 5w)
+        const H = [];
+        for (let i = 0; i < n; i++) {
+            // max height is 60 (to leave room for labels at top and bottom)
+            H.push( Math.max((data[i].value / maxVal) * 60, 4) );
+        }
+        // Flat segment at the end
+        H.push(H[n-1]);
+        
+        layers.forEach((layer, lIdx) => {
+            let d = `M 0 ${50 - (H[0] * layer.mult)/2} `;
+            
+            // Top curve
+            for(let i=0; i<n; i++) {
+                const x_start = i * w;
+                const x_end = (i+1) * w;
+                const y_start = 50 - (H[i] * layer.mult)/2;
+                const y_end = 50 - (H[i+1] * layer.mult)/2;
+                d += `C ${(x_start + x_end)/2} ${y_start}, ${(x_start + x_end)/2} ${y_end}, ${x_end} ${y_end} `;
             }
+            
+            // Line down at the right edge
+            d += `L 100 ${50 + (H[n] * layer.mult)/2} `;
+            
+            // Bottom curve (backwards)
+            for(let i=n-1; i>=0; i--) {
+                const x_start = i * w;
+                const x_end = (i+1) * w;
+                const y_start = 50 + (H[i] * layer.mult)/2;
+                const y_end = 50 + (H[i+1] * layer.mult)/2;
+                d += `C ${(x_start + x_end)/2} ${y_end}, ${(x_start + x_end)/2} ${y_start}, ${x_start} ${y_start} `;
+            }
+            
+            d += `Z`;
+            
+            svgHtml += `<path d="${d}" fill="url(#funnelGrad)" opacity="${layer.op}" style="animation: funnel-fade-in 0.6s ease forwards; animation-delay: ${lIdx * 0.15}s; opacity: 0;" />`;
         });
+        
+        // Dividers
+        for(let i=1; i<n; i++) {
+            const x = i * w;
+            svgHtml += `<line x1="${x}" y1="0" x2="${x}" y2="100" stroke="var(--dash-funnel-sep)" stroke-width="0.5" />`;
+        }
+        
+        svgHtml += `</svg>`;
+        
+        let labelsHtml = `<div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none;">`;
+        
+        for (let i = 0; i < n; i++) {
+            const x_c = (i + 0.5) * w;
+            const perc = Math.round((data[i].value / maxVal) * 100) + '%';
+            const dispVal = formatValue(data[i].value);
+            const delay = i * 0.1;
+            
+            labelsHtml += `
+                <!-- Top Value Label -->
+                <div style="position: absolute; top: 5%; left: ${x_c}%; transform: translateX(-50%); font-weight: 700; font-size: 0.95rem; color: var(--text-main); animation: funnel-fade-in-up 0.4s ease forwards; animation-delay: ${delay}s; opacity: 0;">
+                    ${dispVal}
+                </div>
+                
+                <!-- Center Badge (Pill) -->
+                <div style="position: absolute; top: 50%; left: ${x_c}%; transform: translate(-50%, -50%); background: #ffffff; color: #000000; font-size: 0.75rem; font-weight: 800; padding: 0.2rem 0.65rem; border-radius: 999px; box-shadow: none; animation: funnel-zoom-in 0.4s ease forwards; animation-delay: ${delay + 0.2}s; opacity: 0;">
+                    ${perc}
+                </div>
+                
+                <!-- Bottom Stage Label -->
+                <div style="position: absolute; bottom: 5%; left: ${x_c}%; transform: translateX(-50%); font-size: 0.8rem; font-weight: 500; color: var(--text-muted); animation: funnel-fade-in-up 0.4s ease forwards; animation-delay: ${delay + 0.1}s; opacity: 0; white-space: nowrap;">
+                    ${data[i].label}
+                </div>
+            `;
+        }
+        
+        labelsHtml += `</div>`;
+        funnelContainer.innerHTML = svgHtml + labelsHtml;
     }
 
     // Origem Doughnut Chart
@@ -5115,6 +5411,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
             ctxOrigem.style.display = 'none';
         } else {
             ctxOrigem.style.display = '';
+
             origemChartInst = new Chart(ctxOrigem, {
                 type: 'doughnut',
                 data: {
@@ -5123,12 +5420,15 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                         data: origemValues,
                         backgroundColor: origemColors.slice(0, origemLabels.length),
                         borderWidth: 0,
+                        borderColor: 'transparent',
+                        borderRadius: 8,
+                        spacing: 2,
                         hoverOffset: 6
                     }]
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    cutout: '68%',
+                    cutout: '72%',
                     plugins: { legend: { display: false }, tooltip: { mode: 'index' } }
                 }
             });
@@ -5298,6 +5598,29 @@ function showDispatchConfirmModal({ templateName, category, recipientCount, cost
     });
 }
 
+// Sincroniza os chips de "tempo de resposta" com o valor guardado no input hidden.
+function setAiDelay(btn) {
+    const value = btn ? btn.getAttribute('data-delay') : '0';
+    const hidden = document.getElementById('whatsapp-ai-delay');
+    if (hidden) hidden.value = value;
+    document.querySelectorAll('#whatsapp-ai-delay-chips .aix-chip').forEach(c => c.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+}
+
+function applyAiDelayToChips(seconds) {
+    const s = String(parseInt(seconds, 10) || 0);
+    const hidden = document.getElementById('whatsapp-ai-delay');
+    if (hidden) hidden.value = s;
+    const chips = document.querySelectorAll('#whatsapp-ai-delay-chips .aix-chip');
+    let matched = false;
+    chips.forEach(c => {
+        const on = c.getAttribute('data-delay') === s;
+        c.classList.toggle('active', on);
+        if (on) matched = true;
+    });
+    if (!matched && chips[0]) chips[0].classList.add('active');
+}
+
 async function openWhatsappAiSettingsModal() {
     try {
         const [toggleRes, contextRes] = await Promise.all([
@@ -5308,6 +5631,7 @@ async function openWhatsappAiSettingsModal() {
         const contextJson = await contextRes.json();
         document.getElementById('whatsapp-ai-global-toggle').checked = !!toggleJson.enabled;
         document.getElementById('whatsapp-ai-context-textarea').value = contextJson.context || '';
+        applyAiDelayToChips(toggleJson.delaySeconds);
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -5317,12 +5641,13 @@ async function openWhatsappAiSettingsModal() {
 async function saveWhatsappAiSettings() {
     const enabled = document.getElementById('whatsapp-ai-global-toggle').checked;
     const context = document.getElementById('whatsapp-ai-context-textarea').value;
+    const delaySeconds = parseInt((document.getElementById('whatsapp-ai-delay') || {}).value, 10) || 0;
     try {
         const [toggleRes, contextRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled })
+                body: JSON.stringify({ enabled, delaySeconds })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',
@@ -5475,12 +5800,12 @@ async function startCampaign() {
         repeatedCount = result.repeatedCount;
     } catch (e) {
         console.error('Não foi possível checar elegibilidade dos leads antes da campanha:', e);
-        alert('Não foi possível verificar quais leads são elegíveis pra essa campanha. Por segurança, o disparo foi cancelado — tente novamente.');
+        await customAlert('Não foi possível verificar quais leads são elegíveis pra essa campanha. Por segurança, o disparo foi cancelado — tente novamente.', 'Disparo cancelado');
         return;
     }
 
     if (targetLeads.length === 0) {
-        alert("Nenhum lead elegível: todos já receberam esse template, nunca conversaram por WhatsApp, ou pediram pra não receber campanhas.");
+        await customAlert("Nenhum lead elegível: todos já receberam esse template, nunca conversaram por WhatsApp, ou pediram pra não receber campanhas.", 'Nenhum lead elegível');
         return;
     }
 
@@ -5503,7 +5828,7 @@ async function startCampaign() {
     }
     confirmMsg += '\nContinuar?';
 
-    if (!confirm(confirmMsg)) {
+    if (!await customConfirm(confirmMsg, 'Disparar Campanha')) {
         return;
     }
 
@@ -5532,11 +5857,11 @@ async function dispatchTemplateCampaign(recipients, opts) {
 
     const originalBtnHtml = btn.innerHTML;
     btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Disparando...';
+    btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Disparando...';
     logBox.innerHTML = `<div>Iniciando campanha para ${recipients.length} leads...</div>`;
     statusText.innerText = "Em progresso...";
     statusText.style.color = "var(--accent-info)";
-    progressBar.style.width = "0%";
+    progressBar.style.transform = 'scaleX(0)';
 
     let successCount = 0;
     let failCount = 0;
@@ -5588,7 +5913,7 @@ async function dispatchTemplateCampaign(recipients, opts) {
         }
 
         const pct = Math.round(((i + 1) / recipients.length) * 100);
-        progressBar.style.width = `${pct}%`;
+        progressBar.style.transform = `scaleX(${(pct / 100).toFixed(3)})`;
         progressText.innerText = `${i + 1} / ${recipients.length} processados`;
         logBox.scrollTop = logBox.scrollHeight;
 
@@ -5641,7 +5966,7 @@ const TEMPLATE_STATUS_INFO = {
 async function loadWhatsappTemplates() {
     const listEl = document.getElementById('templates-list');
     const selectEl = document.getElementById('campaign-template-select');
-    if (listEl) listEl.innerHTML = `<div class="utm-empty-state" style="flex: 1; justify-content: center;"><i class="fa-solid fa-circle-notch fa-spin" style="font-size: 1.6rem;"></i><span>Carregando templates...</span></div>`;
+    if (listEl) listEl.innerHTML = `<div class="utm-empty-state" style="flex: 1; justify-content: center;"><span class="amicro-loader" style="font-size: 1.6rem;"><span></span><span></span><span></span></span><span>Carregando templates...</span></div>`;
 
     try {
         const res = await fetch('/api/whatsapp/templates');
@@ -5803,31 +6128,796 @@ window.triggerCardAction = function(action) {
     } else if (action === 'excluir') {
         deleteLead(leadId);
     }
-}
+};
 
 function showToast(message, type = 'success', duration = 3500) {
-    const iconMap = {
-        success: 'fa-circle-check',
-        error:   'fa-circle-xmark',
-        warning: 'fa-triangle-exclamation',
-        info:    'fa-circle-info',
-    };
     const container = document.getElementById('toast-container');
     if (!container) return;
 
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.innerHTML =
-        `<span class="toast-icon"><i class="fa-solid ${iconMap[type] || iconMap.info}"></i></span>` +
-        `<span class="toast-msg">${message}</span>`;
-
+    toast.className = `toast toast--${type}`;
+    toast.textContent = message;
     container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('toast--visible'));
 
     const dismiss = () => {
-        toast.classList.add('is-leaving');
-        toast.addEventListener('animationend', () => toast.remove(), { once: true });
+        toast.classList.remove('toast--visible');
+        toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+        setTimeout(() => toast.remove(), 400);
     };
-
     const timer = setTimeout(dismiss, duration);
     toast.addEventListener('click', () => { clearTimeout(timer); dismiss(); });
 }
+
+// Pause all polling when the tab is backgrounded; resume when foregrounded.
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        ['kanbanSyncInterval', 'dashPollingInterval', 'chatPollingInterval',
+         'globalChatCheckInterval', 'heartbeatInterval'].forEach(key => {
+            clearInterval(window[key]);
+            window[key] = null;
+        });
+    } else {
+        if (loggedUser && !window.kanbanSyncInterval) {
+            window.kanbanSyncInterval = setInterval(() => {
+                if (loggedUser) fetchLeadsFromServer(true);
+            }, 5000);
+        }
+        if (!window.globalChatCheckInterval) {
+            window.globalChatCheckInterval = setInterval(() => {
+                if (typeof loadChats === 'function') loadChats(true);
+                if (window.currentActiveChat && document.getElementById('view-chat')?.style.display !== 'none') {
+                    if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
+                }
+            }, 6000);
+        }
+        startHeartbeat();
+    }
+});
+
+// === LEAD PROFILE PANEL ===
+const KANBAN_COLUMNS = {
+    'col-entrada':     { label: 'Novo Lead',    color: 'var(--accent-primary)', icon: 'fa-star' },
+    'col-contatado':   { label: 'Contatado',    color: '#60a5fa',               icon: 'fa-phone' },
+    'col-orcado':      { label: 'Orçado',       color: 'var(--accent-warning)', icon: 'fa-file-invoice-dollar' },
+    'col-agendado':    { label: 'Agendado',     color: 'var(--accent-success)', icon: 'fa-calendar-check' },
+    'col-ganho':       { label: 'Ganho',        color: '#34d399',               icon: 'fa-trophy' },
+    'col-perdido':     { label: 'Perdido',      color: 'var(--accent-danger)',  icon: 'fa-circle-xmark' },
+    'col-atendimento': { label: 'Em Atendimento', color: '#c084fc',             icon: 'fa-headset' },
+};
+
+let _lppCurrentLeadId = null;
+
+function lppOpenChat() {
+    const lead = leads.find(l => l.id === _lppCurrentLeadId);
+    if (!lead) return;
+    closeLeadProfile();
+    openLeadChat(lead.telefone, lead.nome);
+}
+
+function lppCopyPhone(event, phone) {
+    event.stopPropagation();
+    navigator.clipboard.writeText(phone).then(() => {
+        const btn = event.currentTarget;
+        btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        btn.classList.add('lpp-copy-phone--copied');
+        setTimeout(() => {
+            btn.innerHTML = '<i class="fa-regular fa-copy"></i>';
+            btn.classList.remove('lpp-copy-phone--copied');
+        }, 1800);
+    });
+}
+
+function lppInitials(name) {
+    if (!name) return '?';
+    const parts = name.trim().split(/\s+/);
+    return (parts[0][0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
+}
+
+function lppFormatDate(str) {
+    if (!str) return null;
+    const d = new Date(str.includes('T') ? str : str + 'T12:00:00');
+    if (isNaN(d)) return null;
+    return d.toLocaleDateString('pt-BR');
+}
+
+function lppFormatDateTime(str) {
+    if (!str) return null;
+    // created_at vem em UTC sem 'Z' — adicionamos 'Z' para o browser interpretar corretamente
+    const normalized = str.includes('T') ? str : str.replace(' ', 'T') + 'Z';
+    const d = new Date(normalized);
+    if (isNaN(d)) return null;
+    return d.toLocaleString('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+}
+
+function lppRelativeTime(str) {
+    if (!str) return null;
+    const d = new Date(str.includes('T') ? str : str + 'T12:00:00');
+    if (isNaN(d)) return null;
+    const diff = Date.now() - d.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return 'hoje';
+    if (days === 1) return 'ontem';
+    return `há ${days} dias`;
+}
+
+function lppBirthdayInfo(bornStr) {
+    if (!bornStr) return null;
+    const born = new Date(bornStr.includes('T') ? bornStr : bornStr + 'T12:00:00');
+    if (isNaN(born)) return null;
+    const today = new Date();
+    const age = today.getFullYear() - born.getFullYear();
+    const nextBday = new Date(today.getFullYear(), born.getMonth(), born.getDate());
+    if (nextBday < today) nextBday.setFullYear(today.getFullYear() + 1);
+    const daysUntil = Math.round((nextBday - today) / 86400000);
+    return {
+        date: lppFormatDate(bornStr),
+        age: age - (nextBday.getFullYear() > today.getFullYear() ? 1 : 0),
+        daysUntil
+    };
+}
+
+function lppFormatMoney(val) {
+    if (!val && val !== 0) return null;
+    return Number(val).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function lppParseOrcamento(raw) {
+    if (!raw) return [];
+    try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) return [{ id: 'legacy', ...parsed }];
+    } catch (_) {}
+    return [];
+}
+
+async function openLeadProfile(leadId) {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+
+    _lppCurrentLeadId = leadId;
+
+    const panel = document.getElementById('lead-profile-panel');
+    const overlay = document.getElementById('lead-profile-overlay');
+    if (!panel || !overlay) return;
+
+    const chatBtn = document.getElementById('lpp-btn-chat');
+    if (chatBtn) chatBtn.style.display = lead.telefone ? '' : 'none';
+
+    // Avatar
+    const avatarEl = document.getElementById('lpp-avatar');
+    avatarEl.textContent = lppInitials(lead.nome);
+
+    // Nome e contato
+    document.getElementById('lpp-name').textContent = lead.nome || '—';
+    const contactEl = document.getElementById('lpp-contact');
+    contactEl.innerHTML = [
+        lead.telefone ? `<span><i class="fa-solid fa-phone" style="width:12px;font-size:0.7rem;"></i> ${lead.telefone}<button class="lpp-copy-phone" title="Copiar número" onclick="lppCopyPhone(event,'${lead.telefone.replace(/'/g,"\\'")}')"><i class="fa-regular fa-copy"></i></button></span>` : '',
+        lead.email    ? `<span><i class="fa-solid fa-envelope" style="width:12px;font-size:0.7rem;"></i> <a href="mailto:${lead.email}">${lead.email}</a></span>` : '',
+    ].filter(Boolean).join('');
+
+    // Tags
+    const tagsEl = document.getElementById('lpp-tags');
+    const tagIds = lead.tags ? lead.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+    if (tagIds.length && window.availableTags) {
+        tagsEl.innerHTML = tagIds.map(tid => {
+            const t = window.availableTags.find(at => at.id == tid || at.name === tid);
+            const color = t?.color || '#a78bfa';
+            return `<span class="lpp-tag" style="color:${color}; border-color:${color}; background:${color}18">${t?.name || tid}</span>`;
+        }).join('');
+    } else {
+        tagsEl.innerHTML = '';
+    }
+
+    // Coluna/etapa
+    const colInfo = KANBAN_COLUMNS[lead.column] || { label: lead.column, color: 'var(--text-muted)', icon: 'fa-circle' };
+    document.getElementById('lpp-column-badge').innerHTML =
+        `<i class="fa-solid ${colInfo.icon}" style="color:${colInfo.color}"></i>
+         <span style="color:${colInfo.color}">${colInfo.label}</span>`;
+    document.getElementById('lpp-column-badge').style.background = colInfo.color + '18';
+    document.getElementById('lpp-column-badge').style.border = `1px solid ${colInfo.color}40`;
+    document.getElementById('lpp-column-badge').style.color = colInfo.color;
+
+    // Origem
+    const origemEl = document.getElementById('lpp-origem');
+    const isMeta = lead.origem && (lead.origem.toLowerCase().includes('meta') || lead.origem.toLowerCase().includes('facebook') || lead.origem.toLowerCase().includes('instagram'));
+    const hasFbId = lead.fb_click_id && lead.fb_click_id.trim();
+    origemEl.innerHTML = `
+        <span class="lpp-origem-badge ${isMeta ? 'lpp-origem-meta' : 'lpp-origem-organic'}">
+            <i class="fa-${isMeta ? 'brands fa-meta' : 'solid fa-seedling'}"></i>
+            ${lead.origem || 'Orgânico'}
+        </span>
+        ${hasFbId ? `<div style="margin-top:0.5rem;">
+            <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:0.25rem;">ID do Anúncio</div>
+            <span class="lpp-ad-id">${lead.fb_click_id}</span>
+        </div>` : ''}
+    `;
+
+    // Informações
+    const infoEl = document.getElementById('lpp-info');
+    const bday = lppBirthdayInfo(lead.born);
+    const relTime = lppRelativeTime(lead.assigned_at || lead.created_at);
+    const createdDate = lppFormatDate(lead.created_at);
+    const owner = lead.owner_id;
+
+    let bdayHtml = '';
+    if (bday) {
+        bdayHtml = `
+        <div class="lpp-row">
+            <i class="fa-solid fa-cake-candles"></i>
+            <div>
+                <div><span class="lpp-row-label">Nascimento</span> <span class="lpp-row-value">${bday.date} &middot; ${bday.age} anos</span></div>
+                ${bday.daysUntil <= 30 ? `<div class="lpp-birthday-alert"><i class="fa-solid fa-party-horn"></i> Aniversário em ${bday.daysUntil} dia${bday.daysUntil !== 1 ? 's' : ''}!</div>` :
+                  `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;">Próximo aniversário em ${bday.daysUntil} dias</div>`}
+            </div>
+        </div>`;
+    }
+
+    infoEl.innerHTML = `
+        ${createdDate ? `<div class="lpp-row"><i class="fa-solid fa-calendar-plus"></i><span class="lpp-row-label">Criado em</span><span class="lpp-row-value">${createdDate}</span></div>` : ''}
+        ${relTime ? `<div class="lpp-row"><i class="fa-solid fa-clock"></i><span class="lpp-row-label">Último contato</span><span class="lpp-row-value">${relTime}</span></div>` : ''}
+        ${owner ? `<div class="lpp-row"><i class="fa-solid fa-user-tie"></i><span class="lpp-row-label">Responsável</span><span class="lpp-row-value">${owner}</span></div>` : ''}
+        ${lead.valor_recebido ? `<div class="lpp-row"><i class="fa-solid fa-money-bill-wave"></i><span class="lpp-row-label">Valor recebido</span><span class="lpp-row-value" style="color:var(--accent-success);font-weight:700;">${lppFormatMoney(lead.valor_recebido)}</span></div>` : ''}
+        ${bdayHtml}
+    `;
+
+    // Notas
+    const notasSection = document.getElementById('lpp-notas-section');
+    const notasEl = document.getElementById('lpp-notas');
+    if (lead.notas && lead.notas.trim()) {
+        notasEl.textContent = lead.notas;
+        notasSection.style.display = '';
+    } else {
+        notasSection.style.display = 'none';
+    }
+
+    // Orçamentos
+    const orcSection = document.getElementById('lpp-orc-section');
+    const orcEl = document.getElementById('lpp-orcamentos');
+    const orcamentos = lppParseOrcamento(lead.orcamento);
+    if (orcamentos.length) {
+        const total = orcamentos.reduce((s, o) => s + (parseFloat(o.valor) || 0), 0);
+        orcEl.innerHTML = orcamentos.map(o => `
+            <div class="lpp-orc-item">
+                <div style="display:flex;flex-direction:column;gap:0.15rem;">
+                    <span class="lpp-orc-proc">${o.procedimento || '—'}</span>
+                    ${o.created_at ? `<span style="font-size:0.72rem;color:var(--text-muted);">${lppFormatDateTime(o.created_at)}</span>` : ''}
+                </div>
+                <span class="lpp-orc-valor">${lppFormatMoney(o.valor)}</span>
+            </div>
+        `).join('') + (orcamentos.length > 1 ? `<div class="lpp-orc-total"><span>Total</span><span>${lppFormatMoney(total)}</span></div>` : '');
+        orcSection.style.display = '';
+    } else {
+        orcSection.style.display = 'none';
+    }
+
+    // Histórico de agendamentos (async)
+    const histSection = document.getElementById('lpp-hist-section');
+    const histEl = document.getElementById('lpp-historico');
+    histEl.innerHTML = `<span class="amicro-loader"><span></span><span></span><span></span></span>`;
+    histSection.style.display = '';
+
+    try {
+        const agendamentos = await fetch(`/api/leads/${leadId}/agendamentos`).then(r => r.json());
+        if (agendamentos && agendamentos.length) {
+            histEl.innerHTML = agendamentos.map(a => {
+                const valor = a.valor_primario || a.valor_secundario;
+                const data = a.data_agendamento ? new Date(a.data_agendamento).toLocaleDateString('pt-BR') : '—';
+                return `
+                <div class="lpp-hist-item">
+                    <div class="lpp-hist-icon"><i class="fa-solid fa-check"></i></div>
+                    <div class="lpp-hist-info">
+                        <div class="lpp-hist-proc">${a.procedimento || '—'}</div>
+                        <div class="lpp-hist-meta">${data}${a.status_pagamento ? ' · ' + a.status_pagamento : ''}${a.unidade ? ' · ' + a.unidade : ''}</div>
+                    </div>
+                    ${valor ? `<div class="lpp-hist-valor">${valor}</div>` : ''}
+                </div>`;
+            }).join('');
+        } else {
+            histEl.innerHTML = '<span class="lpp-empty">Nenhum agendamento registrado.</span>';
+        }
+    } catch (_) {
+        histEl.innerHTML = '<span class="lpp-empty">Erro ao carregar histórico.</span>';
+    }
+
+    // Show panel
+    overlay.style.display = 'block';
+    requestAnimationFrame(() => panel.classList.add('active'));
+}
+
+function closeLeadProfile() {
+    const panel = document.getElementById('lead-profile-panel');
+    const overlay = document.getElementById('lead-profile-overlay');
+    if (!panel || !overlay) return;
+    panel.classList.remove('active');
+    overlay.style.display = 'none';
+}
+
+// === SIDEBAR: rail fixo que expande ao passar o mouse ===
+// A barra fica sempre recolhida (só ícones) e abre no :hover via CSS.
+document.addEventListener('DOMContentLoaded', () => {
+    const header = document.querySelector('header');
+    if (header && header.querySelector('.sb-nav')) {
+        header.classList.add('sb-collapsed');
+    }
+});
+
+// Mantido como no-op para não quebrar chamadas antigas.
+function toggleSidebar() {}
+
+/* ============================================================================
+   INTEGRAÇÃO DE AGENDAMENTO — redesign premium (fonte única).
+   Reescreve só a APRESENTAÇÃO do modal #modalAgendamento em todas as páginas.
+   Todos os ids, o fluxo e a lógica de envio (confirmAgendamento / /api/agendar)
+   são preservados. Valores continuam sendo enviados normalizados ("380.00");
+   a máscara "R$ 0,00" é apenas visual.
+   ========================================================================== */
+(function () {
+    if (window.__agxAgendamentoWired) return;
+    window.__agxAgendamentoWired = true;
+
+    var pad2 = function (n) { return String(n).padStart(2, '0'); };
+
+    function fmtDateBR(v) {
+        if (!v) return '';
+        var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v).split('T')[0]);
+        return m ? (m[3] + '/' + m[2] + '/' + m[1]) : v;
+    }
+    function brl(n) {
+        return Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    }
+    function toNumber(s) {
+        var n = parseFloat(String(s == null ? '' : s).replace(/\s/g, '').replace(',', '.'));
+        return isFinite(n) ? n : 0;
+    }
+
+    /* -------- template do modal (mantém todos os ids originais) -------- */
+    function template(snap) {
+        return [
+'<form id="form-agendar" class="agx-form" novalidate>',
+'  <input type="hidden" id="ag-lead-id">',
+'  <div class="agx-head">',
+'    <div class="agx-head-main">',
+'      <span class="agx-head-icon"><i class="fa-regular fa-calendar-check"></i></span>',
+'      <div><h2>Novo agendamento</h2></div>',
+'    </div>',
+'  </div>',
+'  <div class="agx-body">',
+
+'    <div class="agx-col agx-col--left">',
+
+'    <section class="agx-section">',
+'      <div class="agx-section-head"><i class="fa-regular fa-user"></i><div>',
+'        <h3>Dados do paciente</h3><p>Busque um paciente já cadastrado ou registre um novo.</p></div></div>',
+'      <div class="agx-kanban-note" id="agx-kanban-note" style="display:none;">',
+'        <i class="fa-solid fa-circle-info"></i>',
+'        <span>Este agendamento usa o paciente do card do funil. Os dados de contato são enviados automaticamente ao Amigo App.</span>',
+'      </div>',
+'      <div id="directScheduleFields">',
+'        <div class="agx-field full agx-hasicon" style="position:relative;">',
+'          <label for="ag-patient-name">Buscar paciente</label>',
+'          <i class="fa-solid fa-magnifying-glass"></i>',
+'          <input type="text" id="ag-patient-name" placeholder="Buscar por nome ou telefone..." autocomplete="off" oninput="buscarPacienteExistente(this.value)">',
+'          <div id="ag-patient-dropdown" style="display:none;"></div>',
+'          <div class="agx-err">Informe o nome do paciente.</div>',
+'        </div>',
+'        <div class="agx-row" style="margin-top:.85rem;">',
+'          <div class="agx-field"><label for="ag-patient-phone">Telefone (WhatsApp)</label>',
+'            <input type="text" id="ag-patient-phone" placeholder="(61) 99999-9999"></div>',
+'          <div class="agx-field"><label for="ag-patient-born">Data de nascimento</label>',
+'            <input type="date" id="ag-patient-born"></div>',
+'        </div>',
+'        <div class="agx-row" style="margin-top:.85rem;">',
+'          <div class="agx-field full"><label for="ag-patient-email">E-mail</label>',
+'            <input type="email" id="ag-patient-email" placeholder="email@exemplo.com"></div>',
+'        </div>',
+'      </div>',
+'    </section>',
+
+'    <section class="agx-section">',
+'      <div class="agx-section-head"><i class="fa-solid fa-receipt"></i><div>',
+'        <h3>Informações comerciais</h3><p>Valores e classificação usados na planilha de gestão.</p></div></div>',
+'      <div class="agx-row">',
+'        <div class="agx-field"><label for="ag-valor1-mask">Valor principal</label>',
+'          <input type="text" id="ag-valor1-mask" inputmode="numeric" placeholder="R$ 0,00" data-target="ag-valor1">',
+'          <input type="hidden" id="ag-valor1"></div>',
+'        <div class="agx-field"><label for="ag-valor2-mask">Valor adicional</label>',
+'          <input type="text" id="ag-valor2-mask" inputmode="numeric" placeholder="R$ 0,00" data-target="ag-valor2">',
+'          <input type="hidden" id="ag-valor2"></div>',
+'      </div>',
+'      <div class="agx-row" style="margin-top:.85rem;">',
+'        <div class="agx-field agx-sel"><label for="ag-status-pag">Status</label>',
+'          <select id="ag-status-pag" required>' + snap.status + '</select></div>',
+'        <div class="agx-field agx-sel"><label for="ag-origem">Origem</label>',
+'          <select id="ag-origem" required>' + snap.origem + '</select></div>',
+'      </div>',
+'    </section>',
+
+'    </div>',
+
+'    <div class="agx-col agx-col--right">',
+
+'    <section class="agx-section">',
+'      <div class="agx-section-head"><i class="fa-regular fa-calendar"></i><div>',
+'        <h3>Dados do agendamento</h3><p>Clínica, profissional, procedimento e o melhor horário.</p></div></div>',
+'      <div class="agx-row">',
+'        <div class="agx-field agx-sel"><label for="ag-place">Clínica</label>',
+'          <select id="ag-place" required>' + snap.place + '</select>',
+'          <div class="agx-err">Selecione a clínica.</div></div>',
+'        <div class="agx-field agx-sel"><label for="ag-user">Profissional</label>',
+'          <select id="ag-user" required>' + snap.user + '</select>',
+'          <div class="agx-err">Selecione o profissional.</div></div>',
+'      </div>',
+'      <div class="agx-field full agx-hasicon" style="position:relative; margin-top:.85rem;">',
+'        <label for="ag-event-search">Procedimento ou serviço</label>',
+'        <i class="fa-solid fa-magnifying-glass"></i>',
+'        <input type="text" id="ag-event-search" placeholder="Buscar procedimento..." autocomplete="off">',
+'        <input type="hidden" id="ag-event" required>',
+'        <div id="ag-event-dropdown" style="display:none;">' + snap.event + '</div>',
+'        <div class="agx-proc-hint" id="agx-proc-hint"><i class="fa-solid fa-tag"></i> Valor sugerido: <b>—</b></div>',
+'        <div class="agx-err">Escolha o procedimento.</div>',
+'      </div>',
+'      <div class="agx-field full" style="margin-top:.85rem;">',
+'        <label>Data e horário</label>',
+'        <div class="agx-datetime">',
+'          <div class="agx-field"><label for="ag-data">Data</label><input type="date" id="ag-data" required></div>',
+'          <div class="agx-field"><label for="ag-hora">Horário</label><input type="time" id="ag-hora" required></div>',
+'        </div>',
+'        <div class="agx-err">Informe data e horário.</div>',
+'      </div>',
+'      <div class="agx-sched">',
+'        <div class="agx-sched-row">',
+'          <h4><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--accent-primary);margin-right:.35rem;"></i>Sugestões de agenda</h4>',
+'          <div id="sugestao-loader" style="display:none;"><span class="amicro-loader"><span></span><span></span><span></span></span></div>',
+'        </div>',
+'        <div id="sugestoes-dias"></div>',
+'        <div class="agx-slots-label">Horários disponíveis</div>',
+'        <div id="sugestoes-horas" style="display:none;"></div>',
+'      </div>',
+'    </section>',
+
+'    <div class="agx-resumo">',
+'      <h3><i class="fa-regular fa-rectangle-list"></i> Resumo do agendamento</h3>',
+'      <dl>',
+'        <dt>Paciente</dt><dd id="ag-res-paciente" class="is-empty">—</dd>',
+'        <dt>Procedimento</dt><dd id="ag-res-procedimento" class="is-empty">—</dd>',
+'        <dt>Profissional</dt><dd id="ag-res-profissional" class="is-empty">—</dd>',
+'        <dt>Clínica</dt><dd id="ag-res-clinica" class="is-empty">—</dd>',
+'        <dt>Data</dt><dd id="ag-res-data" class="is-empty">—</dd>',
+'        <dt>Horário</dt><dd id="ag-res-horario" class="is-empty">—</dd>',
+'        <dt>Valor</dt><dd id="ag-res-valor" class="is-empty agx-valor">—</dd>',
+'      </dl>',
+'    </div>',
+
+'    </div>',
+'  </div>',
+'</form>',
+'<div class="modal-actions agx-footer" id="integrationActions">',
+'  <div class="integration-loader" id="integrationLoader"><span class="amicro-loader"><span></span><span></span><span></span></span> Enviando para o Amigo App…</div>',
+'  <button type="button" class="btn-cancel" onclick="cancelAgendamento()">Cancelar</button>',
+'  <button type="button" class="btn-save" onclick="confirmAgendamento()">Enviar para o Amigo App →</button>',
+'</div>'
+        ].join('\n');
+    }
+
+    function snapshot() {
+        var g = function (id, fb) {
+            var el = document.getElementById(id);
+            return el && el.innerHTML.trim() ? el.innerHTML : fb;
+        };
+        return {
+            place: g('ag-place', '<option value="">Selecione...</option>'),
+            user: g('ag-user', '<option value="">Selecione...</option>'),
+            event: g('ag-event-dropdown', ''),
+            status: g('ag-status-pag', '<option value="Pendente">Pendente</option><option value="Pago">Pago</option><option value="50%">50%</option>'),
+            origem: g('ag-origem', '<option value="Orgânico">Orgânico</option><option value="Tráfego">Tráfego</option><option value="Indicação">Indicação</option>')
+        };
+    }
+
+    /* -------- resumo ao vivo -------- */
+    function setRes(id, val) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var v = (val || '').toString().trim();
+        if (v) {
+            if (el.textContent !== v) {
+                el.textContent = v;
+                el.classList.add('agx-flash');
+                setTimeout(function () { el.classList.remove('agx-flash'); }, 260);
+            }
+            el.classList.remove('is-empty');
+        } else {
+            el.textContent = '—';
+            el.classList.add('is-empty');
+        }
+    }
+    function updateResumo() {
+        var selTxt = function (id) {
+            var s = document.getElementById(id);
+            return s && s.selectedIndex > 0 ? s.options[s.selectedIndex].text : '';
+        };
+        var nome = (document.getElementById('ag-patient-name') || {}).value || '';
+        if (!nome && window.draggedLead) nome = window.draggedLead.nome || '';
+        setRes('ag-res-paciente', nome);
+        setRes('ag-res-procedimento', (document.getElementById('ag-event-search') || {}).value || '');
+        setRes('ag-res-profissional', selTxt('ag-user'));
+        setRes('ag-res-clinica', selTxt('ag-place'));
+        setRes('ag-res-data', fmtDateBR((document.getElementById('ag-data') || {}).value || ''));
+        setRes('ag-res-horario', (document.getElementById('ag-hora') || {}).value || '');
+        var v1 = toNumber((document.getElementById('ag-valor1') || {}).value);
+        var v2 = toNumber((document.getElementById('ag-valor2') || {}).value);
+        var valor = '';
+        if (v1 > 0) valor = brl(v1);
+        if (v2 > 0) valor = (valor ? valor + '   +   ' : '') + brl(v2);
+        setRes('ag-res-valor', valor);
+    }
+
+    /* -------- máscara monetária (apenas visual) -------- */
+    function maskCurrency(e) {
+        var el = e.target;
+        var hid = document.getElementById(el.dataset.target);
+        var digits = el.value.replace(/\D/g, '');
+        if (!digits) { el.value = ''; if (hid) hid.value = ''; updateResumo(); return; }
+        var val = parseInt(digits, 10) / 100;
+        el.value = brl(val);
+        if (hid) hid.value = val.toFixed(2);
+        updateResumo();
+    }
+    function syncCurrencyDisplay() {
+        [['ag-valor1-mask', 'ag-valor1'], ['ag-valor2-mask', 'ag-valor2']].forEach(function (p) {
+            var m = document.getElementById(p[0]), h = document.getElementById(p[1]);
+            if (!m || !h) return;
+            var v = toNumber(h.value);
+            m.value = v > 0 ? brl(v) : '';
+        });
+    }
+
+    /* -------- valor sugerido do procedimento (só se a API fornecer) -------- */
+    function updateProcHint() {
+        var hint = document.getElementById('agx-proc-hint');
+        if (!hint) return;
+        var id = (document.getElementById('ag-event') || {}).value;
+        var price = null;
+        if (id && window.apiOptions && Array.isArray(apiOptions.events)) {
+            var ev = apiOptions.events.find(function (x) { return String(x.id) === String(id); });
+            if (ev) price = ev.price != null ? ev.price
+                : ev.valor != null ? ev.valor
+                : ev.value != null ? ev.value
+                : ev.default_value != null ? ev.default_value : null;
+        }
+        if (price != null && toNumber(price) > 0) {
+            hint.querySelector('b').textContent = brl(toNumber(price));
+            hint.classList.add('show');
+        } else {
+            hint.classList.remove('show');
+        }
+    }
+
+    /* -------- validação inline (sem popup) -------- */
+    function fieldOf(id) {
+        var el = document.getElementById(id);
+        return el ? el.closest('.agx-field') : null;
+    }
+    function mark(fEl, bad) {
+        if (fEl) fEl.classList.toggle('is-invalid', !!bad);
+    }
+    function validate() {
+        var ok = true, first = null;
+        var checks = [
+            ['ag-place', 'ag-place'],
+            ['ag-user', 'ag-user'],
+            ['ag-event', 'ag-event-search'],
+            ['ag-data', 'ag-data'],
+            ['ag-hora', 'ag-hora']
+        ];
+        checks.forEach(function (c) {
+            var ctl = document.getElementById(c[0]);
+            var fEl = fieldOf(c[1]);
+            var bad = !ctl || !ctl.value;
+            mark(fEl, bad);
+            if (bad) { ok = false; first = first || fEl; }
+        });
+        var dsf = document.getElementById('directScheduleFields');
+        if (dsf && dsf.style.display !== 'none') {
+            var n = document.getElementById('ag-patient-name');
+            var bad = !n || !n.value.trim();
+            var fEl = fieldOf('ag-patient-name');
+            mark(fEl, bad);
+            if (bad) { ok = false; first = first || fEl; }
+        }
+        if (first) {
+            var inp = first.querySelector('input, select');
+            if (inp) { try { inp.focus({ preventScroll: true }); } catch (e) { inp.focus(); } }
+            first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+        return ok;
+    }
+
+    /* -------- abertura do modal -------- */
+    function onOpen() {
+        syncCurrencyDisplay();
+        document.querySelectorAll('#modalAgendamento .agx-field.is-invalid')
+            .forEach(function (f) { f.classList.remove('is-invalid'); });
+        var btn = document.querySelector('#integrationActions .btn-save');
+        if (btn) { btn.disabled = false; btn.classList.remove('agx-ok'); }
+        var dsf = document.getElementById('directScheduleFields');
+        var note = document.getElementById('agx-kanban-note');
+        if (note) note.style.display = (dsf && dsf.style.display === 'none') ? 'flex' : 'none';
+        updateProcHint();
+        updateResumo();
+    }
+
+    /* -------- fiação de listeners -------- */
+    function wire() {
+        var form = document.getElementById('form-agendar');
+        if (!form) return;
+
+        ['ag-valor1-mask', 'ag-valor2-mask'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('input', maskCurrency);
+        });
+
+        ['ag-patient-name', 'ag-event-search', 'ag-user', 'ag-place', 'ag-data', 'ag-hora'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', updateResumo);
+            el.addEventListener('change', updateResumo);
+        });
+
+        var agUser = document.getElementById('ag-user');
+        var agData = document.getElementById('ag-data');
+        if (agUser) agUser.addEventListener('change', function () { if (typeof window.loadTimeSuggestions === 'function') window.loadTimeSuggestions(); });
+        if (agData) agData.addEventListener('change', function () { if (typeof window.loadTimeSuggestions === 'function') window.loadTimeSuggestions(); });
+
+        var evDrop = document.getElementById('ag-event-dropdown');
+        if (evDrop) evDrop.addEventListener('click', function () {
+            setTimeout(function () { updateProcHint(); updateResumo(); }, 0);
+        });
+
+        ['sugestoes-dias', 'sugestoes-horas'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('click', function () { setTimeout(updateResumo, 0); });
+        });
+
+        // limpa o estado de erro do campo assim que o usuário mexe nele
+        form.addEventListener('input', function (e) {
+            var f = e.target.closest && e.target.closest('.agx-field.is-invalid');
+            if (f) f.classList.remove('is-invalid');
+        });
+        form.addEventListener('change', function (e) {
+            var f = e.target.closest && e.target.closest('.agx-field.is-invalid');
+            if (f) f.classList.remove('is-invalid');
+        });
+    }
+
+    /* -------- monta o modal uma vez -------- */
+    function build() {
+        var overlay = document.getElementById('modalAgendamento');
+        if (!overlay || overlay.dataset.agxBuilt) return;
+        var modal = overlay.querySelector('.modal');
+        if (!modal) return;
+
+        var snap = snapshot();
+        modal.classList.add('agx-modal');
+        modal.innerHTML = template(snap);
+        overlay.dataset.agxBuilt = '1';
+
+        // Se as opções da API ainda não foram carregadas, popula quando chegarem.
+        if (typeof populateSelects === 'function' &&
+            window.apiOptions && apiOptions.places && apiOptions.places.length &&
+            document.getElementById('ag-place') &&
+            document.getElementById('ag-place').options.length <= 1) {
+            try { populateSelects(); } catch (e) { /* noop */ }
+        }
+
+        // Recria o datepicker estilizado nos novos inputs de data.
+        if (typeof window._initAirDatepicker === 'function') {
+            try { window._initAirDatepicker(); } catch (e) { /* noop */ }
+        }
+
+        wire();
+
+        var lastActive = overlay.classList.contains('active');
+        new MutationObserver(function () {
+            var active = overlay.classList.contains('active');
+            if (active && !lastActive) setTimeout(onOpen, 0);
+            lastActive = active;
+        }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+
+        if (lastActive) setTimeout(onOpen, 0);
+    }
+
+    /* -------- wrapper: estado de "Enviando…" + validação inline -------- */
+    function wrapConfirm() {
+        if (typeof window.confirmAgendamento !== 'function' || window.confirmAgendamento.__agxWrapped) return;
+        var original = window.confirmAgendamento;
+        var wrapped = async function () {
+            if (!validate()) return;
+            var overlay = document.getElementById('modalAgendamento');
+            var btn = document.querySelector('#integrationActions .btn-save');
+            var prev = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.remove('agx-ok');
+                btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Enviando...';
+            }
+            try {
+                return await original.apply(this, arguments);
+            } finally {
+                if (btn) {
+                    var stillOpen = overlay && overlay.classList.contains('active');
+                    if (stillOpen) {
+                        btn.disabled = false;
+                        btn.innerHTML = prev;
+                    } else {
+                        btn.classList.add('agx-ok');
+                        btn.disabled = true;
+                        btn.innerHTML = '<i class="fa-solid fa-check"></i> Agendamento enviado';
+                        setTimeout(function () {
+                            btn.classList.remove('agx-ok');
+                            btn.disabled = false;
+                            btn.innerHTML = prev || 'Enviar para o Amigo App →';
+                        }, 1900);
+                    }
+                }
+            }
+        };
+        wrapped.__agxWrapped = true;
+        window.confirmAgendamento = wrapped;
+    }
+
+    /* -------- wrapper: grade de horários com estado "indisponível" -------- */
+    function wrapLoadTimes() {
+        if (typeof window.loadTimeSuggestions !== 'function' || window.loadTimeSuggestions.__agxWrapped) return;
+        var original = window.loadTimeSuggestions;
+        var wrapped = async function () {
+            var r = await original.apply(this, arguments);
+            try {
+                var c = document.getElementById('sugestoes-horas');
+                if (c && c.style.display !== 'none') {
+                    var live = [].slice.call(c.querySelectorAll('.suggestion-chip:not(.agx-slot-off)'));
+                    var have = {};
+                    live.forEach(function (x) { have[x.textContent.trim()] = 1; });
+                    if (live.length) {
+                        for (var h = 8; h <= 19; h++) {
+                            ['00', '30'].forEach(function (mm) {
+                                var t = pad2(h) + ':' + mm;
+                                if (!have[t]) {
+                                    var el = document.createElement('div');
+                                    el.className = 'suggestion-chip agx-slot-off';
+                                    el.textContent = t;
+                                    el.title = 'Indisponível';
+                                    c.appendChild(el);
+                                }
+                            });
+                        }
+                        [].slice.call(c.querySelectorAll('.suggestion-chip'))
+                            .sort(function (a, b) { return a.textContent.trim().localeCompare(b.textContent.trim()); })
+                            .forEach(function (n) { c.appendChild(n); });
+                    }
+                }
+            } catch (e) { /* noop */ }
+            updateResumo();
+            return r;
+        };
+        wrapped.__agxWrapped = true;
+        window.loadTimeSuggestions = wrapped;
+    }
+
+    function boot() {
+        build();
+        wrapConfirm();
+        wrapLoadTimes();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+    } else {
+        boot();
+    }
+})();

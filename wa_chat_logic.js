@@ -211,10 +211,20 @@ function renderAvatarHTML(name, imgUrl = null, status = 'online', size = 40) {
     const cleanName = (name || 'Contato').replace(/^Contato\s*/i, '').trim() || name || '?';
     const parts = cleanName.split(/\s+/).filter(Boolean);
     let initials = '';
-    if (parts.length >= 2) {
-        initials = (parts[0][0] + parts[1][0]).toUpperCase();
-    } else if (parts.length === 1 && parts[0].length >= 1) {
-        initials = parts[0].substring(0, 2).toUpperCase();
+    
+    // Remove emojis specifically for the initials, leaving only text
+    const textOnlyName = cleanName.replace(/[\u1000-\uFFFF]/g, '').trim();
+    const textParts = textOnlyName.split(/\s+/).filter(Boolean);
+    
+    if (textParts.length >= 2) {
+        initials = (Array.from(textParts[0])[0] + Array.from(textParts[1])[0]).toUpperCase();
+    } else if (textParts.length === 1 && textParts[0].length >= 1) {
+        const chars = Array.from(textParts[0]);
+        initials = (chars[0] + (chars[1] || '')).toUpperCase();
+    } else if (parts.length >= 1) {
+        // Fallback se o nome for só emojis
+        const chars = Array.from(parts[0]);
+        initials = chars[0] || '?';
     } else {
         initials = '?';
     }
@@ -1542,8 +1552,8 @@ function renderContactsList(chats) {
         const markedUnread = isMarkedUnreadChat(chat.phone);
 
         const unreadBadgeHTML = unreadCount > 0
-            ? `<span style="background: var(--accent-success, #10b981); color: #ffffff; font-size: 0.72rem; font-weight: 700; border-radius: 12px; padding: 0.15rem 0.55rem; min-width: 20px; text-align: center; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.45); border: 1px solid rgba(255,255,255,0.2);" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount}</span>`
-            : (markedUnread ? `<span title="Marcada como não lida" style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-success, #10b981); display: inline-block; box-shadow: 0 2px 6px rgba(16, 185, 129, 0.45);"></span>` : '');
+            ? `<span style="background: var(--accent-success, #10b981); color: #ffffff; font-size: 0.72rem; font-weight: 700; border-radius: 12px; padding: 0.15rem 0.55rem; min-width: 20px; text-align: center; box-shadow: none; border: 1px solid rgba(255,255,255,0.2);" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount}</span>`
+            : (markedUnread ? `<span title="Marcada como não lida" style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-success, #10b981); display: inline-block; box-shadow: none;"></span>` : '');
 
         const pinnedHTML = isPinnedChat(chat.phone)
             ? `<i class="fa-solid fa-thumbtack" title="Conversa fixada" style="font-size: 0.7rem; color: var(--text-muted); transform: rotate(45deg); flex-shrink: 0;"></i>`
@@ -1802,7 +1812,7 @@ function getTagBadgeHTML(tagId) {
     const tags = getAvailableTags();
     const found = tags.find(t => t.id === tagId);
     if (!found) return '';
-    return `<span style="position: relative; font-size: 0.72rem; font-weight: 600; line-height: 1.5; padding: 0.22rem 0.6rem 0.22rem 1.15rem; background: ${found.color}; color: #0a0a0a; clip-path: polygon(14px 0, 100% 0, 100% 100%, 14px 100%, 0 50%); display: inline-flex; align-items: center;">
+    return `<span style="position: relative; font-size: 0.72rem; font-weight: 600; line-height: 1.5; padding: 0.22rem 0.6rem 0.22rem 1.15rem; background: ${found.color}; color: #0a0a0a; clip-path: polygon(14px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 14px 100%, 0 50%); display: inline-flex; align-items: center;">
         <span style="position: absolute; left: 7px; top: 50%; transform: translateY(-50%); width: 4px; height: 4px; border-radius: 50%; background: rgba(0,0,0,0.55);"></span>
         ${found.label}
     </span>`;
@@ -1991,7 +2001,7 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
                 <button class="lead-panel-btn" style="width: auto; height: 27px; padding: 0 0.55rem; font-size: 0.76rem; gap: 0.35rem;" onclick="toggleTransferMenu(event, '${lead.id}')" title="Passar essa conversa pra outro atendente">
                     <i class="fa-solid fa-right-left" style="font-size: 0.72rem;"></i> Transferir
                 </button>
-                <div id="transfer-menu-popup" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 230px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); z-index: 1000; max-height: 260px; overflow-y: auto; padding: 0.4rem 0;">
+                <div id="transfer-menu-popup" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 230px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; z-index: 1000; max-height: 260px; overflow-y: auto; padding: 0.4rem 0;">
                     <div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;">Carregando equipe...</div>
                 </div>
             </div>
@@ -2106,15 +2116,19 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         const valorRecebido = lead.valor_recebido ? `R$ ${parseFloat(lead.valor_recebido).toFixed(2).replace('.', ',')}` : '';
         const valorOrcado = orc.valor ? `R$ ${parseFloat(orc.valor).toFixed(2).replace('.', ',')}` : '';
 
-        valorHTML = `
-            <div>
-                <div class="lead-panel-label"><i class="fa-solid fa-sack-dollar"></i> Valor</div>
-                <div class="lead-panel-card" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                    ${valorRecebido ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Recebido</span><span style="color: var(--accent-success); font-weight: 700;">${valorRecebido}</span></div>` : ''}
-                    ${valorOrcado ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Orçado${orc.procedimento ? ` (${escapeHtml(orc.procedimento)})` : ''}</span><span style="color: var(--text-main); font-weight: 600;">${valorOrcado}</span></div>` : ''}
+        // Só renderiza a seção se houver de fato algum valor — um orcamento "{}"
+        // vazio é truthy e antes gerava um card sem nenhuma linha dentro.
+        if (valorRecebido || valorOrcado) {
+            valorHTML = `
+                <div>
+                    <div class="lead-panel-label"><i class="fa-solid fa-sack-dollar"></i> Valor</div>
+                    <div class="lead-panel-card${valorRecebido ? ' lead-panel-card--money' : ''}" style="display: flex; flex-direction: column; gap: 0.35rem;">
+                        ${valorRecebido ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Recebido</span><span style="color: var(--accent-success); font-weight: 700;">${valorRecebido}</span></div>` : ''}
+                        ${valorOrcado ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Orçado${orc.procedimento ? ` (${escapeHtml(orc.procedimento)})` : ''}</span><span style="color: var(--text-main); font-weight: 600;">${valorOrcado}</span></div>` : ''}
+                    </div>
                 </div>
-            </div>
-        `;
+            `;
+        }
     }
 
     let notasHTML = '';
@@ -2154,13 +2168,17 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     let optOutHTML = '';
     if (lead) {
         const isOptedOut = Number(lead.campaign_opt_out) === 1;
+        const state = isOptedOut ? 'off' : 'on';
+        const statusText = isOptedOut ? 'Fora das campanhas' : 'Recebe campanhas';
+        const actionText = isOptedOut ? 'Reativar' : 'Excluir';
         optOutHTML = `
             <div>
                 <div class="lead-panel-label"><i class="fa-solid fa-shield-halved"></i> Campanhas de Marketing</div>
-                <button type="button" class="lead-panel-btn" onclick="toggleLeadCampaignOptOut('${lead.id}', ${isOptedOut})"
-                    style="${isOptedOut ? 'color: var(--accent-danger); border-color: rgba(239, 68, 68, 0.35);' : ''}">
-                    <i class="fa-solid ${isOptedOut ? 'fa-ban' : 'fa-check'}"></i>
-                    ${isOptedOut ? 'Não recebe campanhas — clique pra reativar' : 'Recebe campanhas — clique pra excluir'}
+                <button type="button" class="lp-campaign-btn" data-state="${state}"
+                    title="${isOptedOut ? 'Voltar a incluir este lead nas campanhas' : 'Remover este lead das campanhas de marketing'}"
+                    onclick="toggleLeadCampaignOptOut('${lead.id}', ${isOptedOut})">
+                    <span class="lp-campaign-status"><span class="lp-campaign-dot"></span> ${statusText}</span>
+                    <span class="lp-campaign-action">${actionText} <i class="fa-solid fa-chevron-right"></i></span>
                 </button>
             </div>
         `;
@@ -3140,16 +3158,20 @@ function updateSignaturePreview() {
 
     if (!previewBox) return;
 
+    const greeting = "Olá! Como posso te ajudar hoje?";
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
     const isEnabled = autoSigCheck ? autoSigCheck.checked : true;
     if (!isEnabled) {
-        previewBox.textContent = "Olá! Como posso te ajudar hoje?";
+        previewBox.textContent = greeting;
         return;
     }
 
     const name = (nameInput && nameInput.value.trim()) ? nameInput.value.trim() : 'Fabrício';
     const clinic = (clinicInput && clinicInput.value.trim()) ? clinicInput.value.trim() : 'Natuclinic';
 
-    previewBox.textContent = `Olá! Como posso te ajudar hoje?\n\n_${name} – ${clinic}_`;
+    // Prévia já renderiza o itálico como o WhatsApp faria com _texto_
+    previewBox.innerHTML = `${esc(greeting)}<br><br><em style="opacity:.92;">${esc(name)} – ${esc(clinic)}</em>`;
 }
 
 async function saveCRMSettings() {
@@ -3681,7 +3703,7 @@ async function sendCustomChatMessage(msgText, filename = '', caption = '', isVoi
 
     msgsContainer.innerHTML += `
         <div style="display: flex; flex-direction: column; align-items: flex-end; margin-bottom: 0.6rem; opacity: 0.7;">
-            <div style="background: #0f766e; border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 4px 14px rgba(0,0,0,0.4); color: #fff; padding: 0.8rem 1rem; border-radius: 12px; max-width: 80%;">
+            <div style="background: #0f766e; border: 1px solid rgba(255,255,255,0.18); box-shadow: none; color: #fff; padding: 0.8rem 1rem; border-radius: 12px; max-width: 80%;">
                 ${previewHtml}
             </div>
             <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Enviando...</span>
@@ -3989,15 +4011,15 @@ async function openChat(phone, name, silent = false) {
 
                 const isOut = msg.direction === 'out';
                 const bg = isOut
-                    ? '#0f766e'
-                    : '#1c2a3a';
-                const color = '#f4f4f5';
+                    ? 'var(--accent-success)'
+                    : 'var(--bg-card)';
+                const color = isOut ? '#fff' : 'var(--text-main)';
                 const align = isOut ? 'flex-end' : 'flex-start';
                 const borderRadius = isOut ? '16px 4px 16px 16px' : '4px 16px 16px 16px';
-                const border = isOut 
-                    ? '1px solid rgba(255, 255, 255, 0.18)' 
-                    : '1px solid rgba(255, 255, 255, 0.08)';
-                const boxShadow = '0 4px 14px rgba(0, 0, 0, 0.4)';
+                const border = isOut
+                    ? '1px solid rgba(255, 255, 255, 0.18)'
+                    : '1px solid var(--border-color)';
+                const boxShadow = 'none';
 
                 const timeString = formatChatTime(msg.timestamp);
                 const statusIcon = isOut ? renderStatusIcon(msg.status) : '';
@@ -4008,14 +4030,14 @@ async function openChat(phone, name, silent = false) {
                         const ref = typeof msg.referral === 'string' ? JSON.parse(msg.referral) : msg.referral;
                         if (ref && (ref.headline || ref.body || ref.image_url)) {
                             referralHTML = `
-                                <div style="background: rgba(0, 0, 0, 0.25); border-left: 4px solid #10b981; padding: 0.6rem; margin-bottom: 0.6rem; border-radius: 6px; display: flex; gap: 0.6rem; max-width: 100%; border: 1px solid rgba(255,255,255,0.06); align-items: flex-start; box-sizing: border-box;">
-                                    ${ref.image_url ? `<img src="${ref.image_url}" style="width: 55px; height: 55px; object-fit: cover; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); flex-shrink: 0;" />` : ''}
+                                <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.22); border-left: 4px solid var(--accent-success); padding: 0.6rem; margin-bottom: 0.6rem; border-radius: 6px; display: flex; gap: 0.6rem; max-width: 100%; align-items: flex-start; box-sizing: border-box;">
+                                    ${ref.image_url ? `<img src="${ref.image_url}" style="width: 55px; height: 55px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-color); flex-shrink: 0;" />` : ''}
                                     <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem;">
-                                        <div style="font-size: 0.72rem; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 0.3rem;">
+                                        <div style="font-size: 0.72rem; font-weight: 700; color: var(--accent-success); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 0.3rem;">
                                             <i class="fa-brands fa-meta"></i> Anúncio do Instagram/Facebook
                                         </div>
-                                        ${ref.headline ? `<div style="font-size: 0.8rem; font-weight: 600; color: #ffffff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ref.headline}</div>` : ''}
-                                        ${ref.body ? `<div style="font-size: 0.75rem; opacity: 0.85; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; color: #e4e4e7;">${ref.body}</div>` : ''}
+                                        ${ref.headline ? `<div style="font-size: 0.8rem; font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ref.headline}</div>` : ''}
+                                        ${ref.body ? `<div style="font-size: 0.75rem; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3;">${ref.body}</div>` : ''}
                                     </div>
                                 </div>
                             `;
@@ -4040,14 +4062,14 @@ async function openChat(phone, name, silent = false) {
                         position: absolute;
                         bottom: -10px;
                         ${isOut ? 'left: 15px;' : 'right: 15px;'}
-                        background: #27272a;
-                        border: 1px solid rgba(255,255,255,0.15);
+                        background: var(--bg-card);
+                        border: 1px solid var(--border-color);
                         border-radius: 10px;
                         padding: 0.1rem 0.35rem;
                         font-size: 0.75rem;
                         display: flex;
                         align-items: center;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                        box-shadow: none;
                         user-select: none;
                         z-index: 5;
                     ">
@@ -4057,15 +4079,15 @@ async function openChat(phone, name, silent = false) {
 
                 html += `
                     <div class="msg-bubble-container" style="display: flex; flex-direction: column; align-items: ${align}; margin-bottom: 0.85rem; position: relative;">
-                        <div id="msg-bubble-${msg.id}" style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: ${boxShadow}; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
+                        <div id="msg-bubble-${msg.id}" style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: none; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
                             <!-- Botão Dropdown de Ações -->
                             ${isDeleted ? '' : `
                             <button class="msg-dropdown-trigger" onclick="toggleMsgDropdown(event, '${msg.id}')" style="
                                 position: absolute;
                                 top: 5px;
                                 right: 5px;
-                                background: rgba(24, 24, 27, 0.95);
-                                border: 1px solid rgba(255, 255, 255, 0.15);
+                                background: var(--bg-dark);
+                                border: 1px solid var(--border-color);
                                 color: var(--text-muted);
                                 border-radius: 50%;
                                 width: 22px;
@@ -4076,10 +4098,10 @@ async function openChat(phone, name, silent = false) {
                                 cursor: pointer;
                                 z-index: 10;
                                 font-size: 0.7rem;
-                                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                                box-shadow: none;
                                 transition: all 0.2s ease;
                                 padding: 0;
-                            " onmouseover="this.style.color='var(--accent-success)'; this.style.borderColor='var(--accent-success)'" onmouseout="this.style.color='var(--text-muted)'; this.style.borderColor='rgba(255,255,255,0.15)'" title="Opções">
+                            " onmouseover="this.style.color='var(--accent-success)'; this.style.borderColor='var(--accent-success)'" onmouseout="this.style.color='var(--text-muted)'; this.style.borderColor='var(--border-color)'" title="Opções">
                                 <i class="fa-solid fa-chevron-down"></i>
                             </button>
                             `}
@@ -4238,7 +4260,7 @@ async function sendActiveChatMessage() {
 
     msgsContainer.innerHTML += `
         <div style="display: flex; flex-direction: column; align-items: flex-end; margin-bottom: 0.65rem; opacity: 0.85;">
-            <div style="background: #0f766e; border: 1px solid rgba(255, 255, 255, 0.18); color: #ffffff; padding: 0.65rem 1rem; border-radius: 16px 4px 16px 16px; max-width: 75%; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); font-size: 0.9rem; line-height: 1.5;">
+            <div style="background: #0f766e; border: 1px solid rgba(255, 255, 255, 0.18); color: #ffffff; padding: 0.65rem 1rem; border-radius: 16px 4px 16px 16px; max-width: 75%; box-shadow: none; font-size: 0.9rem; line-height: 1.5;">
                 ${previewHtml}
             </div>
             <span style="font-size: 0.73rem; color: var(--text-muted); margin-top: 0.25rem;">Enviando...</span>

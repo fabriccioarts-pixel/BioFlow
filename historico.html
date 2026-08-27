@@ -13,10 +13,9 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    <!-- Flatpickr -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://npmcdn.com/flatpickr/dist/l10n/pt.js"></script>
+    <!-- Air Datepicker -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
+    <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     
     <link rel="stylesheet" href="style.css?v=3">
     <style>
@@ -150,13 +149,6 @@
             </button>
         </div>
 
-        <div class="sb-bottom">
-            <div class="sb-bottom-row">
-                <button class="sb-icon-btn" id="theme-toggle" onclick="toggleTheme()" title="Mudar Tema">
-                    <i class="fa-solid fa-moon"></i>
-                </button>
-            </div>
-        </div>
     </header>
 
     <div class="app-content">
@@ -173,6 +165,11 @@
                 style="display: none; position: absolute; top: calc(100% + 6px); left: 0; width: 100%; max-height: 320px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); z-index: 9999;">
             </div>
         </div>
+
+        <button class="sb-icon-btn" id="theme-toggle" onclick="toggleTheme()" title="Alternar modo claro/escuro"
+            style="flex-shrink: 0;">
+            <i class="fa-solid fa-moon"></i>
+        </button>
 
         <div style="position: relative; flex-shrink: 0;">
             <button class="sb-icon-btn" title="Notificações" onclick="toggleNotificationsMenu(event)">
@@ -304,7 +301,7 @@
                 </tr>
             </thead>
             <tbody id="historico-tbody">
-                <tr><td colspan="10" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>
+                <tr><td colspan="10" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando dados...</td></tr>
             </tbody>
         </table>
     </div>
@@ -461,7 +458,7 @@
             const isAdmin = loggedUser && loggedUser.role === 'admin';
             const colspanVal = isAdmin ? 11 : 10;
             const tbody = document.getElementById('historico-tbody');
-            tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center;"><i class="fa-solid fa-spinner spin"></i> Carregando dados...</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando dados...</td></tr>`;
 
             try {
                 let url = '/api/historico-financeiro';
@@ -485,25 +482,22 @@
         }
 
         function openHistoricoDatepicker(inputEl) {
-            if (historicoFpInstance) { historicoFpInstance.open(); return; }
-            historicoFpInstance = flatpickr(inputEl, {
-                mode: 'range',
-                dateFormat: 'd/m/Y',
-                locale: 'pt',
-                allowInput: false,
-                disableMobile: true,
-                onChange: function(selectedDates) {
-                    if (selectedDates.length === 2) {
-                        historicoCustomRange = { start: selectedDates[0], end: selectedDates[1] };
-
+            if (historicoFpInstance) { historicoFpInstance.show(); return; }
+            historicoFpInstance = new AirDatepicker(inputEl, {
+                locale: airDatepickerLocalePt,
+                dateFormat: 'dd/MM/yyyy',
+                range: true,
+                multipleDatesSeparator: ' – ',
+                onSelect({ date }) {
+                    if (Array.isArray(date) && date.length === 2) {
+                        historicoCustomRange = { start: date[0], end: date[1] };
                         const clearBtn = document.getElementById('filtro-periodo-clear');
                         if (clearBtn) clearBtn.style.display = '';
-
                         carregarHistorico();
                     }
                 }
             });
-            historicoFpInstance.open();
+            historicoFpInstance.show();
         }
 
         function clearHistoricoRange() {
