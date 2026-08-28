@@ -3564,10 +3564,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         <span id="vl-record-timer" style="font-variant-numeric: tabular-nums; color: var(--text-main); font-weight: 600; font-size: 0.9rem;">00:00</span>
                         <button type="button" onclick="stopLibraryRecording()" class="btn-primary" style="margin-left: auto; padding: 0.4rem 0.9rem; font-size: 0.8rem;">Parar</button>
                     </div>
-                    <div id="vl-record-naming" style="display: none; align-items: center; gap: 0.6rem;">
-                        <input type="text" id="vl-record-name-input" placeholder="Nome desse áudio (ex: Boas-vindas)" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem; border-radius: 8px; outline: none; font-size: 0.88rem;">
-                        <button type="button" onclick="saveLibraryRecording()" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.8rem;"><i class="fa-solid fa-check"></i></button>
-                        <button type="button" onclick="discardLibraryRecording()" class="btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.8rem;"><i class="fa-solid fa-xmark"></i></button>
+                    <div id="vl-record-naming" style="display: none; flex-direction: column; gap: 0.5rem;">
+                        <div style="display: flex; align-items: center; gap: 0.6rem;">
+                            <input type="text" id="vl-record-name-input" placeholder="Nome desse áudio (ex: Boas-vindas)" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem; border-radius: 8px; outline: none; font-size: 0.88rem;">
+                            <button type="button" onclick="saveLibraryRecording()" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.8rem;"><i class="fa-solid fa-check"></i></button>
+                            <button type="button" onclick="discardLibraryRecording()" class="btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.8rem;"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                            <span style="color: var(--accent-success); font-weight: 700; font-size: 0.95rem;">/</span>
+                            <input type="text" id="vl-record-cmd-input" placeholder="comando pra disparar pelo campo de mensagem (opcional, ex: bemvindo)" style="flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.5rem 0.75rem; border-radius: 8px; outline: none; font-size: 0.82rem;">
+                        </div>
                     </div>
                 </div>
 

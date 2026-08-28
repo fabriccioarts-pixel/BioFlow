@@ -16,6 +16,17 @@ import { Readable } from 'stream';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
+// Sem estes handlers, QUALQUER erro solto (ex.: um 'error' de EventEmitter sem
+// listener na conversão de áudio / upload) derruba o processo inteiro — e aí
+// TODAS as conexões (SSE do kanban, polling do chat) caem com ERR_CONNECTION_RESET.
+// Aqui a gente loga e mantém o servidor de pé.
+process.on('uncaughtException', (err) => {
+    console.error('!! uncaughtException — servidor mantido vivo:', err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('!! unhandledRejection — servidor mantido vivo:', reason);
+});
+
 // Configura o dotenv para ler o arquivo .env
 dotenv.config();
 
@@ -465,7 +476,9 @@ async function convertToOggOpus(buffer, inputExt = 'webm') {
 
     try {
         await new Promise((resolve, reject) => {
-            ffmpeg(inputPath)
+            let settled = false;
+            const finish = (fn) => (arg) => { if (settled) return; settled = true; clearTimeout(timer); fn(arg); };
+            const cmd = ffmpeg(inputPath)
                 // O WebM gravado pelo navegador não tem a duração real no cabeçalho
                 // (pensado pra streaming) — sem "genpts" o ffmpeg herda timestamps
                 // incorretos e o áudio final aparece com duração absurda no WhatsApp,
@@ -476,9 +489,16 @@ async function convertToOggOpus(buffer, inputExt = 'webm') {
                 .audioFrequency(16000)
                 .audioBitrate('32k')
                 .format('ogg')
-                .on('error', reject)
-                .on('end', resolve)
-                .save(outputPath);
+                .on('error', finish((err) => reject(new Error('ffmpeg falhou: ' + (err && err.message || err)))))
+                .on('end', finish(resolve));
+            // Trava de segurança: se o ffmpeg travar, mata o processo e rejeita —
+            // sem isso a requisição fica pendurada e pode derrubar o servidor.
+            const timer = setTimeout(() => {
+                if (settled) return; settled = true;
+                try { cmd.kill('SIGKILL'); } catch (e) {}
+                reject(new Error('ffmpeg: timeout de 20s na conversão do áudio'));
+            }, 20000);
+            cmd.save(outputPath);
         });
         return await fs.promises.readFile(outputPath);
     } finally {
@@ -516,8 +536,10 @@ async function uploadMediaToMeta(buffer, mimeType, fileName) {
 
 // 3. Send Message to WhatsApp (Suporta texto e mídias via Base64 do frontend)
 app.post('/api/whatsapp/send', async (req, res) => {
-    const { to, message, isTemplate, templateName, languageCode, templateParams, quoted_id, isReaction, reactionEmoji, isVoiceRecording } = req.body;
-    
+    const { to, message, isTemplate, templateName, languageCode, templateParams, quoted_id, isReaction, reactionEmoji } = req.body;
+    // mutável: se a conversão pra voice note falhar, cai pra áudio comum
+    let isVoiceRecording = req.body.isVoiceRecording;
+
     if (!to) {
         return res.status(400).json({ error: "Número de destino (to) é obrigatório." });
     }
@@ -584,27 +606,21 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
                     // Gravação de voz feita no navegador: converte pro formato de mensagem
                     // de voz nativa do WhatsApp (OGG/Opus) antes de subir pra Meta.
+                    // Se a conversão falhar, NÃO derruba o envio: manda o áudio original
+                    // como anexo comum (ainda toca, só não vira "voice note").
                     if (mediaType === "audio" && isVoiceRecording && mimeType !== 'audio/ogg') {
                         const sourceExt = (mimeType.split('/')[1] || 'webm').split(';')[0];
                         console.log(`Convertendo gravação de voz (${mimeType}) para OGG/Opus... (buffer original: ${buffer.length} bytes)`);
-
-                        // DEBUG TEMPORÁRIO: guarda uma cópia do áudio original e do convertido
-                        // pra investigar o erro "áudio não está mais disponível" no WhatsApp.
                         try {
-                            const debugDir = path.join(os.tmpdir(), 'wa-audio-debug');
-                            await fs.promises.mkdir(debugDir, { recursive: true });
-                            await fs.promises.writeFile(path.join(debugDir, `raw-${Date.now()}.${sourceExt}`), buffer);
-                        } catch (e) { console.error('Falha ao salvar debug do áudio original:', e); }
-
-                        buffer = await convertToOggOpus(buffer, sourceExt);
-                        mimeType = 'audio/ogg; codecs=opus';
-                        fileName = 'audio.ogg';
-
-                        console.log(`Conversão concluída: buffer OGG final tem ${buffer.length} bytes.`);
-                        try {
-                            const debugDir = path.join(os.tmpdir(), 'wa-audio-debug');
-                            await fs.promises.writeFile(path.join(debugDir, `converted-${Date.now()}.ogg`), buffer);
-                        } catch (e) { console.error('Falha ao salvar debug do áudio convertido:', e); }
+                            buffer = await convertToOggOpus(buffer, sourceExt);
+                            mimeType = 'audio/ogg; codecs=opus';
+                            fileName = 'audio.ogg';
+                            console.log(`Conversão concluída: buffer OGG final tem ${buffer.length} bytes.`);
+                        } catch (convErr) {
+                            console.error('Conversão de voz falhou — enviando áudio original sem flag de voz:', convErr && convErr.message);
+                            isVoiceRecording = false;
+                            if (!fileName || !fileName.includes('.')) fileName = `audio.${sourceExt || 'webm'}`;
+                        }
                     }
 
                     // Faz o upload para a Meta
@@ -1954,10 +1970,20 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_voice_library (
     created_by TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
+// Atalho "/" opcional pra disparar o áudio direto do campo de mensagem.
+queryD1('ALTER TABLE crm_voice_library ADD COLUMN comando TEXT').catch(() => {});
+
+// Normaliza o comando: sem "/", minúsculo, sem espaço, só [a-z0-9_-]. Vazio → null.
+function normalizeVoiceCmd(v) {
+    if (!v) return null;
+    const s = String(v).trim().replace(/^\/+/, '').toLowerCase()
+        .replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+    return s || null;
+}
 
 app.get('/api/voice-library', async (req, res) => {
     try {
-        const rows = await queryD1('SELECT id, nome, duration_seconds, created_by, created_at FROM crm_voice_library ORDER BY created_at DESC');
+        const rows = await queryD1('SELECT id, nome, comando, duration_seconds, created_by, created_at FROM crm_voice_library ORDER BY created_at DESC');
         res.json({ items: rows || [] });
     } catch (e) {
         console.error('Erro ao listar biblioteca de áudios:', e);
@@ -1983,6 +2009,7 @@ app.post('/api/voice-library', async (req, res) => {
         if (!nome || !nome.trim()) {
             return res.status(400).json({ error: 'Dê um nome pra esse áudio.' });
         }
+        const comando = normalizeVoiceCmd(req.body.comando);
         const match = (audio || '').match(/^data:(.*?);base64,(.*)$/s);
         if (!match) {
             return res.status(400).json({ error: 'Áudio inválido.' });
@@ -1997,13 +2024,31 @@ app.post('/api/voice-library', async (req, res) => {
 
         const id = `voice-${Date.now()}`;
         await queryD1(
-            'INSERT INTO crm_voice_library (id, nome, audio_base64, duration_seconds, created_by) VALUES (?, ?, ?, ?, ?)',
-            [id, nome.trim(), buffer.toString('base64'), duration_seconds || null, req.user?.username || null]
+            'INSERT INTO crm_voice_library (id, nome, comando, audio_base64, duration_seconds, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+            [id, nome.trim(), comando, buffer.toString('base64'), duration_seconds || null, req.user?.username || null]
         );
-        res.status(201).json({ success: true, id });
+        res.status(201).json({ success: true, id, comando });
     } catch (e) {
         console.error('Erro ao salvar áudio na biblioteca:', e);
         res.status(500).json({ error: e.message || 'Erro interno ao salvar áudio.' });
+    }
+});
+
+// Renomear / definir o comando "/" de um áudio já salvo.
+app.put('/api/voice-library/:id', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT id FROM crm_voice_library WHERE id = ?', [req.params.id]);
+        if (!rows || rows.length === 0) return res.status(404).json({ error: 'Áudio não encontrado.' });
+
+        const nome = (req.body.nome || '').trim();
+        if (!nome) return res.status(400).json({ error: 'O nome não pode ficar vazio.' });
+        const comando = normalizeVoiceCmd(req.body.comando);
+
+        await queryD1('UPDATE crm_voice_library SET nome = ?, comando = ? WHERE id = ?', [nome, comando, req.params.id]);
+        res.json({ success: true, nome, comando });
+    } catch (e) {
+        console.error('Erro ao atualizar áudio da biblioteca:', e);
+        res.status(500).json({ error: e.message || 'Erro interno ao atualizar áudio.' });
     }
 });
 

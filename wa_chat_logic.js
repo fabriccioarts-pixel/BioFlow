@@ -2743,14 +2743,27 @@ function renderVoiceLibraryList() {
         return;
     }
 
-    listEl.innerHTML = cachedVoiceLibrary.map(item => `
+    const inpStyle = 'background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.45rem 0.6rem; border-radius: 6px; outline: none; font-size: 0.82rem;';
+    listEl.innerHTML = cachedVoiceLibrary.map(item => {
+        const nomeJson = escapeHtml(JSON.stringify(item.nome));
+        const cmdBadge = item.comando
+            ? `<span style="font-size: 0.72rem; font-weight: 700; color: var(--accent-success); background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3); padding: 1px 6px; border-radius: 5px; flex-shrink: 0;">/${escapeHtml(item.comando)}</span>`
+            : '';
+        return `
         <div style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.7rem 0.9rem; display: flex; flex-direction: column; gap: 0.5rem;">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;">
-                <span style="font-weight: 600; font-size: 0.88rem; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(item.nome)}</span>
+            <div id="vl-view-${item.id}" style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                    <span style="font-weight: 600; font-size: 0.88rem; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(item.nome)}</span>
+                    ${cmdBadge}
+                </div>
                 <div style="display: flex; gap: 0.4rem; flex-shrink: 0;">
-                    <button type="button" onclick="sendFromLibrary('${item.id}', ${escapeHtml(JSON.stringify(item.nome))})" title="Enviar na conversa atual" ${window.currentActiveChat ? '' : 'disabled'}
+                    <button type="button" onclick="sendFromLibrary('${item.id}', ${nomeJson})" title="Enviar na conversa atual" ${window.currentActiveChat ? '' : 'disabled'}
                         style="background: var(--accent-success); border: none; color: #fff; padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem; opacity: ${window.currentActiveChat ? '1' : '0.5'};">
                         <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                    <button type="button" onclick="toggleLibraryAudioEdit('${item.id}', true)" title="Renomear / definir comando"
+                        style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-muted); padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;">
+                        <i class="fa-solid fa-pen"></i>
                     </button>
                     <button type="button" onclick="deleteLibraryAudio('${item.id}')" title="Excluir"
                         style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--accent-danger); padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;">
@@ -2758,9 +2771,48 @@ function renderVoiceLibraryList() {
                     </button>
                 </div>
             </div>
+            <div id="vl-edit-${item.id}" style="display: none; flex-direction: column; gap: 0.4rem;">
+                <input type="text" id="vl-edit-nome-${item.id}" value="${escapeHtml(item.nome)}" placeholder="Nome do áudio" style="${inpStyle}">
+                <div style="display: flex; align-items: center; gap: 0.35rem;">
+                    <span style="color: var(--accent-success); font-weight: 700; font-size: 0.9rem;">/</span>
+                    <input type="text" id="vl-edit-cmd-${item.id}" value="${escapeHtml(item.comando || '')}" placeholder="comando (opcional, ex: bemvindo)" style="${inpStyle} flex: 1;">
+                </div>
+                <div style="display: flex; gap: 0.4rem; justify-content: flex-end;">
+                    <button type="button" onclick="toggleLibraryAudioEdit('${item.id}', false)" class="btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.78rem;">Cancelar</button>
+                    <button type="button" onclick="updateLibraryAudio('${item.id}')" class="btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.78rem;"><i class="fa-solid fa-check"></i> Salvar</button>
+                </div>
+            </div>
             <audio controls preload="none" src="/api/voice-library/${encodeURIComponent(item.id)}/audio" style="width: 100%; height: 32px;"></audio>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
+}
+
+function toggleLibraryAudioEdit(id, on) {
+    const view = document.getElementById('vl-view-' + id);
+    const edit = document.getElementById('vl-edit-' + id);
+    if (!view || !edit) return;
+    view.style.display = on ? 'none' : 'flex';
+    edit.style.display = on ? 'flex' : 'none';
+    if (on) { const n = document.getElementById('vl-edit-nome-' + id); if (n) { n.focus(); n.select(); } }
+}
+
+async function updateLibraryAudio(id) {
+    const nome = (document.getElementById('vl-edit-nome-' + id)?.value || '').trim();
+    const comando = (document.getElementById('vl-edit-cmd-' + id)?.value || '').trim();
+    if (!nome) { alert('O nome não pode ficar vazio.'); return; }
+    try {
+        const res = await fetch('/api/voice-library/' + encodeURIComponent(id), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome, comando })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar');
+        if (typeof showToast === 'function') showToast('Áudio atualizado.', 'success');
+        await loadVoiceLibrary();
+    } catch (e) {
+        alert(e.message);
+    }
 }
 
 async function sendFromLibrary(id, nome) {
@@ -2922,6 +2974,7 @@ async function saveLibraryRecording() {
         alert('Digite um nome pra esse áudio.');
         return;
     }
+    const comando = (document.getElementById('vl-record-cmd-input')?.value || '').trim();
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -2929,13 +2982,14 @@ async function saveLibraryRecording() {
             const res = await fetch('/api/voice-library', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nome, audio: reader.result, duration_seconds: vlPendingDurationSeconds })
+                body: JSON.stringify({ nome, comando, audio: reader.result, duration_seconds: vlPendingDurationSeconds })
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || 'Erro ao salvar áudio');
 
             vlPendingBlob = null;
             vlPendingDurationSeconds = null;
+            if (document.getElementById('vl-record-cmd-input')) document.getElementById('vl-record-cmd-input').value = '';
             document.getElementById('vl-record-naming').style.display = 'none';
             document.getElementById('vl-idle-actions').style.display = 'flex';
             if (typeof showToast === 'function') showToast('Áudio salvo na biblioteca!', 'success');
@@ -4390,11 +4444,17 @@ function handleQuickReplyInput(e) {
             (qr.title && qr.title.toLowerCase().includes(query))
         ).map(qr => ({ kind: 'text', ...qr }));
 
-        // Áudios salvos também aparecem pelo mesmo atalho "/", pesquisando pelo nome —
-        // é a "biblioteca facilitada" pedida, unificada com as respostas de texto.
+        // Áudios salvos também aparecem pelo mesmo atalho "/" — pelo comando (se
+        // definido) ou pelo nome. Comando com match exato vem primeiro.
         const audioMatches = (cachedVoiceLibrary || []).filter(a =>
+            (a.comando && a.comando.toLowerCase().startsWith(query)) ||
             a.nome.toLowerCase().includes(query)
-        ).map(a => ({ kind: 'audio', ...a }));
+        ).map(a => ({ kind: 'audio', ...a }))
+         .sort((x, y) => {
+            const xe = x.comando && x.comando.toLowerCase() === query ? 0 : 1;
+            const ye = y.comando && y.comando.toLowerCase() === query ? 0 : 1;
+            return xe - ye;
+         });
 
         const matches = [...textMatches, ...audioMatches];
 
@@ -4460,8 +4520,9 @@ function renderQuickRepliesPopup(matches) {
         <div class="qr-popup-item" data-index="${index}" onclick="selectQuickReplyByIndex(${index})" style="padding: 0.6rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); ${activeStyle}">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <i class="fa-solid fa-microphone" style="color: var(--accent-success); font-size: 0.8rem;"></i>
-                <strong style="color: var(--accent-success); font-size: 0.85rem;">${escapeHtml(item.nome)}</strong>
-                <span style="font-size: 0.72rem; color: var(--text-muted); margin-left: auto;">Áudio salvo</span>
+                ${item.comando ? `<strong style="color: var(--accent-success); font-size: 0.85rem;">/${escapeHtml(item.comando)}</strong>` : ''}
+                <span style="font-size: 0.82rem; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(item.nome)}</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted); margin-left: auto; flex-shrink: 0;">Áudio salvo</span>
             </div>
         </div>`;
         }
