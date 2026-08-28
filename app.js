@@ -5,6 +5,41 @@ function initTheme() {
 }
 initTheme();
 
+// === LOADER PADRÃO — "morphing infinity" ===
+// Todo lugar do app usa <span class="amicro-loader">…</span>. Em vez de editar
+// dezenas de call sites, este shim troca o conteúdo pelo SVG do infinito
+// (e cobre loaders inseridos dinamicamente via MutationObserver).
+(function () {
+    var MI_PATH = 'M20,30 C20,7 43,7 50,30 C57,53 80,53 80,30 C80,7 57,7 50,30 C43,53 20,53 20,30 Z';
+    var MI_SVG =
+        '<svg class="mi-svg" viewBox="0 0 100 60" fill="none" aria-hidden="true">' +
+        '<path class="mi-track" d="' + MI_PATH + '"/>' +
+        '<path class="mi-head" pathLength="100" d="' + MI_PATH + '"/></svg>';
+
+    function upgrade(el) {
+        if (!el || el.dataset.mi) return;
+        el.dataset.mi = '1';
+        el.innerHTML = MI_SVG;
+        // Garante o pathLength mesmo se o parser de innerHTML não preservar o atributo.
+        var head = el.querySelector('.mi-head');
+        if (head) head.setAttribute('pathLength', '100');
+    }
+    function scan(node) {
+        if (node.nodeType !== 1) return;
+        if (node.classList && node.classList.contains('amicro-loader')) upgrade(node);
+        if (node.querySelectorAll) node.querySelectorAll('.amicro-loader').forEach(upgrade);
+    }
+
+    scan(document.documentElement);
+    document.addEventListener('DOMContentLoaded', function () { scan(document.documentElement); });
+    new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+            var added = muts[i].addedNodes;
+            for (var j = 0; j < added.length; j++) scan(added[j]);
+        }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+})();
+
 function toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme') || 'dark';
     const next = current === 'dark' ? 'light' : 'dark';
@@ -602,6 +637,27 @@ function updateKanbanEntradaBadge() {
     }
 }
 
+// Valor "efetivo" de um lead: o recebido, ou a soma dos procedimentos orçados.
+function leadEffectiveValue(l) {
+if (l.valor_recebido) return parseFloat(l.valor_recebido) || 0;
+return parseOrcamentoArray(l.orcamento).reduce((sum, item) => sum + (parseFloat(item.valor) || 0), 0);
+}
+
+// Ordena os leads que vão pro board conforme o seletor "Ordenar cards".
+// Datas do D1 vêm como texto ISO no mesmo formato pra todas as linhas, então
+// comparar string já dá ordem cronológica.
+function sortLeadsForBoard(list, key) {
+const byCreatedAsc = (a, b) => (a.created_at || '').localeCompare(b.created_at || '');
+const cmp = {
+    created_asc:   byCreatedAsc,
+    created_desc:  (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+    value_desc:    (a, b) => leadEffectiveValue(b) - leadEffectiveValue(a) || byCreatedAsc(a, b),
+    name_asc:      (a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { sensitivity: 'base' }),
+    activity_desc: (a, b) => (b.assigned_at || b.created_at || '').localeCompare(a.assigned_at || a.created_at || ''),
+};
+return list.slice().sort(cmp[key] || byCreatedAsc);
+}
+
 function renderBoard() {
 updateKanbanEntradaBadge();
 document.querySelectorAll('.card-list').forEach(col => col.innerHTML = '');
@@ -661,7 +717,13 @@ if (dateEnd && leadDate > dateEnd) return false;
 return true;
 });
 
-filteredLeads.forEach(lead => {
+// Ordenação dos cards (seletor "Ordenar cards" — persistido em localStorage).
+const sortKey = localStorage.getItem('kanban-sort') || 'created_asc';
+const sortSel = document.getElementById('kanban-sort');
+if (sortSel && sortSel.value !== sortKey) sortSel.value = sortKey;
+const sortedLeads = sortLeadsForBoard(filteredLeads, sortKey);
+
+sortedLeads.forEach(lead => {
 const col = document.getElementById(lead.column);
 if (col) {
 const card = document.createElement('div');
@@ -834,6 +896,7 @@ let sourceColumnId = null;
 // mesmo mecanismo já usado (e comprovadamente confiável) no drag do dashboard.
 let kanbanPointerDrag = null;
 let kanbanDragGhost = null;
+let kanbanDragLayer = null;
 let kanbanHoveredColumn = null;
 const KANBAN_DRAG_THRESHOLD = 6; // px — abaixo disso ainda conta como clique (ex: no "..." do card)
 
@@ -871,11 +934,21 @@ function updateKanbanCardDrag(event) {
         document.body.classList.add('kanban-dragging-body');
         state.card.setPointerCapture?.(state.pointerId);
 
+        // Camada que contém o fantasma: fixed + inset:0 + overflow:hidden, então
+        // por mais que o card seja arrastado pra fora da tela ele nunca aumenta a
+        // largura do documento (era isso que "compactava" o site na horizontal).
+        kanbanDragLayer = document.createElement('div');
+        kanbanDragLayer.className = 'kanban-drag-layer';
+        document.body.appendChild(kanbanDragLayer);
+
         kanbanDragGhost = state.card.cloneNode(true);
         kanbanDragGhost.removeAttribute('id');
+        // O clone herda a classe "dragging" do original, e
+        // ".card.dragging { visibility: hidden }" deixaria o fantasma invisível.
+        kanbanDragGhost.classList.remove('dragging');
         kanbanDragGhost.classList.add('kanban-drag-ghost');
         kanbanDragGhost.style.width = `${state.rect.width}px`;
-        document.body.appendChild(kanbanDragGhost);
+        kanbanDragLayer.appendChild(kanbanDragGhost);
     }
 
     if (!kanbanDragGhost) return;
@@ -901,6 +974,7 @@ function finishKanbanCardDrag(event) {
         state.card.classList.remove('dragging');
         document.body.classList.remove('kanban-dragging-body');
         if (kanbanDragGhost) { kanbanDragGhost.remove(); kanbanDragGhost = null; }
+        if (kanbanDragLayer) { kanbanDragLayer.remove(); kanbanDragLayer = null; }
         if (kanbanHoveredColumn) {
             const targetColumnId = kanbanHoveredColumn.id;
             kanbanHoveredColumn.classList.remove('kanban-drop-hover');
@@ -3765,8 +3839,10 @@ async function performLogin() {
     const p = (document.getElementById('login-password').value || '').trim();
     const badge = document.getElementById('login-error-badge');
     const badgeText = document.getElementById('login-error-text');
+    const submitBtn = document.getElementById('login-submit');
 
     if (badge) badge.style.display = 'none';
+    submitBtn?.classList.add('is-loading');
 
     try {
         const res = await fetch('/api/login', {
@@ -3782,7 +3858,7 @@ async function performLogin() {
             if (data.mustChangePassword) {
                 pendingLoginPassword = p;
                 document.getElementById('login-fields').style.display = 'none';
-                document.getElementById('force-change-fields').style.display = 'block';
+                document.getElementById('force-change-fields').style.display = 'flex';
                 return;
             }
             finishLogin(data.user);
@@ -3797,12 +3873,15 @@ async function performLogin() {
             badge.style.display = 'flex';
             badgeText.innerText = 'Falha de conexão com o servidor.';
         }
+    } finally {
+        submitBtn?.classList.remove('is-loading');
     }
 }
 
 async function submitForceChangePassword() {
     const badge = document.getElementById('login-error-badge');
     const badgeText = document.getElementById('login-error-text');
+    const submitBtn = document.getElementById('force-change-submit');
     if (badge) badge.style.display = 'none';
 
     const newPassword = (document.getElementById('force-new-password').value || '').trim();
@@ -3817,6 +3896,7 @@ async function submitForceChangePassword() {
         return;
     }
 
+    submitBtn?.classList.add('is-loading');
     try {
         const res = await fetch('/api/change-password', {
             method: 'POST',
@@ -3829,7 +3909,7 @@ async function submitForceChangePassword() {
         if (res.ok && data.success) {
             pendingLoginPassword = null;
             document.getElementById('force-change-fields').style.display = 'none';
-            document.getElementById('login-fields').style.display = 'block';
+            document.getElementById('login-fields').style.display = 'flex';
             // Faz login de novo já com a senha nova para abrir a sessão normalmente
             document.getElementById('login-password').value = newPassword;
             await performLogin();
@@ -3838,6 +3918,8 @@ async function submitForceChangePassword() {
         }
     } catch(e) {
         if (badge) { badge.style.display = 'flex'; badgeText.innerText = 'Falha de conexão com o servidor.'; }
+    } finally {
+        submitBtn?.classList.remove('is-loading');
     }
 }
 

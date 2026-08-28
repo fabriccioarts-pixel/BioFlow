@@ -6,18 +6,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BioFlow</title>
 
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap"
-        rel="stylesheet">
+    <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
 
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="icon" type="image/svg+xml" href="Favicon.svg">
+    <style>
+        /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
+        .sb-logo-full { height: 20px; width: auto; max-width: 150px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-mark { height: 26px; width: 26px; object-fit: contain; display: none; flex-shrink: 0; }
+        header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
+        header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
+    </style>
 </head>
 
 <body>
@@ -25,63 +29,77 @@
 
     <!-- LOGIN OVERLAY -->
     <div id="login-overlay" class="modal-overlay active"
-        style="z-index: 9999; background: var(--bg-main); display: flex; align-items: center; justify-content: center; padding: 1rem;">
+        style="z-index: 100001; background: var(--bg-main); display: flex; align-items: center; justify-content: center; padding: 1rem;">
         
         <div class="auth-card-container">
+            <div class="auth-brand">
+                <img src="bioflow%20logo.svg" alt="BioFlow" class="auth-logo-img"
+                    style="height: 30px; width: auto; max-width: 220px; object-fit: contain; display: block;"
+                    onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'BioFlow'}))">
+            </div>
+
             <div class="auth-card-outer">
                 <div class="auth-card-inner">
-                    <div class="auth-header text-center" style="margin-bottom: 1.5rem;">
-                        <h2 class="auth-title">Acesso Restrito</h2>
-                        <p class="auth-desc">Faça login para acessar o CRM e sua equipe.</p>
+                    <div class="auth-header">
+                        <h2 class="auth-title">Entrar no workspace</h2>
+                        <p class="auth-desc">Acesse o CRM da sua clínica e a agenda da equipe.</p>
                     </div>
 
-                    <div id="login-error-badge" style="display: none; background: rgba(255, 59, 48, 0.1); color: var(--accent-danger); padding: 0.8rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.9rem; border: 1px solid rgba(255, 59, 48, 0.2); text-align: left; display: flex; align-items: center; gap: 8px;">
+                    <div id="login-error-badge" class="auth-error" role="alert" style="display: none;">
                         <i class="fa-solid fa-circle-exclamation"></i> <span id="login-error-text">Usuário ou senha inválidos</span>
                     </div>
 
-                    <form id="login-fields" onsubmit="event.preventDefault(); performLogin();" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <form id="login-fields" onsubmit="event.preventDefault(); performLogin();">
                         <div class="auth-input-group">
+                            <label class="sr-only" for="login-username">Usuário</label>
                             <i class="fa-solid fa-user auth-input-icon"></i>
                             <input type="text" id="login-username" name="username" autocomplete="username" placeholder="Usuário" class="auth-input" required>
                         </div>
                         <div class="auth-input-group">
+                            <label class="sr-only" for="login-password">Senha</label>
                             <i class="fa-solid fa-lock auth-input-icon"></i>
                             <input type="password" id="login-password" name="password" autocomplete="current-password" placeholder="Senha" class="auth-input" required>
-                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('login-password')" title="Mostrar/Ocultar Senha">
+                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('login-password')" aria-label="Mostrar ou ocultar a senha">
                                 <i class="fa-solid fa-eye" id="login-password-eye"></i>
                             </button>
                         </div>
 
-                        <button type="submit" class="auth-btn-submit">
-                            Entrar no Workspace
+                        <button type="submit" id="login-submit" class="auth-btn-submit">
+                            <span class="auth-btn-label">Entrar <i class="fa-solid fa-arrow-right"></i></span>
+                            <span class="amicro-loader" aria-hidden="true"><span></span><span></span><span></span></span>
                         </button>
                     </form>
 
-                    <form id="force-change-fields" style="display: none; flex-direction: column; gap: 1rem;" onsubmit="event.preventDefault(); submitForceChangePassword();">
-                        <p style="color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem; text-align: center;">Essa conta ainda usa uma senha padrão. Defina uma senha nova para continuar.</p>
+                    <form id="force-change-fields" style="display: none;" onsubmit="event.preventDefault(); submitForceChangePassword();">
+                        <p class="auth-note">Essa conta ainda usa uma senha padrão. Defina uma senha nova para continuar.</p>
                         <div class="auth-input-group">
+                            <label class="sr-only" for="force-new-password">Nova senha</label>
                             <i class="fa-solid fa-lock auth-input-icon"></i>
                             <input type="password" id="force-new-password" autocomplete="new-password" placeholder="Nova senha (mínimo 6 caracteres)" class="auth-input" required>
-                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('force-new-password')" title="Mostrar/Ocultar Senha">
+                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('force-new-password')" aria-label="Mostrar ou ocultar a senha">
                                 <i class="fa-solid fa-eye" id="force-new-password-eye"></i>
                             </button>
                         </div>
                         <div class="auth-input-group">
+                            <label class="sr-only" for="force-confirm-password">Confirmar nova senha</label>
                             <i class="fa-solid fa-lock auth-input-icon"></i>
                             <input type="password" id="force-confirm-password" autocomplete="new-password" placeholder="Confirmar nova senha" class="auth-input" required>
-                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('force-confirm-password')" title="Mostrar/Ocultar Senha">
+                            <button type="button" class="auth-toggle-password" onclick="togglePasswordVisibility('force-confirm-password')" aria-label="Mostrar ou ocultar a senha">
                                 <i class="fa-solid fa-eye" id="force-confirm-password-eye"></i>
                             </button>
                         </div>
 
-                        <button type="submit" class="auth-btn-submit">
-                            Definir nova senha
+                        <button type="submit" id="force-change-submit" class="auth-btn-submit">
+                            <span class="auth-btn-label">Definir nova senha</span>
+                            <span class="amicro-loader" aria-hidden="true"><span></span><span></span><span></span></span>
                         </button>
                     </form>
-                    
+
                     <p id="login-error" style="color: var(--accent-danger); margin-top: 1rem; display: none; text-align: center; font-size: 0.9rem;">Usuário ou senha inválidos.</p>
                 </div>
             </div>
+
+            <p class="auth-foot">Acesso restrito à equipe autorizada.</p>
         </div>
     </div>
 
@@ -89,8 +107,10 @@
 
     <header>
         <div class="sb-logo">
-            <i class="fa-solid fa-dna"></i>
-            <span style="font-weight: 700; font-size: 15px; color: var(--header-text); margin-left: 8px; letter-spacing: -0.01em;">BioFlow</span>
+            <img src="bioflow%20logo.svg" alt="BioFlow" class="sb-logo-img sb-logo-full"
+                onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-dna'}))">
+            <img src="Favicon.svg" alt="" aria-hidden="true" class="sb-logo-mark"
+                onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">
             <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;" title="CRM Vendas">
@@ -289,6 +309,15 @@
                 <option value="Meta Ads">Meta Ads</option>
                 <option value="Google Meu Negócio">Google Meu Negócio</option>
                 <option value="Indicação">Indicação</option>
+            </select>
+
+            <select id="kanban-sort" title="Ordenar cards" onchange="localStorage.setItem('kanban-sort', this.value); renderBoard();"
+                style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: auto;">
+                <option value="created_asc">↑ Mais antigos primeiro</option>
+                <option value="created_desc">↓ Mais recentes primeiro</option>
+                <option value="value_desc">💰 Maior valor</option>
+                <option value="name_asc">🔤 Nome (A–Z)</option>
+                <option value="activity_desc">🕗 Última atividade</option>
             </select>
 
             <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -1830,7 +1859,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <!-- Centro (Navegação de Data) -->
             <div class="agenda-filters"
-                style="display: flex; align-items: center; justify-self: center; gap: 0.5rem; font-family: 'Inter', sans-serif;">
+                style="display: flex; align-items: center; justify-self: center; gap: 0.5rem; font-family: inherit;">
                 <button class="btn-secondary"
                     style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-main);"
                     onclick="changeAgendaDate(-1)"><i class="fa-solid fa-chevron-left"></i></button>
@@ -2688,11 +2717,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <!-- Header do Chat Ativo -->
             <div id="chat-active-header"
-                style="display: none; padding: 1rem 2rem; border-bottom: 1px solid var(--border-color); background: var(--bg-card); align-items: center; justify-content: flex-start;">
-                <div style="display: flex; align-items: center; gap: 1rem;">
+                style="display: none; padding: 1rem 2rem; border-bottom: 1px solid var(--border-color); background: var(--bg-card); align-items: center; justify-content: space-between; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.9rem; min-width: 0;">
+                    <button type="button" class="chat-mobile-back" title="Voltar para as conversas"
+                        aria-label="Voltar para as conversas"
+                        onclick="document.getElementById('view-chat').classList.remove('chat-open')">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
                     <div id="chat-header-avatar-slot"></div>
-                    <div>
-                        <h3 id="chat-active-name" style="font-size: 1.1rem; margin-bottom: 0.2rem;">Nome do Contato</h3>
+                    <div style="min-width: 0;">
+                        <h3 id="chat-active-name" style="font-size: 1.1rem; margin-bottom: 0.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nome do Contato</h3>
                         <p id="chat-active-phone"
                             style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span id="chat-active-phone-number">+55 00 00000-0000</span>
@@ -2701,6 +2735,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </p>
                     </div>
                 </div>
+                <button type="button" class="chat-mobile-ficha" title="Ficha do lead" aria-label="Ver ficha do lead"
+                    onclick="document.getElementById('view-chat').classList.toggle('lead-open')">
+                    <i class="fa-solid fa-address-card"></i>
+                </button>
             </div>
 
             <!-- Banner de Trava de Atendimento (conversa em atendimento por outro atendente) -->
@@ -2872,11 +2910,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         <!-- Painel Direito: Informações do Lead -->
         <div class="chat-lead-panel" id="chat-lead-panel"
             style="width: 320px; height: 100%; border-left: 1px solid var(--border-color); display: none; flex-direction: column; background: var(--bg-card); overflow-y: auto; flex-shrink: 0;">
-            <div style="padding: 1.1rem 1.25rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+            <div style="padding: 1.1rem 1.25rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
                 <h3
                     style="font-size: 0.85rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 0.5rem; margin: 0;">
                     <i class="fa-solid fa-address-card" style="color: var(--accent-primary);"></i> Informações do Lead
                 </h3>
+                <button type="button" class="chat-lead-close" title="Fechar" aria-label="Fechar ficha"
+                    onclick="document.getElementById('view-chat').classList.remove('lead-open')">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
             </div>
 
             <div style="padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: 1.25rem;">

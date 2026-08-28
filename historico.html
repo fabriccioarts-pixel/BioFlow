@@ -5,10 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BioFlow - Histórico Financeiro</title>
     
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
     
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -17,8 +14,15 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="icon" type="image/svg+xml" href="Favicon.svg">
     <style>
+        /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
+        .sb-logo-full { height: 20px; width: auto; max-width: 150px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-mark { height: 26px; width: 26px; object-fit: contain; display: none; flex-shrink: 0; }
+        header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
+        header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
+
         .table-container {
             padding: 1.5rem;
             max-width: 1400px;
@@ -87,8 +91,10 @@
 
     <header>
         <div class="sb-logo">
-            <i class="fa-solid fa-dna"></i>
-            <span style="font-weight: 700; font-size: 15px; color: var(--header-text); margin-left: 8px; letter-spacing: -0.01em;">BioFlow</span>
+            <img src="bioflow%20logo.svg" alt="BioFlow" class="sb-logo-img sb-logo-full"
+                onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-dna'}))">
+            <img src="Favicon.svg" alt="" aria-hidden="true" class="sb-logo-mark"
+                onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">
             <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;">

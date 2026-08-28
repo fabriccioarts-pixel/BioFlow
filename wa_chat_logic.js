@@ -1406,6 +1406,8 @@ function closeActiveChat() {
     if (messages) messages.style.display = 'none';
     if (input) input.style.display = 'none';
     if (leadPanel) leadPanel.style.display = 'none';
+    // mobile: volta pra lista de conversas
+    document.getElementById('view-chat')?.classList.remove('chat-open', 'lead-open');
     if (window.chatPollingInterval) {
         clearInterval(window.chatPollingInterval);
         window.chatPollingInterval = null;
@@ -1675,7 +1677,7 @@ function hideChatNotificationDot() {
 }
 
 async function loadChats(silent = false) {
-    if (!silent) document.getElementById('chat-contacts-list').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando conversas...</div>';
+    if (!silent) document.getElementById('chat-contacts-list').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando conversas...</div>';
     
     try {
         const res = await fetch('/api/whatsapp/chats');
@@ -1868,7 +1870,7 @@ async function saveLeadNotesFromChat(leadId) {
     lead.notas = adBlock ? `${adBlock}\n\n${newRest}` : newRest;
 
     const oldLabel = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Salvando...'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando...'; }
 
     try {
         await fetch(`/api/leads/${leadId}`, {
@@ -2209,7 +2211,7 @@ async function toggleTransferMenu(e, leadId) {
     popup.style.display = isShowing ? 'none' : 'block';
     if (isShowing) return;
 
-    popup.innerHTML = `<div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando equipe...</div>`;
+    popup.innerHTML = `<div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando equipe...</div>`;
 
     try {
         if (!cachedTeamUsers) {
@@ -2720,7 +2722,7 @@ let cachedVoiceLibrary = [];
 async function loadVoiceLibrary() {
     const listEl = document.getElementById('vl-list');
     if (!listEl) return;
-    listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando...</div>`;
+    listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</div>`;
 
     try {
         const res = await fetch('/api/voice-library');
@@ -3053,7 +3055,7 @@ async function fetchWhatsAppBusinessProfile() {
     if (loadingEl) {
         loadingEl.style.display = 'flex';
         loadingEl.innerHTML = `
-            <i class="fa-solid fa-circle-notch fa-spin" style="font-size: 1.5rem; color: var(--accent-success);"></i>
+            <span class="amicro-loader" style="font-size: 1.5rem; color: var(--accent-success);"><span></span><span></span><span></span></span>
             <span>Buscando informações comerciais na Meta API...</span>
         `;
     }
@@ -3185,7 +3187,7 @@ async function saveCRMSettings() {
         const origText = saveBtn ? saveBtn.innerHTML : '';
         if (saveBtn) {
             saveBtn.disabled = true;
-            saveBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Salvando Meta API...';
+            saveBtn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando Meta API...';
         }
         
         try {
@@ -3311,7 +3313,7 @@ function copyUtmSnippet() {
 async function loadCampaigns() {
     const listEl = document.getElementById('campaigns-list');
     if (!listEl) return;
-    listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando campanhas...</div>`;
+    listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando campanhas...</div>`;
 
     try {
         const res = await fetch('/api/campaigns');
@@ -3615,7 +3617,7 @@ async function submitNewCampaign() {
 
     const btn = document.getElementById('btn-create-campaign');
     const origText = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Salvando...'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando...'; }
 
     try {
         const isEditing = !!editingCampaignId;
@@ -3835,6 +3837,9 @@ async function openChat(phone, name, silent = false) {
     document.getElementById('chat-active-header').style.display = 'flex';
     document.getElementById('chat-active-messages').style.display = 'flex';
     document.getElementById('chat-active-input').style.display = 'flex';
+    // mobile: abre a conversa em tela cheia (esconde a lista)
+    document.getElementById('view-chat')?.classList.add('chat-open');
+    document.getElementById('view-chat')?.classList.remove('lead-open');
 
     // Restaura o rascunho salvo dessa conversa, se houver
     const draftInput = document.getElementById('chat-input-text');
@@ -3944,7 +3949,7 @@ async function openChat(phone, name, silent = false) {
         renderLeadInfoPanel(targetLead, phone);
     }
 
-    if(!silent) document.getElementById('chat-active-messages').innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Carregando mensagens...</div>';
+    if(!silent) document.getElementById('chat-active-messages').innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando mensagens...</div>';
     
     try {
         const res = await fetch(`/api/whatsapp/chat/${phone}`);

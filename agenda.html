@@ -5,10 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CRM Comercial - Clínica</title>
 
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
 
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -85,7 +82,7 @@
             </div>
 
             <!-- Lado Direito (Navegação de Data) -->
-            <div class="agenda-filters" style="display: flex; align-items: center; gap: 0.5rem; font-family: 'Inter', sans-serif;">
+            <div class="agenda-filters" style="display: flex; align-items: center; gap: 0.5rem; font-family: inherit;">
                 <button class="btn-secondary" style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-color);" onclick="changeAgendaDate(-1)"><i class="fa-solid fa-chevron-left"></i></button>
                 <span id="agenda-date-display" style="font-weight: 700; font-size: 0.95rem; text-align: center; color: var(--text-color); margin: 0 0.5rem;">Hoje</span>
                 <button class="btn-secondary" style="border: 1px solid var(--border-color); padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; color: var(--text-color);" onclick="changeAgendaDate(1)"><i class="fa-solid fa-chevron-right"></i></button>
