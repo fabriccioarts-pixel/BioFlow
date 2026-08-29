@@ -2210,7 +2210,7 @@ function switchTab(tabId) {
         sumidos: 'Sumidos',
         aniversariantes: 'Aniversariantes',
         contatos: 'Contatos',
-        historico: 'Histórico',
+        historico: 'Financeiro',
     };
     if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
 
