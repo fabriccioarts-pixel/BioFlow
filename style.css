@@ -128,6 +128,8 @@
     
     --accent-primary: #d4af37;
     --accent-primary-deep: #a07d1f;
+    --accent-gradient: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 78%, #ffffff) 0%, var(--accent-primary) 50%, var(--accent-primary-deep) 100%);
+    --accent-gradient-hover: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-primary-deep) 100%);
     --accent-success: #10b981;
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
@@ -222,6 +224,8 @@
     
     --accent-primary: #98771c;
     --accent-primary-deep: #6d5514;
+    --accent-gradient: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 78%, #ffffff) 0%, var(--accent-primary) 50%, var(--accent-primary-deep) 100%);
+    --accent-gradient-hover: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-primary-deep) 100%);
     --accent-success: #059669;
     --accent-warning: #d97706;
     --accent-danger: #dc2626;
@@ -330,6 +334,8 @@
 
     --accent-primary: #d4af37;
     --accent-primary-deep: #a07d1f;
+    --accent-gradient: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 78%, #ffffff) 0%, var(--accent-primary) 50%, var(--accent-primary-deep) 100%);
+    --accent-gradient-hover: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-primary-deep) 100%);
     --accent-success: #10b981;
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
@@ -4726,12 +4732,14 @@ select.form-control option,
     opacity: 0.5;
 }
 .btn-primary {
-    background-color: hsl(var(--primary)) !important;
-    color: hsl(var(--primary-foreground)) !important;
+    background: var(--accent-gradient) !important;
+    color: #2a2100 !important;
+    border: none !important;
     box-shadow: none;
 }
 .btn-primary:hover {
-    background-color: hsl(var(--primary) / 0.9) !important;
+    background: var(--accent-gradient-hover) !important;
+    filter: brightness(1.04);
 }
 .btn-secondary {
     background-color: hsl(var(--secondary)) !important;
