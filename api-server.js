@@ -1683,6 +1683,85 @@ async function backfillAgendamentosCentavos() {
 }
 backfillAgendamentosCentavos();
 
+// Espelha o valor do card do Kanban em crm_pagamentos, pra esse dinheiro aparecer
+// na tela Financeiro. Usa valor_recebido; se não houver, a soma do orçamento.
+// A linha-espelho é marcada com criado_por='kanban' + lead_id (sempre a mesma).
+// Idempotente: cria, atualiza o valor, ou remove se o card zerar.
+const COLUNAS_COM_VALOR = ['col-orcado', 'col-agendado', 'col-ganho'];
+
+async function syncLeadPagamento(leadId) {
+    try {
+        const rows = await queryD1(
+            'SELECT id, nome, valor_recebido, orcamento, column_id, data_valor FROM leads WHERE id = ?',
+            [leadId]
+        );
+        if (!rows.length) return;
+        const lead = rows[0];
+
+        let cents = brlToCents(lead.valor_recebido);
+        const recebido = !!(cents && cents > 0);
+        if (!recebido) {
+            const soma = parseOrcamentoArray(lead.orcamento)
+                .reduce((s, it) => s + (brlToCents(it.valor) || 0), 0);
+            cents = soma;
+        }
+
+        // Fora de coluna com valor e sem valor recebido -> não espelha.
+        if (!recebido && !COLUNAS_COM_VALOR.includes(lead.column_id)) cents = 0;
+
+        const mirror = (await queryD1(
+            "SELECT * FROM crm_pagamentos WHERE lead_id = ? AND criado_por = 'kanban' AND tipo = 'recebimento' LIMIT 1",
+            [leadId]
+        ))[0];
+
+        if (!cents || cents <= 0) {
+            if (mirror && mirror.status !== 'cancelado') {
+                await queryD1('DELETE FROM crm_pagamentos WHERE id = ?', [mirror.id]);
+            }
+            return;
+        }
+
+        const proc = parseOrcamentoArray(lead.orcamento).find(i => i.procedimento)?.procedimento;
+        const descricao = 'Kanban: ' + (proc || lead.nome || 'venda');
+        const pago = recebido || lead.column_id === 'col-ganho';
+        const dataRef = (lead.data_valor || '').split(' ')[0] || todayISO();
+
+        if (mirror) {
+            if (mirror.status === 'cancelado') return; // respeita estorno manual
+            const sets = ['valor_centavos = ?', 'paciente = ?', 'descricao = ?'];
+            const params = [cents, lead.nome || null, descricao];
+            if (pago && mirror.status === 'pendente') {
+                sets.push("status = 'pago'", 'pago_em = ?');
+                params.push(mirror.pago_em || dataRef);
+            }
+            params.push(mirror.id);
+            await queryD1(`UPDATE crm_pagamentos SET ${sets.join(', ')} WHERE id = ?`, params);
+        } else {
+            await queryD1(
+                `INSERT INTO crm_pagamentos
+                   (lead_id, descricao, paciente, valor_centavos, tipo, status, pago_em, parcela, parcelas_total, criado_por)
+                 VALUES (?, ?, ?, ?, 'recebimento', ?, ?, 1, 1, 'kanban')`,
+                [leadId, descricao, lead.nome || null, cents, pago ? 'pago' : 'pendente', pago ? dataRef : null]
+            );
+        }
+    } catch (e) {
+        console.warn('[financeiro] syncLeadPagamento falhou para lead', leadId, '-', e.message);
+    }
+}
+
+async function backfillKanbanPagamentos() {
+    try {
+        const leads = await queryD1(
+            "SELECT id FROM leads WHERE (valor_recebido IS NOT NULL AND valor_recebido > 0) OR (orcamento IS NOT NULL AND orcamento != '' AND orcamento != '[]')"
+        );
+        for (const l of leads) await syncLeadPagamento(l.id);
+        if (leads.length) console.log(`[financeiro] espelho Kanban->pagamentos: ${leads.length} lead(s) sincronizado(s).`);
+    } catch (e) {
+        console.warn('[financeiro] backfill Kanban->pagamentos falhou (repete no próximo boot):', e.message);
+    }
+}
+backfillKanbanPagamentos();
+
 // Configurações simples de chave/valor (ex.: meta de receita do dashboard) —
 // evita criar uma tabela dedicada pra cada configuração pontual do sistema.
 queryD1(`CREATE TABLE IF NOT EXISTS crm_settings (
@@ -3189,6 +3268,7 @@ app.post('/api/leads', async (req, res) => {
             [id, nome, telefone ? normalizePhoneBR(telefone) : '', origem || '', born || '', owner_id || null, column_id || 'col-entrada', fb_click_id || '', email || '', notas || '', tags || '', valor_recebido || null, orcamento || '']
         );
         broadcastLeadsUpdate('created', id);
+        if (valor_recebido || orcamento) syncLeadPagamento(id);
         res.json({ success: true, id });
     } catch (e) {
         console.error(e);
@@ -3292,6 +3372,12 @@ app.put('/api/leads/:id', async (req, res) => {
             sendMetaCapiEvent('Lead', lead);
         }
 
+        // Mantém o espelho do valor do card na tela Financeiro.
+        if (valor_recebido !== undefined || orcamento !== undefined ||
+            (column_id !== undefined && valueColumns.includes(column_id))) {
+            syncLeadPagamento(id);
+        }
+
         broadcastLeadsUpdate('updated', id);
         res.json({ success: true });
     } catch (e) {
@@ -3362,6 +3448,7 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
             }
         } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
 
+        syncLeadPagamento(id);
         res.status(201).json({ success: true, item: newItem, items });
     } catch (e) {
         console.error('Erro ao adicionar orçamento:', e);
@@ -3394,6 +3481,7 @@ app.put('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
             }
         } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
 
+        syncLeadPagamento(id);
         res.json({ success: true, items });
     } catch (e) {
         console.error('Erro ao editar orçamento:', e);
@@ -3412,6 +3500,7 @@ app.delete('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
 
         const items = parseOrcamentoArray(leadRows[0].orcamento).filter(i => i.id !== orcId);
         await queryD1('UPDATE leads SET orcamento = ? WHERE id = ?', [JSON.stringify(items), id]);
+        syncLeadPagamento(id);
         res.json({ success: true, items });
     } catch (e) {
         console.error('Erro ao excluir orçamento:', e);
