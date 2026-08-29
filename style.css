@@ -4406,7 +4406,9 @@ select.form-control option,
 }
 
 /* Toggle switch (substitui checkbox nativo esticado).
-   Prefixado com .utm-field pra vencer o "display:block" de ".utm-field label". */
+   O 2º seletor, mais específico, vence o "display:block" de ".utm-field label"
+   quando o switch está dentro de um .utm-field. */
+.utm-switch,
 .utm-field label.utm-switch {
     display: flex;
     align-items: center;

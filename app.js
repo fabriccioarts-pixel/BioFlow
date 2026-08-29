@@ -2097,7 +2097,9 @@ async function confirmAgendamento() {
 }
 
 function exportarCSVFinanceiro() {
-    window.location.href = '/api/export-csv';
+    // Acompanha o toggle da tela: por padrão só os agendamentos deste sistema.
+    const incluirAmigo = document.getElementById('filtro-incluir-amigo')?.checked;
+    window.location.href = '/api/export-csv' + (incluirAmigo ? '?only_local=0' : '');
 }
 
 // === NAVEGAÇÃO DE ABAS ===

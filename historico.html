@@ -305,6 +305,11 @@
             <button class="btn-secondary" onclick="limparFiltros()" style="height: 38px; padding: 0 1rem;" title="Limpar Filtros">
                 <i class="fa-solid fa-eraser"></i>
             </button>
+            <label class="utm-switch" style="min-width: 220px;">
+                <input type="checkbox" id="filtro-incluir-amigo" onchange="carregarHistorico()">
+                <span class="utm-switch-track"><span class="utm-switch-thumb"></span></span>
+                <span class="utm-switch-text">Incluir agendamentos feitos direto no Amigo App</span>
+            </label>
         </div>
 
         
@@ -594,11 +599,15 @@
             tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando dados...</td></tr>`;
 
             try {
-                let url = '/api/historico-financeiro';
+                const params = new URLSearchParams();
                 if (historicoCustomRange) {
                     const toIso = (d) => d.toISOString().split('T')[0];
-                    url += `?start=${toIso(historicoCustomRange.start)}&end=${toIso(historicoCustomRange.end)}`;
+                    params.set('start', toIso(historicoCustomRange.start));
+                    params.set('end', toIso(historicoCustomRange.end));
                 }
+                // Por padrão só os agendamentos deste sistema; o toggle inclui os do Amigo App.
+                if (document.getElementById('filtro-incluir-amigo')?.checked) params.set('only_local', '0');
+                const url = '/api/historico-financeiro' + (params.toString() ? `?${params}` : '');
 
                 const res = await fetch(url);
                 window.historicoData = await res.json();

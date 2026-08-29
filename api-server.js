@@ -4062,7 +4062,11 @@ app.delete('/api/historico-financeiro/:id', async (req, res) => {
 // ==========================================
 // HELPER: Lista completa de agendamentos (Amigo App ao vivo + dados financeiros locais)
 // ==========================================
-async function getMergedAgendamentos(startDate, endDate) {
+async function getMergedAgendamentos(startDate, endDate, opts = {}) {
+    // onlyLocal: descarta os agendamentos que vieram só do Amigo App (marcados
+    // direto lá, sem passar por este CRM) — deixa só os que este sistema criou
+    // (têm registro em agendamentos_financeiro).
+    const { onlyLocal = false } = opts;
     const AMIGO_API_TOKEN = process.env.AMIGO_API_TOKEN;
     if (!AMIGO_API_TOKEN) throw new Error('Token do Amigo App não configurado.');
     const headers = { 'Authorization': `Bearer ${AMIGO_API_TOKEN}` };
@@ -4105,6 +4109,7 @@ async function getMergedAgendamentos(startDate, endDate) {
 
     const merged = attendances.map(att => {
         const local = localByAttendanceId.get(String(att.id));
+        if (onlyLocal && !local) return null;
         return {
             id: local ? local.id : null,
             attendance_id: att.id,
@@ -4120,7 +4125,7 @@ async function getMergedAgendamentos(startDate, endDate) {
             agendado_por: (local && local.agendado_por) || '-',
             orcado_por: (local && local.orcado_por) || '-'
         };
-    });
+    }).filter(Boolean);
 
     // Registros financeiros locais sem vínculo a um attendance do Amigo App (ex: negócio
     // fechado direto pelo Kanban, sem agendamento formal) — não têm como aparecer na lista
@@ -4158,7 +4163,10 @@ app.get('/api/historico-financeiro', async (req, res) => {
         const startDate = req.query.start || defaultStart.toISOString().split('T')[0];
         const endDate = req.query.end || today.toISOString().split('T')[0];
 
-        const merged = await getMergedAgendamentos(startDate, endDate);
+        // Por padrão mostra só os agendamentos deste sistema; only_local=0 traz
+        // também os feitos direto no Amigo App.
+        const onlyLocal = req.query.only_local !== '0';
+        const merged = await getMergedAgendamentos(startDate, endDate, { onlyLocal });
         res.json(merged);
     } catch (e) {
         console.error(e);
@@ -4415,7 +4423,9 @@ app.get('/api/export-csv', async (req, res) => {
         const startDate = req.query.start || defaultStart.toISOString().split('T')[0];
         const endDate = req.query.end || today.toISOString().split('T')[0];
 
-        const rows = await getMergedAgendamentos(startDate, endDate);
+        // Mesmo critério da tela: só os agendamentos deste sistema, salvo only_local=0.
+        const onlyLocal = req.query.only_local !== '0';
+        const rows = await getMergedAgendamentos(startDate, endDate, { onlyLocal });
 
         // Cabeçalho da planilha (Separado por Ponto e Vírgula para Excel PT-BR)
         let csvContent = 'DATA;Nome;Telefone;Procedimento;Unidade;Origem;Valor primário;Valor secundário;Status;Agendado por:\n';
