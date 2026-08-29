@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="stylesheet" href="style.css?v=6">
     <link rel="icon" type="image/svg+xml" href="Favicon.svg">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
@@ -21,6 +21,19 @@
         .sb-logo-mark { height: 26px; width: 26px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
+
+        /* Padroniza a altura das caixas de filtro do Kanban */
+        .kanban-filters > input,
+        .kanban-filters > select,
+        .kanban-filters > label,
+        .kanban-filters > button,
+        .kanban-filters .kf-daterange > div {
+            height: 36px;
+            box-sizing: border-box;
+        }
+        .kanban-filters .kf-daterange > div input[type="date"] {
+            height: 100%;
+        }
     </style>
 </head>
 
@@ -125,6 +138,9 @@
                 <i class="fa-regular fa-comment-dots"></i> Atendimento
                 <span id="chat-unread-badge"
                     style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('contatos')" id="tab-contatos" title="Base de contatos do WhatsApp">
+                <i class="fa-solid fa-address-book"></i> Contatos
             </button>
             <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard" title="Dashboard">
                 <i class="fa-solid fa-chart-line"></i> Dashboard
@@ -320,7 +336,7 @@
                 <option value="activity_desc">🕗 Última atividade</option>
             </select>
 
-            <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <div class="kf-daterange" style="display: flex; gap: 0.5rem; align-items: center;">
                 <!-- Card Data Inicial -->
                 <div
                     style="display: flex; align-items: center; justify-content: center; background: var(--bg-card); border: 1px solid var(--border-color); padding: 0.4rem 0.6rem; border-radius: 6px; min-width: 130px; box-shadow: none;">
@@ -476,38 +492,37 @@
 
     <!-- ABA: CAMPANHAS -->
     <div class="view-section" id="view-campanhas"
-        style="display: none; flex-direction: column; padding: 1.75rem 2rem; background: var(--bg-main); min-height: 0; overflow-y: auto; overflow-x: hidden; gap: 1.25rem;">
+        style="display: none; flex-direction: column; padding: 1.75rem 2rem; background: var(--bg-main); min-height: 0; overflow-y: auto; overflow-x: hidden; gap: 1.5rem;">
 
-        <div>
-            <h2 style="color: var(--text-main); margin: 0; font-size: 1.3rem;"><i class="fa-solid fa-bullhorn"
-                    style="color: var(--accent-warning)"></i> Campanhas de Disparo</h2>
-            <p style="color: var(--text-muted); font-size: 0.82rem; margin: 0.25rem 0 0 0;">Envie um template aprovado da Meta em massa para um grupo de leads do Kanban.</p>
+        <!-- Cabeçalho -->
+        <div class="utm-header">
+            <div class="utm-header-titles">
+                <h2><i class="fa-solid fa-bullhorn" style="color: var(--accent-warning)"></i> Campanhas de Disparo</h2>
+                <p>Envie um template aprovado da Meta em massa para um grupo de leads do Kanban.</p>
+            </div>
+            <button class="btn-secondary utm-header-action" id="btn-whatsapp-pricing" onclick="openWhatsappPricingEditor()" style="display: none;" title="Editar tarifas por mensagem">
+                <i class="fa-solid fa-tags"></i> Tarifas
+            </button>
         </div>
 
-        <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 380px); grid-template-rows: auto auto; grid-template-areas: 'templates config' 'templates progress'; gap: 1rem; align-items: stretch;">
+        <!-- Navegação por etapas -->
+        <div class="utm-tabs" role="tablist">
+            <button type="button" class="utm-tab active" data-utm-tab="new" role="tab" onclick="switchDispatchTab('new')">
+                <i class="fa-solid fa-paper-plane"></i> Novo disparo
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="templates" role="tab" onclick="switchDispatchTab('templates')">
+                <i class="fa-regular fa-file-lines"></i> Templates da Meta
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="history" role="tab" onclick="switchDispatchTab('history')">
+                <i class="fa-solid fa-clock-rotate-left"></i> Histórico
+            </button>
+        </div>
 
-            <!-- Templates aprovados na Meta -->
-            <div class="utm-panel" style="grid-area: templates; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; min-width: 0;">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem; flex-shrink: 0;">
-                    <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;">
-                        <i class="fa-regular fa-file-lines" style="color: var(--accent-warning);"></i> Templates da Meta
-                    </h3>
-                    <div style="display: flex; gap: 0.5rem; flex-shrink: 0;">
-                        <button class="btn-secondary" onclick="loadWhatsappTemplates()" title="Atualizar"><i class="fa-solid fa-rotate-right"></i></button>
-                        <a href="https://business.facebook.com/latest/whatsapp_manager/message_templates?business_id=106388595436717&tab=message-templates&nav_ref=whatsapp_manager&asset_id=1394685722769834"
-                            target="_blank" rel="noopener" class="btn-primary" title="Criar/editar templates direto no Gerenciador da Meta"
-                            style="display: flex; align-items: center; gap: 0.4rem; text-decoration: none; white-space: nowrap;">
-                            <i class="fa-brands fa-facebook"></i> Criar no Facebook
-                        </a>
-                    </div>
-                </div>
-                <div id="templates-list" style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-height: 0;">
-                    <div class="utm-empty-state" style="flex: 1; justify-content: center;"><span class="amicro-loader" style="font-size: 1.6rem;"><span></span><span></span><span></span></span><span>Carregando templates...</span></div>
-                </div>
-            </div>
-
-                <div class="utm-panel" style="grid-area: config; padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
-                    <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+        <!-- ETAPA 1: Novo disparo (configurar + acompanhar) -->
+        <div class="utm-tabpanel active" data-utm-panel="new">
+            <div class="dispatch-grid">
+                <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <h3 class="utm-panel-title" style="margin: 0;">
                         <i class="fa-solid fa-sliders" style="color: #38bdf8;"></i> Configurar Disparo
                     </h3>
 
@@ -534,9 +549,10 @@
                     </div>
 
                     <div class="utm-field">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: 500;">
+                        <label class="utm-switch">
                             <input type="checkbox" id="campaign-skip-repeated" checked onchange="updateCampaignLeadCount()">
-                            Não enviar de novo pra quem já recebeu este template
+                            <span class="utm-switch-track"><span class="utm-switch-thumb"></span></span>
+                            <span class="utm-switch-text">Não enviar de novo pra quem já recebeu este template</span>
                         </label>
                         <span class="utm-hint">Evita mandar o mesmo modelo duas vezes pra mesma pessoa em campanhas futuras.</span>
                     </div>
@@ -559,8 +575,8 @@
                 </div>
 
                 <!-- Painel de Progresso -->
-                <div class="utm-panel" style="grid-area: progress; padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
-                    <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <h3 class="utm-panel-title" style="margin: 0;">
                         <i class="fa-solid fa-chart-simple" style="color: var(--accent-success);"></i> Progresso
                     </h3>
 
@@ -576,78 +592,89 @@
                     <div style="color: var(--accent-success); font-size: 0.85rem; font-weight: 600;" id="campaign-cost-text">Custo estimado: R$ 0,00</div>
 
                     <div id="campaign-log"
-                        style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.3rem;">
+                        style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.3rem; flex: 1;">
                         <div>Pronto para começar. Selecione o público e clique em Iniciar.</div>
                     </div>
                 </div>
+            </div>
         </div>
 
-        <div class="utm-panel" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; margin-top: 1rem;">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap;">
-                <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+        <!-- ETAPA 2: Templates aprovados na Meta -->
+        <div class="utm-tabpanel" data-utm-panel="templates">
+            <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div class="utm-list-head" style="margin-bottom: 0;">
+                    <h3 class="utm-panel-title" style="margin: 0; white-space: nowrap;">
+                        <i class="fa-regular fa-file-lines" style="color: var(--accent-warning);"></i> Templates da Meta
+                    </h3>
+                    <div style="display: flex; gap: 0.5rem; flex-shrink: 0;">
+                        <button class="btn-secondary" onclick="loadWhatsappTemplates()" title="Atualizar"><i class="fa-solid fa-rotate-right"></i></button>
+                        <a href="https://business.facebook.com/latest/whatsapp_manager/message_templates?business_id=106388595436717&tab=message-templates&nav_ref=whatsapp_manager&asset_id=1394685722769834"
+                            target="_blank" rel="noopener" class="btn-primary" title="Criar/editar templates direto no Gerenciador da Meta"
+                            style="display: flex; align-items: center; gap: 0.4rem; text-decoration: none; white-space: nowrap;">
+                            <i class="fa-brands fa-facebook"></i> Criar no Facebook
+                        </a>
+                    </div>
+                </div>
+                <div id="templates-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <div class="utm-empty-state" style="justify-content: center;"><span class="amicro-loader" style="font-size: 1.6rem;"><span></span><span></span><span></span></span><span>Carregando templates...</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ETAPA 3: Histórico de disparos -->
+        <div class="utm-tabpanel" data-utm-panel="history">
+            <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
+                <h3 class="utm-panel-title" style="margin: 0;">
                     <i class="fa-solid fa-clock-rotate-left" style="color: var(--accent-success);"></i> Histórico de Disparos
                 </h3>
-                <button class="btn-secondary" id="btn-whatsapp-pricing" onclick="openWhatsappPricingEditor()" style="display: none;" title="Editar tarifas por mensagem">
-                    <i class="fa-solid fa-tags"></i> Tarifas
-                </button>
-            </div>
-            <div id="dispatch-history-list" style="overflow-x: auto;">
-                <div class="utm-empty-state" style="padding: 1rem;"><span>Carregando histórico...</span></div>
+                <div id="dispatch-history-list" style="overflow-x: auto;">
+                    <div class="utm-empty-state" style="padding: 1rem;"><span>Carregando histórico...</span></div>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- ABA: ORIGEM DE LEADS (UTMs / Campanhas Físicas) -->
     <div class="view-section" id="view-origem-leads"
-        style="display: none; flex-direction: column; padding: 1.75rem 2rem; background: var(--bg-main); min-height: 0; overflow-y: auto; gap: 1.25rem;">
+        style="display: none; flex-direction: column; padding: 1.75rem 2rem; background: var(--bg-main); min-height: 0; overflow-y: auto; gap: 1.5rem;">
 
-        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem;">
-            <div>
-                <h2 style="color: var(--text-main); margin: 0; font-size: 1.3rem;"><i class="fa-solid fa-bullseye"
-                        style="color: var(--accent-info)"></i> UTMs</h2>
-                <p style="color: var(--text-muted); font-size: 0.82rem; margin: 0.25rem 0 0 0;">Rastreie de onde vêm seus pacientes — Google, Instagram, site ou mídia física.</p>
+        <!-- Cabeçalho -->
+        <div class="utm-header">
+            <div class="utm-header-titles">
+                <h2><i class="fa-solid fa-bullseye"></i> UTMs</h2>
+                <p>Rastreie de onde vêm seus pacientes — Google, Instagram, site ou mídia física.</p>
             </div>
-            <div style="display: flex; gap: 0.5rem;">
-                <button type="button" onclick="toggleUtmSnippetPanel()" class="btn-secondary" style="display: flex; align-items: center; gap: 0.4rem;">
-                    <i class="fa-solid fa-code"></i> Integrar com o Site
-                </button>
-                <a href="/api/campaigns/export-leads" class="btn-secondary" style="display: flex; align-items: center; gap: 0.4rem; text-decoration: none;">
-                    <i class="fa-solid fa-file-csv"></i> Exportar CSV
-                </a>
-            </div>
+            <a href="/api/campaigns/export-leads" class="btn-secondary utm-header-action">
+                <i class="fa-solid fa-file-csv"></i> Exportar CSV
+            </a>
         </div>
 
-        <!-- Visão geral -->
-        <div class="utm-kpi-row" id="utm-kpi-row"></div>
-
-        <!-- Snippet de integração com o site (oculto por padrão) -->
-        <div id="utm-snippet-panel" class="utm-panel" style="display: none; padding: 1.25rem; max-width: 900px;">
-            <h3 style="color: var(--text-main); font-size: 1rem; margin: 0 0 0.6rem 0;">Como plugar no seu site</h3>
-            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.8rem 0;">Cole esse trecho no formulário de contato do seu site. Ele lê a UTM da URL (vinda de um anúncio) e manda junto quando o lead for criado, pra já cair com a origem certa no CRM.</p>
-            <pre id="utm-snippet-code" style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; font-size: 0.78rem; color: var(--text-main); overflow-x: auto; white-space: pre-wrap; word-break: break-all;">// No envio do formulário do site:
-const params = new URLSearchParams(window.location.search);
-const origem = params.get('utm_campaign') || params.get('utm_source') || 'Site Orgânico';
-
-fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        id: Date.now().toString(),
-        nome: nomeDoFormulario,
-        telefone: telefoneDoFormulario,
-        email: emailDoFormulario,
-        origem: origem
-    })
-});</pre>
-            <button type="button" onclick="copyUtmSnippet()" class="btn-secondary" style="margin-top: 0.6rem;"><i class="fa-solid fa-copy"></i> Copiar código</button>
+        <!-- Navegação por etapas -->
+        <div class="utm-tabs" role="tablist">
+            <button type="button" class="utm-tab active" data-utm-tab="overview" role="tab" onclick="switchUtmTab('overview')">
+                <i class="fa-solid fa-chart-simple"></i> Visão geral
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="new" role="tab" onclick="switchUtmTab('new')">
+                <i class="fa-solid fa-circle-plus"></i> Nova campanha
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="list" role="tab" onclick="switchUtmTab('list')">
+                <i class="fa-solid fa-list"></i> Campanhas
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="integration" role="tab" onclick="switchUtmTab('integration')">
+                <i class="fa-solid fa-code"></i> Integração
+            </button>
         </div>
 
-        <!-- Ranking das campanhas que mais convertem -->
-        <div id="campaigns-top-ranking" style="display: none;"></div>
+        <!-- ETAPA 1: Visão geral -->
+        <div class="utm-tabpanel active" data-utm-panel="overview">
+            <div class="utm-kpi-row" id="utm-kpi-row"></div>
+            <div id="campaigns-top-ranking" style="display: none;"></div>
+        </div>
 
-        <div style="display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 1.25rem; align-items: stretch;">
-            <div class="utm-panel" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
-                <h3 id="campaign-form-title" style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+        <!-- ETAPA 2: Nova campanha -->
+        <div class="utm-tabpanel" data-utm-panel="new">
+            <div class="utm-panel utm-form-panel">
+                <h3 id="campaign-form-title" class="utm-panel-title">
                     <i class="fa-solid fa-circle-plus" style="color: #38bdf8;"></i> Nova Campanha
                 </h3>
 
@@ -706,9 +733,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <span class="utm-hint">Opcional — calcula custo por lead e ROI sozinho.</span>
                 </div>
 
-                <div style="display: flex; gap: 0.5rem; margin-top: 0.2rem;">
-                    <button type="button" id="btn-create-campaign" onclick="submitNewCampaign()"
-                        style="background: var(--accent-success); border: none; color: #fff; display: flex; align-items: center; justify-content: center; gap: 0.5rem; font-weight: 600; padding: 0.6rem 1.1rem; cursor: pointer; border-radius: 8px; flex: 1; font-size: 0.86rem;">
+                <div class="utm-form-actions">
+                    <button type="button" id="btn-create-campaign" onclick="submitNewCampaign()" class="utm-btn-create">
                         <i class="fa-solid fa-plus"></i> Criar Campanha
                     </button>
                     <button type="button" id="btn-cancel-edit-campaign" onclick="cancelEditCampaign()" style="display: none;" class="btn-secondary">
@@ -716,25 +742,25 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </button>
                 </div>
             </div>
+        </div>
 
-            <div class="utm-panel" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; min-width: 0;">
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; flex-shrink: 0;">
-                    <h3 style="color: var(--text-main); font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+        <!-- ETAPA 3: Campanhas criadas -->
+        <div class="utm-tabpanel" data-utm-panel="list">
+            <div class="utm-panel">
+                <div class="utm-list-head">
+                    <h3 class="utm-panel-title" style="margin: 0;">
                         <i class="fa-solid fa-list" style="color: var(--accent-success);"></i> Campanhas
                     </h3>
-                    <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-                        <input type="text" id="campaign-filter-search" placeholder="Buscar..." oninput="renderCampaignsList()"
-                            style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.65rem; border-radius: 6px; outline: none; font-size: 0.8rem; width: 140px;">
-                        <select id="campaign-filter-canal" onchange="renderCampaignsList()"
-                            style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.5rem; border-radius: 6px; outline: none; font-size: 0.8rem; cursor: pointer;">
+                    <div class="utm-list-filters">
+                        <input type="text" id="campaign-filter-search" placeholder="Buscar..." oninput="renderCampaignsList()">
+                        <select id="campaign-filter-canal" onchange="renderCampaignsList()">
                             <option value="">Todos os canais</option>
                             <option value="fisico">Físico</option>
                             <option value="google">Google Ads</option>
                             <option value="instagram">Instagram</option>
                             <option value="site">Site</option>
                         </select>
-                        <select id="campaign-filter-status" onchange="renderCampaignsList()"
-                            style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.5rem; border-radius: 6px; outline: none; font-size: 0.8rem; cursor: pointer;">
+                        <select id="campaign-filter-status" onchange="renderCampaignsList()">
                             <option value="">Todos os status</option>
                             <option value="ativa">Ativas</option>
                             <option value="arquivada">Arquivadas</option>
@@ -742,6 +768,30 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </div>
                 </div>
                 <div id="campaigns-list" style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-height: 0;"></div>
+            </div>
+        </div>
+
+        <!-- ETAPA 4: Integração com o site -->
+        <div class="utm-tabpanel" data-utm-panel="integration">
+            <div id="utm-snippet-panel" class="utm-panel" style="max-width: 900px;">
+                <h3 class="utm-panel-title"><i class="fa-solid fa-code" style="color: var(--accent-info);"></i> Como plugar no seu site</h3>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.8rem 0;">Cole esse trecho no formulário de contato do seu site. Ele lê a UTM da URL (vinda de um anúncio) e manda junto quando o lead for criado, pra já cair com a origem certa no CRM.</p>
+                <pre id="utm-snippet-code" style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; font-size: 0.78rem; color: var(--text-main); overflow-x: auto; white-space: pre-wrap; word-break: break-all;">// No envio do formulário do site:
+const params = new URLSearchParams(window.location.search);
+const origem = params.get('utm_campaign') || params.get('utm_source') || 'Site Orgânico';
+
+fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        id: Date.now().toString(),
+        nome: nomeDoFormulario,
+        telefone: telefoneDoFormulario,
+        email: emailDoFormulario,
+        origem: origem
+    })
+});</pre>
+                <button type="button" onclick="copyUtmSnippet()" class="btn-secondary" style="margin-top: 0.6rem;"><i class="fa-solid fa-copy"></i> Copiar código</button>
             </div>
         </div>
     </div>
@@ -1644,6 +1694,52 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
         </div>
     </div>
+
+    <!-- ABA: CONTATOS (base de todo mundo que já falou com a clínica no WhatsApp) -->
+    <main class="relacionamento" id="view-contatos"
+        style="display: none; padding: 2rem; flex-grow: 1; flex-direction: column;">
+        <div style="margin-bottom: 1.5rem;">
+            <h2 style="font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i class="fa-solid fa-address-book" style="color: var(--accent-primary)"></i> Base de Contatos
+                <span id="count-contatos"
+                    style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 1rem; margin-left: auto;">0</span>
+            </h2>
+            <p style="color: var(--text-muted); margin-top: 0.5rem;">Todo lead que já entrou em contato com a clínica pelo
+                WhatsApp. A lista se atualiza sozinha a cada nova conversa.</p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center;">
+            <div style="position: relative; flex: 1; min-width: 220px; max-width: 380px;">
+                <i class="fa-solid fa-magnifying-glass"
+                    style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.8rem;"></i>
+                <input type="text" id="contatos-search" placeholder="Buscar por nome ou telefone..."
+                    oninput="filterContatos()"
+                    style="width: 100%; background: var(--header-btn-bg); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem 0.55rem 2.1rem; border-radius: 8px; font-size: 0.9rem; outline: none;">
+            </div>
+            <button type="button" class="btn-secondary" onclick="loadContatos(true)" title="Recarregar">
+                <i class="fa-solid fa-rotate"></i> Atualizar
+            </button>
+            <button type="button" class="btn-secondary" onclick="exportContatosCSV()">
+                <i class="fa-solid fa-file-csv"></i> Exportar CSV
+            </button>
+        </div>
+        <div class="table-container">
+            <table class="crm-table" id="contatos-table">
+                <thead>
+                    <tr>
+                        <th>Contato</th>
+                        <th>Telefone</th>
+                        <th>Origem</th>
+                        <th>Etapa no funil</th>
+                        <th>1º contato</th>
+                        <th>Último contato</th>
+                        <th style="text-align: center;">Msgs</th>
+                        <th style="width: 170px; text-align: center;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="list-contatos"></tbody>
+            </table>
+        </div>
+    </main>
 
     <!-- ABA: PÓS-VENDA -->
     <main class="relacionamento" id="view-posvenda"
@@ -2709,7 +2805,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <!-- Estado Vazio -->
             <div id="chat-empty-state"
                 style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted);">
-                <i class="fa-brands fa-whatsapp" style="font-size: 4rem; opacity: 0.2; margin-bottom: 1rem;"></i>
+                <img src="vendor/illustrations/undraw_group-chat_nze2.svg" alt=""
+                    class="chat-empty-illustration" onerror="this.remove()">
+                <i class="fa-brands fa-whatsapp chat-empty-fallback-icon"
+                    style="font-size: 4rem; opacity: 0.2; margin-bottom: 1rem;"></i>
                 <p style="font-size: 1.1rem;">Selecione uma conversa para começar</p>
                 <button class="btn-primary" onclick="openNewMessageModal()" style="margin-top: 1.5rem;"><i
                         class="fa-solid fa-plus"></i> Nova Conversa</button>
@@ -2730,8 +2829,6 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         <p id="chat-active-phone"
                             style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                             <span id="chat-active-phone-number">+55 00 00000-0000</span>
-                            <span id="chat-active-online-status"
-                                style="font-size: 0.8rem; font-weight: 600; color: #22c55e;"></span>
                         </p>
                     </div>
                 </div>
@@ -3412,44 +3509,44 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
     <!-- Modal Gestão de Usuários -->
     <div class="modal-overlay" id="modalUsuarios">
-        <div class="modal" style="max-width: 600px; width: 90%;">
+        <div class="modal" style="max-width: 640px; width: 90%;">
             <h2><i class="fa-solid fa-users-gear" style="color: var(--accent-warning)"></i> Gestão de Acessos</h2>
+            <p class="modal-subtitle">Crie, edite e remova os acessos da equipe. Alterações de senha exigem que a
+                pessoa defina uma nova no próximo login.</p>
 
-            <div
-                style="background: var(--bg-column); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border: 1px solid var(--border-color);">
-                <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--text-main);">Criar Novo Acesso</h3>
-                <div style="display: flex; gap: 1rem; align-items: flex-end;">
-                    <div class="form-group" style="flex: 1; margin: 0;">
-                        <label>Usuário</label>
-                        <input type="text" id="nu-user" class="form-control" placeholder="Login">
+            <div class="access-card">
+                <h3 class="access-card-title"><i class="fa-solid fa-user-plus"></i> Criar novo acesso</h3>
+                <div class="access-create-grid">
+                    <div class="form-group" style="margin: 0;">
+                        <label>Usuário (login)</label>
+                        <input type="text" id="nu-user" class="form-control" placeholder="ex.: maria" autocomplete="off">
                     </div>
-                    <div class="form-group" style="flex: 1; margin: 0;">
-                        <label>Senha</label>
-                        <input type="password" id="nu-pass" class="form-control" placeholder="Senha">
+                    <div class="form-group" style="margin: 0;">
+                        <label>Senha provisória</label>
+                        <input type="password" id="nu-pass" class="form-control" placeholder="mín. 6 caracteres"
+                            autocomplete="new-password">
                     </div>
-                    <div class="form-group" style="flex: 1; margin: 0;">
+                    <div class="form-group" style="margin: 0;">
                         <label>Cargo</label>
                         <select id="nu-role" class="form-control">
                             <option value="user">Comum (user)</option>
                             <option value="admin">Administrador (admin)</option>
                         </select>
                     </div>
-                    <button class="btn-save" onclick="createUser()" style="height: 38px;">Criar</button>
+                    <button class="btn-save" onclick="createUser()"><i class="fa-solid fa-plus"></i> Criar</button>
                 </div>
             </div>
 
-            <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--text-main);">Acessos Atuais</h3>
-            <div
-                style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden;">
-                <table style="width: 100%; text-align: left; border-collapse: collapse;">
+            <h3 class="access-card-title" style="margin: 1.75rem 0 0.75rem;"><i class="fa-solid fa-key"></i> Acessos
+                atuais</h3>
+            <div class="access-table-wrap">
+                <table class="access-table">
                     <thead>
-                        <tr style="background: rgba(0,0,0,0.1); border-bottom: 1px solid var(--border-color);">
-                            <th style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted);">Usuário
-                            </th>
-                            <th style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted);">Cargo</th>
-                            <th
-                                style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--text-muted); text-align: right;">
-                                Ações</th>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>Nome de exibição</th>
+                            <th>Cargo</th>
+                            <th style="text-align: right;">Ações</th>
                         </tr>
                     </thead>
                     <tbody id="usuarios-tbody">
@@ -3461,6 +3558,53 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="modal-actions" style="margin-top: 1.5rem;">
                 <button class="btn-cancel"
                     onclick="document.getElementById('modalUsuarios').classList.remove('active')">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Editar Acesso -->
+    <div class="modal-overlay" id="modalEditUser" style="z-index: 1001;">
+        <div class="modal" style="max-width: 460px; width: 90%;">
+            <h2><i class="fa-solid fa-user-pen" style="color: var(--accent-primary)"></i> Editar acesso</h2>
+            <p class="modal-subtitle">Ajuste o nome de exibição, o cargo ou defina uma nova senha para
+                <strong id="eu-title-name"></strong>.</p>
+
+            <input type="hidden" id="eu-username">
+
+            <div class="form-group">
+                <label>Usuário (login)</label>
+                <input type="text" id="eu-username-view" class="form-control" disabled
+                    title="O login não pode ser alterado">
+                <small style="color: var(--text-muted); font-size: 0.75rem;">O login é usado internamente e não pode
+                    ser alterado.</small>
+            </div>
+
+            <div class="form-group">
+                <label>Nome de exibição</label>
+                <input type="text" id="eu-display-name" class="form-control" maxlength="80"
+                    placeholder="Como o nome aparece no sistema">
+            </div>
+
+            <div class="form-group">
+                <label>Nova senha <span style="color: var(--text-muted); font-weight: 400;">(opcional)</span></label>
+                <input type="password" id="eu-password" class="form-control" autocomplete="new-password"
+                    placeholder="Deixe em branco para manter a atual">
+                <small style="color: var(--text-muted); font-size: 0.75rem;">Se preenchida, a pessoa terá que trocar a
+                    senha no próximo login.</small>
+            </div>
+
+            <div class="form-group">
+                <label>Cargo</label>
+                <select id="eu-role" class="form-control">
+                    <option value="user">Comum (user)</option>
+                    <option value="admin">Administrador (admin)</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 1.5rem; display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <button class="btn-cancel"
+                    onclick="document.getElementById('modalEditUser').classList.remove('active')">Cancelar</button>
+                <button class="btn-save" onclick="saveEditUser()"><i class="fa-solid fa-check"></i> Salvar</button>
             </div>
         </div>
     </div>

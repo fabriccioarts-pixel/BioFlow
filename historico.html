@@ -110,6 +110,9 @@
                 <span id="chat-unread-badge"
                     style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
             </button>
+            <button class="tab-btn" onclick="switchTab('contatos')" id="tab-contatos" title="Base de contatos do WhatsApp">
+                <i class="fa-solid fa-address-book"></i> Contatos
+            </button>
             <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard">
                 <i class="fa-solid fa-chart-line"></i> Dashboard
             </button>
@@ -223,11 +226,26 @@
 
     <div class="table-container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-            <h2><i class="fa-solid fa-list-check" style="color: var(--accent-primary); margin-right: 0.5rem;"></i> Histórico de Agendamentos</h2>
-            <button class="btn-secondary" onclick="carregarHistorico()" title="Atualizar">
+            <h2><i class="fa-solid fa-sack-dollar" style="color: var(--accent-primary); margin-right: 0.5rem;"></i> Financeiro</h2>
+            <button class="btn-secondary" id="fin-refresh-btn" onclick="refreshFinTab()" title="Atualizar">
                 <i class="fa-solid fa-rotate-right"></i> Atualizar
             </button>
         </div>
+
+        <div class="utm-tabs" role="tablist" style="margin-bottom: 1.25rem;">
+            <button type="button" class="utm-tab active" data-utm-tab="agendamentos" role="tab" onclick="switchFinTab('agendamentos')">
+                <i class="fa-solid fa-list-check"></i> Agendamentos
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="recebimentos" role="tab" onclick="switchFinTab('recebimentos')">
+                <i class="fa-solid fa-hand-holding-dollar"></i> Recebimentos
+            </button>
+            <button type="button" class="utm-tab" data-utm-tab="receber" role="tab" onclick="switchFinTab('receber')">
+                <i class="fa-solid fa-clock"></i> Contas a receber
+            </button>
+        </div>
+
+        <!-- ETAPA: Agendamentos (histórico Amigo App + financeiro local) -->
+        <div class="utm-tabpanel active" data-utm-panel="agendamentos">
 
         <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
             <div class="form-group" style="margin: 0; flex: 1; min-width: 220px;">
@@ -310,7 +328,116 @@
                 <tr><td colspan="10" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando dados...</td></tr>
             </tbody>
         </table>
-    </div>
+        </div><!-- /tabpanel agendamentos -->
+
+        <!-- ETAPA: Recebimentos (ledger de lançamentos) -->
+        <div class="utm-tabpanel" data-utm-panel="recebimentos">
+
+            <div id="fin-kpi-row" class="utm-kpi-row" style="margin-bottom: 1.25rem;"></div>
+
+            <div class="utm-panel" style="margin-bottom: 1.25rem;">
+                <h3 class="utm-panel-title"><i class="fa-solid fa-plus" style="color: var(--accent-success);"></i> Novo recebimento</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.9rem;">
+                    <div class="utm-field" style="grid-column: 1 / -1;">
+                        <label>Descrição</label>
+                        <input type="text" id="pg-descricao" placeholder="Ex.: Botox 2 áreas — entrada">
+                    </div>
+                    <div class="utm-field">
+                        <label>Paciente</label>
+                        <input type="text" id="pg-paciente" placeholder="Nome do paciente">
+                    </div>
+                    <div class="utm-field">
+                        <label>Valor total (R$)</label>
+                        <input type="text" id="pg-valor" inputmode="decimal" placeholder="0,00">
+                    </div>
+                    <div class="utm-field">
+                        <label>Forma de pagamento</label>
+                        <select id="pg-forma">
+                            <option value="">—</option>
+                            <option value="pix">Pix</option>
+                            <option value="dinheiro">Dinheiro</option>
+                            <option value="cartao_credito">Cartão de crédito</option>
+                            <option value="cartao_debito">Cartão de débito</option>
+                            <option value="boleto">Boleto</option>
+                            <option value="transferencia">Transferência</option>
+                            <option value="outro">Outro</option>
+                        </select>
+                    </div>
+                    <div class="utm-field">
+                        <label>Parcelas</label>
+                        <input type="number" id="pg-parcelas" min="1" max="48" value="1">
+                    </div>
+                    <div class="utm-field">
+                        <label>1º vencimento</label>
+                        <input type="date" id="pg-vencimento">
+                    </div>
+                    <div class="utm-field">
+                        <label class="utm-switch" style="margin-top: 1.6rem;">
+                            <input type="checkbox" id="pg-pago-agora">
+                            <span class="utm-switch-track"><span class="utm-switch-thumb"></span></span>
+                            <span class="utm-switch-text">Já foi pago (à vista / entrada hoje)</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <button class="btn-primary" id="pg-salvar-btn" onclick="salvarPagamento()" style="background: var(--accent-success);">
+                        <i class="fa-solid fa-check"></i> Registrar recebimento
+                    </button>
+                    <span class="utm-hint" style="margin-left: 0.5rem;">Com mais de 1 parcela, o valor é dividido e cada parcela vence 1 mês depois da anterior.</span>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+                <select id="pg-filtro-status" class="form-control" style="max-width: 200px;" onchange="carregarPagamentos()">
+                    <option value="">Todos os status</option>
+                    <option value="pendente">Pendente</option>
+                    <option value="pago">Pago</option>
+                    <option value="cancelado">Cancelado</option>
+                </select>
+            </div>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Descrição</th>
+                        <th>Paciente</th>
+                        <th>Parcela</th>
+                        <th>Forma</th>
+                        <th style="text-align: right;">Valor</th>
+                        <th>Vencimento</th>
+                        <th>Status</th>
+                        <th style="text-align: center; width: 150px;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="pagamentos-tbody">
+                    <tr><td colspan="9" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
+                </tbody>
+            </table>
+        </div><!-- /tabpanel recebimentos -->
+
+        <!-- ETAPA: Contas a receber (aging) -->
+        <div class="utm-tabpanel" data-utm-panel="receber">
+            <div id="ar-buckets" class="utm-kpi-row" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 1.25rem;"></div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Vencimento</th>
+                        <th>Atraso</th>
+                        <th>Descrição</th>
+                        <th>Paciente</th>
+                        <th>Parcela</th>
+                        <th style="text-align: right;">Valor</th>
+                        <th style="text-align: center; width: 130px;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="ar-tbody">
+                    <tr><td colspan="7" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
+                </tbody>
+            </table>
+        </div><!-- /tabpanel receber -->
+
+    </div><!-- /.table-container -->
 
     </div>
     <!-- fim .app-content -->
@@ -778,12 +905,12 @@
 
         async function deletarRegistroHistorico(id) {
             if (!await customConfirm("Deseja realmente apagar este agendamento do histórico?", "Excluir Agendamento")) return;
-            
+
             try {
                 const res = await fetch(`/api/historico-financeiro/${id}`, {
                     method: 'DELETE'
                 });
-                
+
                 if (res.ok) {
                     carregarHistorico();
                 } else {
@@ -793,6 +920,220 @@
             } catch (error) {
                 console.error(error);
                 alert("Erro ao conectar ao servidor.");
+            }
+        }
+
+        // ==========================================
+        // FINANCEIRO — Recebimentos e Contas a receber
+        // ==========================================
+        let finCurrentTab = 'agendamentos';
+        const FIN_LOADED = { recebimentos: false, receber: false };
+
+        const FIN_FORMAS = {
+            pix: 'Pix', dinheiro: 'Dinheiro', cartao_credito: 'Cartão crédito',
+            cartao_debito: 'Cartão débito', boleto: 'Boleto', transferencia: 'Transferência', outro: 'Outro'
+        };
+
+        function finFmtDate(iso) {
+            if (!iso) return '—';
+            const p = String(iso).split(' ')[0].split('-');
+            return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : iso;
+        }
+        function finStatusBadge(status) {
+            const map = {
+                pago: ['#10b981', 'rgba(16,185,129,0.12)', 'Pago'],
+                pendente: ['#f59e0b', 'rgba(245,158,11,0.12)', 'Pendente'],
+                cancelado: ['#ef4444', 'rgba(239,68,68,0.12)', 'Cancelado']
+            };
+            const [c, bg, t] = map[status] || ['#94a3b8', 'rgba(148,163,184,0.12)', status || '—'];
+            return `<span style="color:${c};background:${bg};font-weight:600;font-size:0.78rem;padding:0.2rem 0.5rem;border-radius:4px;">${t}</span>`;
+        }
+
+        function switchFinTab(name) {
+            finCurrentTab = name;
+            document.querySelectorAll('.table-container .utm-tab').forEach(t =>
+                t.classList.toggle('active', t.dataset.utmTab === name));
+            document.querySelectorAll('.table-container .utm-tabpanel').forEach(p =>
+                p.classList.toggle('active', p.dataset.utmPanel === name));
+
+            if (name === 'recebimentos' && !FIN_LOADED.recebimentos) { FIN_LOADED.recebimentos = true; carregarResumoFin(); carregarPagamentos(); }
+            if (name === 'receber' && !FIN_LOADED.receber) { FIN_LOADED.receber = true; carregarContasReceber(); }
+        }
+
+        function refreshFinTab() {
+            if (finCurrentTab === 'agendamentos') return carregarHistorico();
+            if (finCurrentTab === 'recebimentos') { carregarResumoFin(); return carregarPagamentos(); }
+            if (finCurrentTab === 'receber') return carregarContasReceber();
+        }
+
+        async function carregarResumoFin() {
+            const box = document.getElementById('fin-kpi-row');
+            try {
+                const r = await fetch('/api/financeiro/resumo');
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                const chip = (label, val, color) =>
+                    `<div class="utm-kpi-chip"><span class="utm-kpi-value" style="${color ? 'color:' + color : ''}">R$ ${val}</span><span class="utm-kpi-label">${label}</span></div>`;
+                box.innerHTML =
+                    chip('Recebido no mês', j.recebido, '#10b981') +
+                    chip('A receber', j.a_receber) +
+                    chip('Vencido', j.vencido, j.vencido_centavos > 0 ? '#ef4444' : '');
+            } catch (e) { box.innerHTML = ''; }
+        }
+
+        async function carregarPagamentos() {
+            const tbody = document.getElementById('pagamentos-tbody');
+            const status = document.getElementById('pg-filtro-status').value;
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
+            try {
+                const r = await fetch('/api/pagamentos' + (status ? `?status=${status}` : ''));
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                const rows = j.data || [];
+                if (!rows.length) {
+                    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nenhum lançamento ainda.</td></tr>`;
+                    return;
+                }
+                const isAdmin = loggedUser && loggedUser.role === 'admin';
+                tbody.innerHTML = rows.map(p => {
+                    const isEstorno = p.tipo === 'estorno';
+                    const dataRef = p.pago_em || p.created_at;
+                    const acoes = [];
+                    if (!isEstorno && p.status === 'pendente')
+                        acoes.push(`<button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="marcarPagamento(${p.id},'pago')" title="Marcar como pago"><i class="fa-solid fa-check"></i></button>`);
+                    if (!isEstorno && p.status === 'pago')
+                        acoes.push(`<button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="estornarPagamento(${p.id})" title="Estornar"><i class="fa-solid fa-rotate-left"></i></button>`);
+                    if (isAdmin)
+                        acoes.push(`<button class="btn-danger" style="padding:0.25rem 0.5rem;font-size:0.75rem;border:none;" onclick="excluirPagamento(${p.id})" title="Excluir"><i class="fa-solid fa-trash"></i></button>`);
+                    return `<tr style="${p.status === 'cancelado' ? 'opacity:0.55;' : ''}">
+                        <td>${finFmtDate(dataRef)}</td>
+                        <td>${escapeHtml(p.descricao || '—')}</td>
+                        <td>${escapeHtml(p.paciente || '—')}</td>
+                        <td>${p.parcelas_total > 1 ? `${p.parcela}/${p.parcelas_total}` : '—'}</td>
+                        <td>${FIN_FORMAS[p.forma_pagamento] || '—'}</td>
+                        <td style="text-align:right;font-weight:600;${isEstorno ? 'color:#ef4444;' : ''}">R$ ${p.valor}</td>
+                        <td>${finFmtDate(p.vencimento)}</td>
+                        <td>${finStatusBadge(p.status)}</td>
+                        <td style="text-align:center;"><div style="display:flex;gap:0.3rem;justify-content:center;">${acoes.join('') || '—'}</div></td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
+            }
+        }
+
+        async function salvarPagamento() {
+            const btn = document.getElementById('pg-salvar-btn');
+            const body = {
+                descricao: document.getElementById('pg-descricao').value.trim(),
+                paciente: document.getElementById('pg-paciente').value.trim(),
+                valor: document.getElementById('pg-valor').value.trim(),
+                forma_pagamento: document.getElementById('pg-forma').value || undefined,
+                parcelas_total: parseInt(document.getElementById('pg-parcelas').value, 10) || 1,
+                vencimento: document.getElementById('pg-vencimento').value || undefined,
+                pago_em: document.getElementById('pg-pago-agora').checked ? new Date().toISOString().split('T')[0] : undefined
+            };
+            if (!body.valor) { showToast('Informe o valor.', 'danger'); return; }
+
+            const orig = btn.innerHTML;
+            btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando...';
+            try {
+                const r = await fetch('/api/pagamentos', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro ao salvar');
+                showToast(j.parcelas > 1 ? `${j.parcelas} parcelas registradas!` : 'Recebimento registrado!', 'success');
+                ['pg-descricao', 'pg-paciente', 'pg-valor', 'pg-vencimento'].forEach(id => document.getElementById(id).value = '');
+                document.getElementById('pg-parcelas').value = 1;
+                document.getElementById('pg-forma').value = '';
+                document.getElementById('pg-pago-agora').checked = false;
+                carregarResumoFin(); carregarPagamentos();
+                FIN_LOADED.receber = false;
+            } catch (e) {
+                showToast(e.message, 'danger');
+            } finally {
+                btn.disabled = false; btn.innerHTML = orig;
+            }
+        }
+
+        async function marcarPagamento(id, status) {
+            try {
+                const r = await fetch(`/api/pagamentos/${id}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                showToast('Atualizado!', 'success');
+                carregarResumoFin(); carregarPagamentos();
+                if (finCurrentTab === 'receber' || FIN_LOADED.receber) carregarContasReceber();
+            } catch (e) { showToast(e.message, 'danger'); }
+        }
+
+        async function estornarPagamento(id) {
+            if (!await customConfirm('Estornar este recebimento? Um lançamento negativo será criado e o original marcado como cancelado.', 'Estornar')) return;
+            try {
+                const r = await fetch(`/api/pagamentos/${id}/estorno`, { method: 'POST' });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                showToast('Estornado.', 'success');
+                carregarResumoFin(); carregarPagamentos();
+            } catch (e) { showToast(e.message, 'danger'); }
+        }
+
+        async function excluirPagamento(id) {
+            if (!await customConfirm('Excluir definitivamente este lançamento?', 'Excluir')) return;
+            try {
+                const r = await fetch(`/api/pagamentos/${id}`, { method: 'DELETE' });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                showToast('Excluído.', 'success');
+                carregarResumoFin(); carregarPagamentos(); carregarContasReceber();
+            } catch (e) { showToast(e.message, 'danger'); }
+        }
+
+        async function carregarContasReceber() {
+            const box = document.getElementById('ar-buckets');
+            const tbody = document.getElementById('ar-tbody');
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
+            try {
+                const r = await fetch('/api/contas-a-receber');
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro');
+
+                const b = j.buckets || {};
+                const bc = j.buckets_centavos || {};
+                const brl = (cents) => ((Number(cents) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const chip = (label, val, color) =>
+                    `<div class="utm-kpi-chip"><span class="utm-kpi-value" style="${color ? 'color:' + color : ''};font-size:1.15rem;">R$ ${val}</span><span class="utm-kpi-label">${label}</span></div>`;
+                box.innerHTML =
+                    chip('Total a receber', j.total) +
+                    chip('Vencido', b.vencido, j.vencido_centavos > 0 ? '#ef4444' : '') +
+                    chip('Vence hoje', b.hoje, '#f59e0b') +
+                    chip('1–7 dias', b.d1_7) +
+                    chip('8–30 dias', b.d8_30) +
+                    chip('30+ / sem data', brl((bc.d30_mais || 0) + (bc.sem_venc || 0)));
+
+                const itens = j.itens || [];
+                if (!itens.length) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nada a receber. 🎉</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = itens.map(p => `
+                    <tr style="${p.dias_atraso > 0 ? 'background:rgba(239,68,68,0.06);' : ''}">
+                        <td>${finFmtDate(p.vencimento) }</td>
+                        <td>${p.dias_atraso > 0 ? `<span style="color:#ef4444;font-weight:600;">${p.dias_atraso}d</span>` : (p.vencimento ? 'em dia' : '—')}</td>
+                        <td>${escapeHtml(p.descricao || '—')}</td>
+                        <td>${escapeHtml(p.paciente || '—')}</td>
+                        <td>${p.parcelas_total > 1 ? `${p.parcela}/${p.parcelas_total}` : '—'}</td>
+                        <td style="text-align:right;font-weight:600;">R$ ${p.valor}</td>
+                        <td style="text-align:center;">
+                            <button class="btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="marcarPagamento(${p.id},'pago')"><i class="fa-solid fa-check"></i> Baixar</button>
+                        </td>
+                    </tr>`).join('');
+            } catch (e) {
+                box.innerHTML = '';
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
     </script>

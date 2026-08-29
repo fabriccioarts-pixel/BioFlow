@@ -233,9 +233,12 @@ function renderAvatarHTML(name, imgUrl = null, status = 'online', size = 40) {
         ? `<div class="avatar-image" data-slot="avatar-image"><img src="${imgUrl}" alt="${escapeHtml(cleanName)}" /></div>`
         : `<div class="avatar-fallback" data-slot="avatar-fallback">${initials}</div>`;
 
-    const statusHTML = status
-        ? `<div class="avatar-status ${status}" data-slot="avatar-status"></div>`
-        : '';
+    // Bolinha de presença ("online"/"offline") removida do avatar — a API do
+    // WhatsApp não fornece presença real, então era só um palpite pelo horário
+    // da última mensagem. O parâmetro "status" é mantido por compatibilidade,
+    // mas não renderiza mais nada. O texto "Visto há..." segue onde já aparecia.
+    void status;
+    const statusHTML = '';
 
     return `
         <div class="avatar" data-slot="avatar" style="width: ${size}px; height: ${size}px;">
@@ -245,35 +248,10 @@ function renderAvatarHTML(name, imgUrl = null, status = 'online', size = 40) {
     `;
 }
 
-function getLeadOnlineStatus(lastMsgTimestamp, lastDirection) {
-    if (!lastMsgTimestamp) return { isOnline: false, text: '• Visto recentemente', statusClass: 'offline' };
-
-    const msgDate = new Date(lastMsgTimestamp);
-    if (isNaN(msgDate.getTime())) {
-        return { isOnline: false, text: '• Visto recentemente', statusClass: 'offline' };
-    }
-
-    const now = new Date();
-    const diffMinutes = Math.floor((now - msgDate) / (1000 * 60));
-
-    if (diffMinutes <= 20) {
-        return { isOnline: true, text: '• 🟢 Online agora', statusClass: 'online' };
-    }
-
-    if (diffMinutes < 60) {
-        return { isOnline: false, text: `• Visto há ${diffMinutes} min`, statusClass: 'offline' };
-    }
-
-    const diffHours = Math.floor(diffMinutes / 60);
-    if (diffHours < 24) {
-        const timeStr = msgDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-        return { isOnline: false, text: `• Visto hoje às ${timeStr}`, statusClass: 'offline' };
-    }
-
-    const dateStr = msgDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-    const timeStr = msgDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    return { isOnline: false, text: `• Visto em ${dateStr} às ${timeStr}`, statusClass: 'offline' };
-}
+// (Removido) getLeadOnlineStatus — a "presença" era só um palpite pelo horário
+// da última mensagem (a API do WhatsApp não expõe presença real). Onde antes
+// aparecia "🟢 Online agora / Visto há X min", agora ou não há nada (cabeçalho e
+// ficha do lead) ou um carimbo de data simples ("Última interação").
 
 // === WAVEFORM AUDIO VISUALIZER LOGIC ===
 const WAVEFORM_PRESET_HEIGHTS = [
@@ -1156,12 +1134,24 @@ function showChatContextMenu(event, phone, displayName) {
     ].join('');
 
     const margin = 8;
-    let left = event.clientX;
-    let top = event.clientY;
+    // Se veio do botão de seta (hover), ancora logo abaixo dele; senão usa o cursor (clique direito)
+    const anchorBtn = event.currentTarget && event.currentTarget.closest
+        ? event.currentTarget.closest('.chat-row-menu-btn')
+        : null;
+    let left, top;
+    if (anchorBtn) {
+        const b = anchorBtn.getBoundingClientRect();
+        left = b.right;
+        top = b.bottom + 4;
+    } else {
+        left = event.clientX;
+        top = event.clientY;
+    }
     menu.style.display = 'block';
 
     requestAnimationFrame(() => {
         const rect = menu.getBoundingClientRect();
+        if (anchorBtn) left -= rect.width; // alinha a borda direita do menu com o botão
         if (left + rect.width > window.innerWidth - margin) left = window.innerWidth - rect.width - margin;
         if (top + rect.height > window.innerHeight - margin) top = window.innerHeight - rect.height - margin;
         menu.style.left = Math.max(margin, Math.round(left)) + 'px';
@@ -1531,8 +1521,8 @@ function renderContactsList(chats) {
             const displayTagIds = (isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds;
 
             if (displayTagIds.length > 0) {
-                leadTagsHTML = `<div style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.35rem;">` +
-                    displayTagIds.map(tId => getTagBadgeHTML(tId)).join('') +
+                leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
+                    displayTagIds.map(tId => getTagBadgeHTML(tId, true)).join('') +
                     `</div>`;
             }
             if (lead && lead.owner_id) {
@@ -1547,15 +1537,16 @@ function renderContactsList(chats) {
             }
         }
 
-        const onlineInfo = getLeadOnlineStatus(chat.last_timestamp || chat.timestamp, chat.last_direction || chat.direction);
-        const avatarHTML = renderAvatarHTML(displayName, null, onlineInfo.statusClass, 40);
-        
+        const avatarHTML = renderAvatarHTML(displayName, null, null, 49);
+
         const unreadCount = Number(chat.unread_count || 0);
         const markedUnread = isMarkedUnreadChat(chat.phone);
+        const hasUnread = unreadCount > 0 || markedUnread;
+        const timeColor = hasUnread ? 'var(--accent-success, #10b981)' : 'var(--text-muted)';
 
         const unreadBadgeHTML = unreadCount > 0
-            ? `<span style="background: var(--accent-success, #10b981); color: #ffffff; font-size: 0.72rem; font-weight: 700; border-radius: 12px; padding: 0.15rem 0.55rem; min-width: 20px; text-align: center; box-shadow: none; border: 1px solid rgba(255,255,255,0.2);" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount}</span>`
-            : (markedUnread ? `<span title="Marcada como não lida" style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-success, #10b981); display: inline-block; box-shadow: none;"></span>` : '');
+            ? `<span style="background: #25D366; color: #0a0a0a; font-size: 0.7rem; font-weight: 700; line-height: 1; border-radius: 999px; padding: 3px 6px; min-width: 19px; height: 19px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount > 999 ? '999+' : unreadCount}</span>`
+            : (markedUnread ? `<span title="Marcada como não lida" style="width: 9px; height: 9px; border-radius: 50%; background: #25D366; display: inline-block; flex-shrink: 0;"></span>` : '');
 
         const pinnedHTML = isPinnedChat(chat.phone)
             ? `<i class="fa-solid fa-thumbtack" title="Conversa fixada" style="font-size: 0.7rem; color: var(--text-muted); transform: rotate(45deg); flex-shrink: 0;"></i>`
@@ -1568,13 +1559,14 @@ function renderContactsList(chats) {
         const checkboxHTML = chatSelectMode
             ? `<i class="fa-solid ${isSelected ? 'fa-circle-check' : 'fa-circle'}" style="font-size: 1.2rem; color: ${isSelected ? 'var(--accent-success)' : 'var(--text-muted)'}; flex-shrink: 0;"></i>`
             : '';
-        const deleteBtnHTML = !chatSelectMode
-            ? `<button type="button" onclick="event.stopPropagation(); deleteConversation('${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" title="Apagar conversa" class="chat-row-delete-btn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem; border-radius: 6px; flex-shrink: 0;"><i class="fa-solid fa-trash-can"></i></button>`
-            : '';
 
         const isFav = isFavoriteChat(chat.phone);
-        const favoriteBtnHTML = !chatSelectMode
-            ? `<button type="button" onclick="event.stopPropagation(); toggleFavoriteChat('${chat.phone}')" title="${isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}" class="chat-row-favorite-btn${isFav ? ' is-favorite' : ''}"><i class="fa-${isFav ? 'solid' : 'regular'} fa-star"></i></button>`
+        const favStarHTML = isFav
+            ? `<i class="fa-solid fa-star" title="Favorito" style="font-size: 0.68rem; color: var(--accent-warning); flex-shrink: 0;"></i>`
+            : '';
+        // Botão único (seta pra baixo) que aparece no hover e abre o menu de opções — estilo WhatsApp
+        const menuBtnHTML = !chatSelectMode
+            ? `<button type="button" onclick="event.stopPropagation(); showChatContextMenu(event, '${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" title="Opções da conversa" class="chat-row-menu-btn"><i class="fa-solid fa-chevron-down"></i></button>`
             : '';
 
         const draftText = getChatDraft(chat.phone);
@@ -1585,32 +1577,31 @@ function renderContactsList(chats) {
         const archivedOpacity = isArchivedChat(chat.phone) ? 'opacity: 0.65;' : '';
 
         html += `
-            <div class="chat-row" oncontextmenu="showChatContextMenu(event, '${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" style="display: flex; align-items: center; gap: 0.9rem; padding: 0.9rem 1.2rem; cursor: pointer; transition: 0.2s; ${archivedOpacity} ${isSelected ? 'background: rgba(16, 185, 129, 0.08);' : isActive}" onclick="${rowClickHandler}" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='${isSelected ? 'rgba(16, 185, 129, 0.08)' : (isActive.includes('rgba') ? 'rgba(16, 185, 129, 0.1)' : 'transparent')}'">
+            <div class="chat-row" title="+${chat.phone}" oncontextmenu="showChatContextMenu(event, '${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" style="display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 1rem; cursor: pointer; transition: 0.2s; ${archivedOpacity} ${isSelected ? 'background: rgba(16, 185, 129, 0.08);' : isActive}" onclick="${rowClickHandler}" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='${isSelected ? 'rgba(16, 185, 129, 0.08)' : (isActive.includes('rgba') ? 'rgba(16, 185, 129, 0.1)' : 'transparent')}'">
                 ${checkboxHTML}
                 ${avatarHTML}
                 <div style="flex: 1; min-width: 0;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.15rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 6px;">
                         <span style="display: flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden;">
                             ${pinnedHTML}
-                            <strong style="color: var(--text-main); font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${displayName}</strong>
+                            ${favStarHTML}
+                            <strong style="color: var(--text-main); font-size: 0.95rem; font-weight: ${hasUnread ? 700 : 500}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${displayName}</strong>
                             ${aiBadgeHTML}
                             ${lockBadgeHTML}
                         </span>
-                        <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; margin-left: 6px;">
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">${timeString}</span>
-                            ${unreadBadgeHTML}
+                        <span style="display: flex; align-items: center; flex-shrink: 0;">
+                            <span style="font-size: 0.7rem; color: ${timeColor}; font-weight: ${hasUnread ? 600 : 400};">${timeString}</span>
+                            ${menuBtnHTML}
+                        </span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.1rem;">
+                        <div style="flex: 1; min-width: 0; font-size: 0.82rem; color: ${hasUnread ? 'var(--text-main)' : 'var(--text-muted)'}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 0.3rem;">
+                            ${previewLineHTML}
                         </div>
-                    </div>
-                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
-                        <i class="fa-solid fa-phone" style="font-size: 0.68rem;"></i> +${chat.phone}
-                    </div>
-                    <div style="font-size: 0.82rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 0.3rem;">
-                        ${previewLineHTML}
+                        ${unreadBadgeHTML}
                     </div>
                     ${leadTagsHTML}
                 </div>
-                ${favoriteBtnHTML}
-                ${deleteBtnHTML}
             </div>
         `;
     });
@@ -1810,12 +1801,16 @@ function parseLeadTags(rawTags) {
     return [];
 }
 
-function getTagBadgeHTML(tagId) {
+function getTagBadgeHTML(tagId, compact = false) {
     const tags = getAvailableTags();
     const found = tags.find(t => t.id === tagId);
     if (!found) return '';
-    return `<span style="position: relative; font-size: 0.72rem; font-weight: 600; line-height: 1.5; padding: 0.22rem 0.6rem 0.22rem 1.15rem; background: ${found.color}; color: #0a0a0a; clip-path: polygon(14px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 14px 100%, 0 50%); display: inline-flex; align-items: center;">
-        <span style="position: absolute; left: 7px; top: 50%; transform: translateY(-50%); width: 4px; height: 4px; border-radius: 50%; background: rgba(0,0,0,0.55);"></span>
+    const fs = compact ? '0.66rem' : '0.72rem';
+    const pad = compact ? '0.1rem 0.5rem 0.1rem 0.95rem' : '0.22rem 0.6rem 0.22rem 1.15rem';
+    const dotLeft = compact ? '6px' : '7px';
+    const notch = compact ? '11px' : '14px';
+    return `<span style="position: relative; font-size: ${fs}; font-weight: 600; line-height: 1.4; padding: ${pad}; background: ${found.color}; color: #0a0a0a; clip-path: polygon(${notch} 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, ${notch} 100%, 0 50%); display: inline-flex; align-items: center;">
+        <span style="position: absolute; left: ${dotLeft}; top: 50%; transform: translateY(-50%); width: 4px; height: 4px; border-radius: 50%; background: rgba(0,0,0,0.55);"></span>
         ${found.label}
     </span>`;
 }
@@ -1975,17 +1970,13 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     const identityContainer = document.getElementById('chat-lead-identity');
     if (identityContainer) {
         const leadName = (lead && lead.nome) || (window.currentActiveChat && window.currentActiveChat.name) || 'Contato';
-        const identityLastTs = lastInteraction ? lastInteraction.ts : null;
-        const identityLastDir = lastInteraction ? lastInteraction.dir : null;
-        const identityOnlineInfo = getLeadOnlineStatus(identityLastTs, identityLastDir);
         const identityAvatarHTML = typeof renderAvatarHTML === 'function'
-            ? renderAvatarHTML(leadName, null, identityOnlineInfo.statusClass, 44)
+            ? renderAvatarHTML(leadName, null, null, 44)
             : '';
         identityContainer.innerHTML = `
             ${identityAvatarHTML}
             <div style="min-width: 0;">
                 <div style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(leadName)}</div>
-                <div style="font-size: 0.75rem; color: var(--nav-arrow);">${escapeHtml(identityOnlineInfo.text || '')}</div>
             </div>
         `;
     }
@@ -2043,7 +2034,12 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
             lastTs = targetChat ? (targetChat.last_timestamp || targetChat.timestamp) : null;
             lastDir = targetChat ? (targetChat.last_direction || targetChat.direction) : null;
         }
-        const lastInteracaoTexto = lastTs ? getLeadOnlineStatus(lastTs, lastDir).text : 'Sem mensagens ainda';
+        let lastInteracaoTexto = 'Sem mensagens ainda';
+        if (lastTs) {
+            const diaTxt = formatFullChatDate(lastTs);  // "Hoje" / "Ontem" / "12 de agosto de 2025"
+            const horaTxt = formatChatTime(lastTs);     // "14:32"
+            lastInteracaoTexto = [diaTxt, horaTxt].filter(Boolean).join(' às ') || '—';
+        }
 
         tempoHTML = `
             <div>
@@ -3349,9 +3345,30 @@ function pickCampaignCanal(canal) {
     onCampaignCanalChange();
 }
 
+// Navegação por etapas (componente .utm-tabs / .utm-tabpanel) — escopo por container.
+function switchStepTab(scopeSelector, name) {
+    const scope = document.querySelector(scopeSelector);
+    if (!scope) return;
+    scope.querySelectorAll('.utm-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.utmTab === name);
+    });
+    scope.querySelectorAll('.utm-tabpanel').forEach(p => {
+        p.classList.toggle('active', p.dataset.utmPanel === name);
+    });
+}
+
+// Tela de UTMs (Visão geral / Nova campanha / Campanhas / Integração)
+function switchUtmTab(name) {
+    switchStepTab('#view-origem-leads', name);
+}
+
+// Tela de Campanhas de Disparo (Templates / Novo disparo / Histórico)
+function switchDispatchTab(name) {
+    switchStepTab('#view-campanhas', name);
+}
+
 function toggleUtmSnippetPanel() {
-    const panel = document.getElementById('utm-snippet-panel');
-    if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    switchUtmTab('integration');
 }
 
 function copyUtmSnippet() {
@@ -3465,7 +3482,7 @@ function renderCampaignsList() {
         listEl.innerHTML = `<div class="utm-empty-state" style="flex: 1; justify-content: center;">
             <i class="fa-solid fa-${empty ? 'bullseye' : 'filter-circle-xmark'}" style="font-size: 1.8rem;"></i>
             <strong style="color: var(--text-main); font-size: 0.92rem;">${empty ? 'Nenhuma campanha ainda' : 'Nenhuma campanha encontrada'}</strong>
-            <span style="max-width: 320px;">${empty ? 'Preencha o formulário ao lado e clique em "Criar Campanha" para começar a rastrear a origem dos seus leads.' : 'Nenhuma campanha corresponde aos filtros selecionados.'}</span>
+            <span style="max-width: 320px;">${empty ? 'Vá até a aba "Nova campanha", preencha os dados e clique em "Criar Campanha" para começar a rastrear a origem dos seus leads.' : 'Nenhuma campanha corresponde aos filtros selecionados.'}</span>
         </div>`;
         return;
     }
@@ -3599,7 +3616,7 @@ function startEditCampaign(id) {
     const cancelBtn = document.getElementById('btn-cancel-edit-campaign');
     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
 
-    document.getElementById('view-origem-leads')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    switchUtmTab('new');
 }
 
 function duplicateCampaign(id) {
@@ -3621,7 +3638,7 @@ function duplicateCampaign(id) {
         document.getElementById('new-campaign-utm-medium').value = c.utm_medium || '';
     }
 
-    document.getElementById('view-origem-leads')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    switchUtmTab('new');
     if (typeof showToast === 'function') showToast('Campanha duplicada no formulário — ajuste o nome e crie.', 'success');
 }
 
@@ -3691,6 +3708,7 @@ async function submitNewCampaign() {
 
         if (typeof showToast === 'function') showToast(isEditing ? 'Campanha atualizada com sucesso!' : 'Campanha criada com sucesso!', 'success');
         await loadCampaigns();
+        switchUtmTab('list');
     } catch (e) {
         if (btn) btn.innerHTML = origText;
         if (typeof showToast === 'function') showToast(e.message, 'danger'); else alert(e.message);
@@ -3914,21 +3932,11 @@ async function openChat(phone, name, silent = false) {
         ? allChatsList.find(c => isSamePhone(c.phone, phone))
         : null;
 
-    const lastTs = targetChat ? (targetChat.last_timestamp || targetChat.timestamp) : null;
-    const lastDir = targetChat ? (targetChat.last_direction || targetChat.direction) : null;
-    const onlineInfo = getLeadOnlineStatus(lastTs, lastDir);
-
     const avatarSlot = document.getElementById('chat-header-avatar-slot');
     if (avatarSlot) {
-        avatarSlot.innerHTML = renderAvatarHTML(name, null, onlineInfo.statusClass, 44);
+        avatarSlot.innerHTML = renderAvatarHTML(name, null, null, 44);
     }
 
-    const onlineStatusEl = document.getElementById('chat-active-online-status');
-    if (onlineStatusEl) {
-        onlineStatusEl.textContent = onlineInfo.text;
-        onlineStatusEl.style.color = onlineInfo.isOnline ? '#22c55e' : '#a1a1aa';
-    }
-    
     // Marcar mensagens do chat como lidas
     fetch('/api/whatsapp/mark-read', {
         method: 'POST',
@@ -4174,6 +4182,13 @@ async function openChat(phone, name, silent = false) {
                             <span style="font-size: 0.73rem; color: var(--text-muted);">${timeString}</span>
                             ${statusIcon}
                         </div>
+                        ${(isOut && msg.status === 'failed') ? `
+                        <div style="display: flex; align-items: flex-start; gap: 0.35rem; margin-top: 0.2rem; padding: 0 0.2rem; max-width: 75%;">
+                            <i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-danger); font-size: 0.7rem; margin-top: 0.15rem;"></i>
+                            <span style="font-size: 0.72rem; color: var(--accent-danger); line-height: 1.35;">
+                                Não entregue${msg.error_detail ? ': ' + escapeHtml(msg.error_detail) : ' (motivo não informado pela Meta).'}
+                            </span>
+                        </div>` : ''}
                     </div>
                 `;
             });

@@ -142,30 +142,39 @@
     --btn-secondary-hover: hsl(var(--muted));
     --btn-secondary-text: hsl(var(--secondary-foreground));
 
-    /* Agenda Colors */
+    /* Agenda Colors — Dark Mode. A borda usa a mesma cor do card, só que
+       um sobretom acima (mesmo matiz, um passo mais claro). */
     --agenda-c1-bg: #4c1d95;
-    --agenda-c1-border: #ddd6fe;
+    --agenda-c1-border: #6d28d9;
+    --agenda-c1-border-strong: #6d28d9;
     --agenda-c1-text: #f5f3ff;
     --agenda-c2-bg: #065f46;
-    --agenda-c2-border: #a7f3d0;
+    --agenda-c2-border: #0a8a66;
+    --agenda-c2-border-strong: #0a8a66;
     --agenda-c2-text: #ecfdf5;
     --agenda-c3-bg: #78350f;
-    --agenda-c3-border: #fde68a;
+    --agenda-c3-border: #9a4a16;
+    --agenda-c3-border-strong: #9a4a16;
     --agenda-c3-text: #fffbeb;
     --agenda-c4-bg: #831843;
-    --agenda-c4-border: #fbcfe8;
+    --agenda-c4-border: #a81f57;
+    --agenda-c4-border-strong: #a81f57;
     --agenda-c4-text: #fdf2f8;
     --agenda-c5-bg: #1e3a5f;
-    --agenda-c5-border: #bfdbfe;
+    --agenda-c5-border: #2f5688;
+    --agenda-c5-border-strong: #2f5688;
     --agenda-c5-text: #eff6ff;
     --agenda-c6-bg: #134e4a;
-    --agenda-c6-border: #99f6e4;
+    --agenda-c6-border: #1c6f69;
+    --agenda-c6-border-strong: #1c6f69;
     --agenda-c6-text: #f0fdfa;
     --agenda-c7-bg: #881337;
-    --agenda-c7-border: #fecdd3;
+    --agenda-c7-border: #a81a45;
+    --agenda-c7-border-strong: #a81a45;
     --agenda-c7-text: #fff1f2;
     --agenda-block-bg: hsl(var(--muted));
     --agenda-block-border: hsl(var(--border));
+    --agenda-block-border-strong: hsl(var(--muted-foreground));
     --agenda-block-text: hsl(var(--foreground));
 }
 
@@ -226,35 +235,112 @@
     --bg-main: #e8edf2;
     --bg-hover: #dde3ea;
 
-    /* Agenda Colors - Light Mode */
-    --agenda-c1-bg: #f3e8ff;
-    --agenda-c1-border: #9333ea;
-    --agenda-c1-text: #9333ea;
-    --agenda-c2-bg: #dcfce7;
-    --agenda-c2-border: #16a34a;
-    --agenda-c2-text: #16a34a;
-    --agenda-c3-bg: #fef9c3;
-    --agenda-c3-border: #ca8a04;
-    --agenda-c3-text: #ca8a04;
-    --agenda-c4-bg: #fce7f3;
-    --agenda-c4-border: #db2777;
-    --agenda-c4-text: #db2777;
-    --agenda-c5-bg: #e0f2fe;
-    --agenda-c5-border: #0284c7;
-    --agenda-c5-text: #0284c7;
-    --agenda-c6-bg: #ccfbf1;
-    --agenda-c6-border: #0d9488;
-    --agenda-c6-text: #0d9488;
-    --agenda-c7-bg: #ffe4e6;
-    --agenda-c7-border: #e11d48;
-    --agenda-c7-text: #e11d48;
+    /* Agenda Colors - Light Mode. A borda usa a mesma cor da fonte interna
+       do card (sobretom escuro sobre o fundo pastel). */
+    --agenda-c1-bg: #e9d5ff;
+    --agenda-c1-border: #581c87;
+    --agenda-c1-border-strong: #581c87;
+    --agenda-c1-text: #581c87;
+    --agenda-c2-bg: #bbf7d0;
+    --agenda-c2-border: #14532d;
+    --agenda-c2-border-strong: #14532d;
+    --agenda-c2-text: #14532d;
+    --agenda-c3-bg: #fef08a;
+    --agenda-c3-border: #713f12;
+    --agenda-c3-border-strong: #713f12;
+    --agenda-c3-text: #713f12;
+    --agenda-c4-bg: #fbcfe8;
+    --agenda-c4-border: #831843;
+    --agenda-c4-border-strong: #831843;
+    --agenda-c4-text: #831843;
+    --agenda-c5-bg: #bae6fd;
+    --agenda-c5-border: #0c4a6e;
+    --agenda-c5-border-strong: #0c4a6e;
+    --agenda-c5-text: #0c4a6e;
+    --agenda-c6-bg: #99f6e4;
+    --agenda-c6-border: #134e4a;
+    --agenda-c6-border-strong: #134e4a;
+    --agenda-c6-text: #134e4a;
+    --agenda-c7-bg: #fecdd3;
+    --agenda-c7-border: #881337;
+    --agenda-c7-border-strong: #881337;
+    --agenda-c7-text: #881337;
     --agenda-block-bg: hsl(var(--muted));
     --agenda-block-border: hsl(var(--border));
+    --agenda-block-border-strong: hsl(var(--muted-foreground));
     --agenda-block-text: hsl(var(--foreground));
 }
 
 [data-theme="light"] .kanban-filters {
     background: hsl(var(--background));
+}
+
+/* ============================================================================
+   TEMA ESCURO FIXO — menu lateral e tela de login
+   O restante do app acompanha o tema escolhido; estes dois blocos ficam
+   sempre escuros. Reaplicamos todos os tokens do :root (valores dark) no
+   escopo do <header> e do #login-overlay, então tudo que usa var(--…)
+   nesses subtrees recalcula no escuro, mesmo com [data-theme="light"] no body.
+   ============================================================================ */
+[data-theme="light"] header,
+[data-theme="light"] #login-overlay,
+[data-theme="light"] .sb-flyout,
+.sb-flyout {
+    color-scheme: dark;
+    --background: 230 12% 10%;
+    --foreground: 230 15% 93%;
+    --card: 230 12% 10%;
+    --card-foreground: 230 15% 93%;
+    --popover: 230 12% 10%;
+    --popover-foreground: 230 10% 65%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 1%;
+    --secondary: 230 10% 14%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 230 10% 14%;
+    --muted-foreground: 230 10% 70%;
+    --accent: 230 9% 26%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 230 9% 18%;
+    --input: 230 9% 18%;
+    --ring: 230 60% 75%;
+
+    --bg-dark: hsl(230, 12%, 9%);
+    --dash-funnel-sep: var(--bg-dark);
+    --bg-agenda: hsl(var(--background));
+    --agenda-header-bg: hsl(var(--muted));
+    --bg-card: hsl(var(--card));
+    --bg-column: hsl(var(--muted));
+    --text-main: hsl(var(--foreground));
+    --text-muted: hsl(var(--muted-foreground));
+    --header-bg: hsl(230, 12%, 12%);
+    --header-text: hsl(var(--foreground));
+    --header-btn-bg: transparent;
+    --header-btn-hover: hsl(var(--accent));
+    --header-btn-border: hsl(var(--border));
+    --nav-active-bg: hsl(var(--accent));
+    --nav-active-border: hsl(var(--border));
+    --nav-arrow: hsl(var(--muted-foreground));
+    --sb-card-bg: hsl(230, 12%, 6%);
+    --sb-danger: hsl(var(--destructive));
+
+    --accent-primary: #a78bfa;
+    --accent-success: #10b981;
+    --accent-warning: #fbbf24;
+    --accent-danger: #f87171;
+    --accent-info: #38bdf8;
+    --accent-success-tint: rgba(16, 185, 129, 0.12);
+    --accent-warning-tint: rgba(251, 191, 36, 0.12);
+    --accent-danger-tint: rgba(248, 113, 113, 0.12);
+    --accent-info-tint: rgba(56, 189, 248, 0.12);
+    --bg-main: hsl(230, 12%, 10%);
+    --bg-hover: hsl(230, 9%, 16%);
+    --border-color: hsl(var(--border));
+    --btn-secondary-bg: hsl(var(--secondary));
+    --btn-secondary-hover: hsl(var(--muted));
+    --btn-secondary-text: hsl(var(--secondary-foreground));
 }
 
 .skip-to-main {
@@ -1939,6 +2025,15 @@ body.kanban-dragging-body * {
     opacity: 0.7;
 }
 
+/* Evita corte vertical do texto em selects (ex.: "Meta Ads (Facebook/Insta)") */
+.form-group select,
+select.form-control {
+    line-height: 1.4;
+    min-height: 2.5rem;
+    height: auto;
+    text-overflow: ellipsis;
+}
+
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus,
@@ -2007,6 +2102,152 @@ select.form-control option,
 
 .btn-save:active {
     transform: scale(0.97);
+}
+
+/* ===== Gestão de Acessos ===== */
+.access-card {
+    background: var(--bg-column);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 1.15rem 1.25rem;
+}
+
+.access-card-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin: 0 0 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.access-card-title i {
+    color: var(--accent-primary);
+    font-size: 0.85rem;
+}
+
+.access-create-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.85rem 1rem;
+    align-items: end;
+}
+
+.access-create-grid .btn-save {
+    height: 40px;
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.access-table-wrap {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.access-table {
+    width: 100%;
+    text-align: left;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.access-table thead tr {
+    background: color-mix(in srgb, var(--text-main) 5%, transparent);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.access-table th {
+    padding: 0.7rem 1rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.access-table td {
+    padding: 0.7rem 1rem;
+    color: var(--text-main);
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.access-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.access-table tbody tr:hover {
+    background: color-mix(in srgb, var(--text-main) 3%, transparent);
+}
+
+.access-role-badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.access-role-badge.is-admin {
+    background: var(--accent-warning);
+    color: #1a1a1a;
+}
+
+.access-role-badge.is-user {
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
+}
+
+.access-row-actions {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+}
+
+.access-icon-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-dark);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.access-icon-btn:hover {
+    color: var(--text-main);
+    border-color: var(--text-muted);
+}
+
+.access-icon-btn.is-danger:hover {
+    color: #fff;
+    background: var(--accent-danger, #ef4444);
+    border-color: var(--accent-danger, #ef4444);
+}
+
+.access-muted {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+@media (max-width: 560px) {
+    .access-create-grid {
+        grid-template-columns: 1fr;
+    }
+    .access-create-grid .btn-save {
+        justify-self: stretch;
+        justify-content: center;
+    }
 }
 
 .integration-loader {
@@ -2150,7 +2391,7 @@ select.form-control option,
     line-height: 1.2;
     overflow: hidden;
     color: var(--text-main);
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
     transition: transform 0.1s;
     border-left: 4px solid rgba(0, 0, 0, 0.2);
@@ -2973,9 +3214,13 @@ select.form-control option,
     background: hsl(0, 0%, 100%) !important;
 }
 
-/* Ocultar botão de mudar tema */
+/* Botão de mudar tema: escondido onde fica solto (ao lado do título das
+   telas internas), visível só na barra superior, ao lado do sino. */
 #theme-toggle {
     display: none !important;
+}
+.topbar-user #theme-toggle {
+    display: inline-flex !important;
 }
 
 /* ==========================================
@@ -3894,28 +4139,233 @@ select.form-control option,
 .utm-panel {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 1.5rem;
+}
+
+/* ===== UTMs — cabeçalho ===== */
+.utm-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.utm-header-titles h2 {
+    margin: 0;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.utm-header-titles h2 i {
+    color: var(--accent-info);
+}
+
+.utm-header-titles p {
+    margin: 0.3rem 0 0;
+    font-size: 0.83rem;
+    color: var(--text-muted);
+}
+
+.utm-header-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+/* ===== UTMs — navegação por etapas ===== */
+.utm-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.3rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
     border-radius: 12px;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.utm-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 1.15rem;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-radius: 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.utm-tab i {
+    font-size: 0.88rem;
+}
+
+.utm-tab:hover {
+    color: var(--text-main);
+}
+
+.utm-tab.active {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.utm-tabpanel {
+    display: none;
+}
+
+.utm-tabpanel.active {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    animation: utmFade 0.18s ease;
+}
+
+@keyframes utmFade {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.utm-panel-title {
+    color: var(--text-main);
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0 0 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* ===== UTMs — formulário Nova campanha ===== */
+.utm-form-panel {
+    max-width: 620px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+}
+
+.utm-form-actions {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 0.4rem;
+}
+
+.utm-btn-create {
+    flex: 1;
+    background: var(--accent-success);
+    border: none;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 0.7rem 1.1rem;
+    border-radius: 9px;
+    cursor: pointer;
+    transition: filter 0.15s;
+}
+
+.utm-btn-create:hover {
+    filter: brightness(1.06);
+}
+
+/* ===== UTMs — lista de campanhas ===== */
+.utm-list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.1rem;
+}
+
+.utm-list-filters {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.utm-list-filters input,
+.utm-list-filters select {
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.45rem 0.7rem;
+    border-radius: 8px;
+    outline: none;
+    font-size: 0.82rem;
+    font-family: inherit;
+    transition: border-color 0.15s;
+}
+
+.utm-list-filters input {
+    width: 170px;
+}
+
+.utm-list-filters select {
+    cursor: pointer;
+}
+
+.utm-list-filters input:focus,
+.utm-list-filters select:focus {
+    border-color: var(--accent-primary);
+}
+
+/* ===== Campanhas de Disparo — etapa "Novo disparo" ===== */
+.dispatch-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: stretch;
+}
+
+.dispatch-grid > .utm-panel {
+    height: 100%;
+}
+
+@media (max-width: 960px) {
+    .dispatch-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .utm-kpi-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.85rem;
 }
 
 .utm-kpi-chip {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
+    border-radius: 12px;
+    padding: 1.1rem 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.3rem;
+    min-width: 0;
 }
 
 .utm-kpi-chip .utm-kpi-value {
-    font-size: 1.25rem;
+    font-size: 1.5rem;
     font-weight: 700;
+    line-height: 1.1;
     color: var(--text-main);
 }
 
@@ -3935,7 +4385,7 @@ select.form-control option,
     margin-bottom: 0.3rem;
 }
 
-.utm-field input,
+.utm-field input:not([type="checkbox"]):not([type="range"]),
 .utm-field select {
     width: 100%;
     box-sizing: border-box;
@@ -3950,9 +4400,72 @@ select.form-control option,
     transition: border-color 0.15s;
 }
 
-.utm-field input:focus,
+.utm-field input:not([type="checkbox"]):not([type="range"]):focus,
 .utm-field select:focus {
     border-color: var(--accent-primary);
+}
+
+/* Toggle switch (substitui checkbox nativo esticado).
+   Prefixado com .utm-field pra vencer o "display:block" de ".utm-field label". */
+.utm-field label.utm-switch {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    margin-bottom: 0;
+}
+
+.utm-switch > input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+}
+
+.utm-switch-track {
+    display: block;
+    flex-shrink: 0;
+    width: 40px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    position: relative;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.utm-switch-thumb {
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transform: translateY(-50%);
+    transition: transform 0.15s, background-color 0.15s;
+}
+
+.utm-switch > input:checked + .utm-switch-track {
+    background: var(--accent-success);
+    border-color: var(--accent-success);
+}
+
+.utm-switch > input:checked + .utm-switch-track .utm-switch-thumb {
+    background: #fff;
+    transform: translate(18px, -50%);
+}
+
+.utm-switch > input:focus-visible + .utm-switch-track {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+}
+
+.utm-switch-text {
+    line-height: 1.3;
 }
 
 /* Fix para as opções do select no tema escuro */
@@ -4073,19 +4586,38 @@ select.form-control option,
     transform: scale(1.08);
 }
 
-/* Lista de conversas do WhatsApp — botão de apagar só aparece no hover da linha */
-.chat-row-delete-btn {
+/* Lista de conversas do WhatsApp — seta de opções só aparece no hover da linha */
+.chat-row-menu-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    /* Colapsado por padrão: não ocupa espaço e a hora fica encostada à direita */
+    width: 0;
+    height: 20px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin-left: 0;
+    border-radius: 50%;
+    color: var(--text-muted);
+    font-size: 0.72rem;
     opacity: 0;
-    transition: opacity 0.15s, color 0.15s, background-color 0.15s;
+    transition: opacity 0.15s ease, width 0.15s ease, margin-left 0.15s ease, color 0.15s, background-color 0.15s;
 }
 
-.chat-row:hover .chat-row-delete-btn {
+/* No hover da linha a setinha aparece e empurra a hora para a esquerda */
+.chat-row:hover .chat-row-menu-btn {
     opacity: 1;
+    width: 20px;
+    margin-left: 4px;
 }
 
-.chat-row-delete-btn:hover {
-    color: #fff !important;
-    background: var(--accent-danger) !important;
+.chat-row-menu-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.1);
 }
 
 .chat-filter-toggle-btn-active {
@@ -4128,25 +4660,6 @@ select.form-control option,
     color: var(--accent-success);
 }
 
-.chat-row-favorite-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    flex-shrink: 0;
-    padding: 0.3rem;
-    color: var(--text-muted);
-    opacity: 0;
-    transition: opacity 0.15s, color 0.15s;
-}
-
-.chat-row:hover .chat-row-favorite-btn,
-.chat-row-favorite-btn.is-favorite {
-    opacity: 1;
-}
-
-.chat-row-favorite-btn.is-favorite {
-    color: var(--accent-warning);
-}
 
 .dash-card-compact {
     padding: 0.55rem !important;
@@ -4271,7 +4784,6 @@ input:focus, textarea:focus, select:focus {
 /* Agenda blocks specific overrides */
 .agenda-block {
     border-radius: calc(var(--radius) - 2px) !important;
-    border: 1px solid hsl(var(--border)) !important;
     box-shadow: none;
 }
 
@@ -6354,6 +6866,41 @@ body:has(#login-overlay.active) header { display: none; }
     /* Topbar has room for hamburger at left */
     .topbar-user {
         padding-left: 0.5rem;
+    }
+}
+
+/* Garante que a coluna da conversa tenha altura definida, senão o estado vazio
+   encolhe no conteúdo e o justify-content:center não tem espaço pra centralizar. */
+#view-chat.chat-container { height: 100%; }
+#view-chat .chat-main { height: 100%; min-height: 0; }
+
+#chat-empty-state {
+    height: 100%;
+    width: 100%;
+    text-align: center;
+    padding: 2rem;
+    box-sizing: border-box;
+}
+
+/* Ilustração do estado vazio do chat — só no desktop */
+.chat-empty-illustration {
+    display: none;
+}
+
+@media (min-width: 769px) {
+    .chat-empty-illustration {
+        display: block;
+        width: min(340px, 40vw);
+        max-width: 340px;
+        height: auto;
+        margin-bottom: 1.5rem;
+        opacity: 0.92;
+    }
+    /* Com a ilustração presente, o ícone do WhatsApp vira redundante.
+       Se o SVG falhar ao carregar (onerror="this.remove()"), a adjacência
+       quebra e o ícone volta a aparecer. */
+    .chat-empty-illustration + .chat-empty-fallback-icon {
+        display: none;
     }
 }
 

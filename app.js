@@ -2209,6 +2209,7 @@ function switchTab(tabId) {
         faltantes: 'Faltantes',
         sumidos: 'Sumidos',
         aniversariantes: 'Aniversariantes',
+        contatos: 'Contatos',
         historico: 'Histórico',
     };
     if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
@@ -2252,7 +2253,9 @@ function switchTab(tabId) {
     if(campView) campView.style.display = 'none';
     const origemView = document.getElementById('view-origem-leads');
     if(origemView) origemView.style.display = 'none';
-    
+    const contatosView = document.getElementById('view-contatos');
+    if(contatosView) contatosView.style.display = 'none';
+
     // Para polling do chat ao sair da aba
     if (tabId !== 'chat' && window.chatPollingInterval) {
         clearInterval(window.chatPollingInterval);
@@ -2303,6 +2306,7 @@ function switchTab(tabId) {
     } else if (tabId === 'campanhas') {
         const view = document.getElementById('view-campanhas');
         if (view) view.style.display = 'flex';
+        if (typeof switchDispatchTab === 'function') switchDispatchTab('new');
         loadWhatsappTemplates();
         loadAudiences().then(updateCampaignLeadCount);
         loadDispatchHistory();
@@ -2312,10 +2316,17 @@ function switchTab(tabId) {
     } else if (tabId === 'origem-leads') {
         const view = document.getElementById('view-origem-leads');
         if (view) view.style.display = 'flex';
+        if (typeof switchUtmTab === 'function') switchUtmTab('overview');
         if (typeof loadCampaigns === 'function') loadCampaigns();
     } else if (tabId === 'agenda') {
         document.getElementById('view-agenda').style.display = 'flex';
         renderAgendaGrid();
+    } else if (tabId === 'contatos') {
+        const view = document.getElementById('view-contatos');
+        if (view) {
+            view.style.display = 'flex';
+            loadContatos();
+        }
     } else if (tabId === 'chat') {
         if (typeof hideChatNotificationDot === 'function') hideChatNotificationDot();
         const view = document.getElementById('view-chat');
@@ -2360,6 +2371,155 @@ function switchTab(tabId) {
         incomingView.classList.add('is-entering');
         incomingView.addEventListener('animationend', () => incomingView.classList.remove('is-entering'), { once: true });
     }
+}
+
+// === BASE DE CONTATOS (todo mundo que já falou com a clínica no WhatsApp) ===
+// A fonte é /api/contacts (agregado da tabela wa_messages). O nome, a origem e a
+// etapa no funil vêm do array "leads" já carregado — todo contato de WhatsApp
+// vira um lead automaticamente no webhook, então o cruzamento por telefone cobre
+// praticamente 100% dos casos.
+let contatosData = [];
+let contatosLoaded = false;
+
+async function loadContatos(force = false) {
+    const tbody = document.getElementById('list-contatos');
+    if (!tbody) return;
+    if (contatosLoaded && !force) { renderContatos(); return; }
+
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando contatos...</td></tr>`;
+
+    try {
+        if (!Array.isArray(leads) || leads.length === 0) {
+            await fetchLeadsFromServer(true);
+        }
+        const res = await fetch('/api/contacts');
+        const json = await res.json();
+        const rows = json.success ? (json.data || []) : [];
+
+        contatosData = rows.map(row => {
+            const lead = (Array.isArray(leads) ? leads : []).find(l => isSamePhone(l.telefone, row.phone));
+            return {
+                phone: row.phone,
+                nome: (lead && lead.nome) ? lead.nome : 'Lead WhatsApp',
+                origem: (lead && lead.origem) ? lead.origem : '',
+                column: lead ? (lead.column || lead.column_id) : null,
+                email: (lead && lead.email) ? lead.email : '',
+                leadId: lead ? lead.id : null,
+                first_contact: row.first_contact,
+                last_contact: row.last_contact,
+                total_messages: Number(row.total_messages || 0),
+                inbound_count: Number(row.inbound_count || 0),
+            };
+        });
+        contatosLoaded = true;
+        renderContatos();
+    } catch (e) {
+        console.error('Erro ao carregar contatos:', e);
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--accent-danger);">Falha ao carregar a base de contatos.</td></tr>`;
+    }
+}
+
+function fmtContatoDate(raw) {
+    if (!raw) return '—';
+    const d = new Date(String(raw).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderContatos() {
+    const tbody = document.getElementById('list-contatos');
+    const countEl = document.getElementById('count-contatos');
+    if (!tbody) return;
+
+    const q = (document.getElementById('contatos-search')?.value || '').trim().toLowerCase();
+    let rows = contatosData;
+    if (q) {
+        rows = rows.filter(r =>
+            (r.nome || '').toLowerCase().includes(q) ||
+            String(r.phone || '').toLowerCase().includes(q) ||
+            formatPhone(r.phone).toLowerCase().includes(q)
+        );
+    }
+    if (countEl) countEl.textContent = rows.length;
+
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--text-muted);">Nenhum contato encontrado.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = rows.map(r => {
+        const col = KANBAN_COLUMNS[r.column];
+        const etapa = col
+            ? `<span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:${col.color};"><i class="fa-solid ${col.icon}" style="font-size:0.7rem;"></i> ${col.label}</span>`
+            : `<span style="color:var(--text-muted);">—</span>`;
+        const nomeSafe = escapeHtml(r.nome || 'Lead WhatsApp');
+        const phoneJs = String(r.phone || '').replace(/'/g, "\\'");
+        const nomeJs = nomeSafe.replace(/'/g, "\\'");
+        return `
+        <tr>
+            <td style="font-weight:500;">
+                <div style="display:flex; align-items:center; gap:0.75rem;">
+                    <div style="width:32px; height:32px; border-radius:50%; background:rgba(59,130,246,0.1); display:flex; align-items:center; justify-content:center; color:var(--accent-primary); flex-shrink:0;">
+                        <i class="fa-solid fa-user"></i>
+                    </div>
+                    ${nomeSafe}
+                </div>
+            </td>
+            <td>${formatPhone(r.phone)}</td>
+            <td style="color:var(--text-muted);">${escapeHtml(r.origem || '—')}</td>
+            <td>${etapa}</td>
+            <td>${fmtContatoDate(r.first_contact)}</td>
+            <td>${fmtContatoDate(r.last_contact)}</td>
+            <td style="text-align:center;">${r.total_messages}<br><small style="color:var(--text-muted);">${r.inbound_count} recebidas</small></td>
+            <td style="text-align:center;">
+                <button class="btn-secondary" onclick="abrirConversaContato('${phoneJs}', '${nomeJs}')"
+                    style="width:100%; justify-content:center; background:rgba(16,185,129,0.15); color:var(--accent-success); border-color:rgba(16,185,129,0.3); padding:0.5rem;">
+                    <i class="fa-brands fa-whatsapp"></i> Abrir conversa
+                </button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function filterContatos() {
+    renderContatos();
+}
+
+function abrirConversaContato(phone, name) {
+    switchTab('chat');
+    setTimeout(() => {
+        if (typeof openChat === 'function') openChat(phone, name);
+    }, 150);
+}
+
+function exportContatosCSV() {
+    if (!contatosData.length) {
+        alert('Nenhum contato para exportar.');
+        return;
+    }
+    const header = ['Nome', 'Telefone', 'Origem', 'Etapa', 'Primeiro contato', 'Ultimo contato', 'Total mensagens', 'Recebidas'];
+    const esc = v => {
+        const s = String(v ?? '').replace(/"/g, '""');
+        return /[",\n;]/.test(s) ? `"${s}"` : s;
+    };
+    const lines = [header.join(',')];
+    contatosData.forEach(r => {
+        const col = KANBAN_COLUMNS[r.column];
+        lines.push([
+            r.nome || '', r.phone || '', r.origem || '', col ? col.label : '',
+            fmtContatoDate(r.first_contact), fmtContatoDate(r.last_contact),
+            r.total_messages, r.inbound_count
+        ].map(esc).join(','));
+    });
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `contatos-whatsapp-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 }
 
 // === RELACIONAMENTO (CRM ATIVO) ===
@@ -2773,33 +2933,44 @@ async function openUsuariosModal() {
     await loadUsers();
 }
 
+// Guarda o último resultado de /api/users pra preencher o modal de edição sem novo request.
+let _accessUsersCache = [];
+
 async function loadUsers() {
     const tbody = document.getElementById('usuarios-tbody');
-    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 1rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>';
-    
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 1rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>';
+
     try {
         const res = await fetch('/api/users');
         const users = await res.json();
-        
+        if (!res.ok) throw new Error(users.error || 'Erro ao carregar usuários');
+        _accessUsersCache = Array.isArray(users) ? users : [];
+
         tbody.innerHTML = '';
-        users.forEach(u => {
+        _accessUsersCache.forEach(u => {
+            const isAdmin = u.role === 'admin';
+            const isRoot = u.username === 'admin';
+            const displayName = (u.display_name && u.display_name.trim()) ? u.display_name : '';
             const tr = document.createElement('tr');
-            tr.style.borderBottom = '1px solid var(--border-color)';
             tr.innerHTML = `
-                <td style="padding: 0.75rem 1rem; color: var(--text-main); font-weight: 500;">${u.username}</td>
-                <td style="padding: 0.75rem 1rem;">
-                    <span style="background: ${u.role === 'admin' ? 'var(--accent-warning)' : 'var(--accent-primary)'}; color: ${u.role === 'admin' ? '#000' : '#fff'}; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">
-                        ${u.role}
-                    </span>
-                </td>
-                <td style="padding: 0.75rem 1rem; text-align: right;">
-                    ${u.username !== 'admin' ? `<button class="btn-cancel" onclick="deleteUser('${u.username}')" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;"><i class="fa-solid fa-trash"></i></button>` : ''}
+                <td style="font-weight: 600;">${escapeHtml(u.username)}</td>
+                <td>${displayName ? escapeHtml(displayName) : '<span class="access-muted">—</span>'}</td>
+                <td><span class="access-role-badge ${isAdmin ? 'is-admin' : 'is-user'}">${isAdmin ? 'admin' : 'user'}</span></td>
+                <td>
+                    <div class="access-row-actions">
+                        <button class="access-icon-btn" title="Editar acesso" onclick="openEditUser('${encodeURIComponent(u.username)}')">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                        ${isRoot ? '' : `<button class="access-icon-btn is-danger" title="Excluir acesso" onclick="deleteUser('${encodeURIComponent(u.username)}')">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>`}
+                    </div>
                 </td>
             `;
             tbody.appendChild(tr);
         });
     } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: red;">Erro ao carregar usuários</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--accent-danger, #ef4444); padding: 1rem;">${escapeHtml(e.message)}</td></tr>`;
     }
 }
 
@@ -2807,33 +2978,89 @@ async function createUser() {
     const username = document.getElementById('nu-user').value.trim();
     const password = document.getElementById('nu-pass').value.trim();
     const role = document.getElementById('nu-role').value;
-    
+
     if (!username || !password) return await customAlert('Preencha usuário e senha!');
-    
+    if (password.length < 6) return await customAlert('A senha precisa ter pelo menos 6 caracteres.');
+
     try {
         const res = await fetch('/api/users', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password, role })
         });
-        
+
         const data = await res.json();
         if (data.error) throw new Error(data.error);
-        
+
         document.getElementById('nu-user').value = '';
         document.getElementById('nu-pass').value = '';
+        document.getElementById('nu-role').value = 'user';
+        if (typeof showToast === 'function') showToast(`Acesso "${username}" criado.`);
         loadUsers();
     } catch (e) {
         await customAlert(e.message);
     }
 }
 
-async function deleteUser(username) {
-    if (!await customConfirm(`Tem certeza que deseja excluir o acesso de ${username}?`)) return;
+function openEditUser(usernameEnc) {
+    const username = decodeURIComponent(usernameEnc);
+    const u = _accessUsersCache.find(x => x.username === username);
+    if (!u) return;
+
+    document.getElementById('eu-username').value = username;
+    document.getElementById('eu-username-view').value = username;
+    document.getElementById('eu-title-name').textContent = (u.display_name && u.display_name.trim()) ? u.display_name : username;
+    document.getElementById('eu-display-name').value = (u.display_name && u.display_name.trim()) ? u.display_name : '';
+    document.getElementById('eu-password').value = '';
+    document.getElementById('eu-role').value = u.role === 'admin' ? 'admin' : 'user';
+
+    // O admin principal não pode perder o cargo de administrador.
+    document.getElementById('eu-role').disabled = (username === 'admin');
+
+    document.getElementById('modalEditUser').classList.add('active');
+}
+
+async function saveEditUser() {
+    const username = document.getElementById('eu-username').value;
+    const display_name = document.getElementById('eu-display-name').value.trim();
+    const password = document.getElementById('eu-password').value.trim();
+    const role = document.getElementById('eu-role').value;
+
+    if (password && password.length < 6) {
+        return await customAlert('A nova senha precisa ter pelo menos 6 caracteres.');
+    }
+
+    const payload = { display_name, role };
+    if (password) payload.password = password;
+
     try {
-        const res = await fetch(`/api/users/${username}`, { method: 'DELETE' });
+        const res = await fetch(`/api/users/${encodeURIComponent(username)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
+
+        document.getElementById('modalEditUser').classList.remove('active');
+        if (typeof showToast === 'function') {
+            showToast(password ? `Acesso "${username}" atualizado — nova senha definida.` : `Acesso "${username}" atualizado.`);
+        }
+        loadUsers();
+        if (typeof loadDisplayNamesMap === 'function') loadDisplayNamesMap();
+    } catch (e) {
+        await customAlert(e.message);
+    }
+}
+
+async function deleteUser(usernameEnc) {
+    const username = decodeURIComponent(usernameEnc);
+    if (!await customConfirm(`Tem certeza que deseja excluir o acesso de ${username}?`)) return;
+    try {
+        const res = await fetch(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        if (typeof showToast === 'function') showToast(`Acesso "${username}" removido.`);
         loadUsers();
     } catch (e) {
         await customAlert(e.message);
@@ -3190,7 +3417,7 @@ async function renderAgendaGrid() {
                     }
                     
                     let statusIcon = '<i class="fa-regular fa-clock" title="Agendado"></i>';
-                    let extraStyles = `background: var(--agenda-${colorVar}-bg); border: 1px solid var(--agenda-${colorVar}-border); border-left: 4px solid var(--agenda-${colorVar}-border); color: var(--agenda-${colorVar}-text);`;
+                    let extraStyles = `background: var(--agenda-${colorVar}-bg); border: 1px solid var(--agenda-${colorVar}-border-strong); border-left: 4px solid var(--agenda-${colorVar}-border-strong); color: var(--agenda-${colorVar}-text);`;
                     
                     if (att.canceled || att.status === 'canceled') {
                         statusIcon = '<i class="fa-solid fa-ban" style="color: #ef4444;" title="Cancelado"></i>';

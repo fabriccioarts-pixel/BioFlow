@@ -16,6 +16,18 @@ import { Readable } from 'stream';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
+// Confirma no boot que o binário do ffmpeg existe e é executável — a conversão de
+// áudio pra "voice note" do WhatsApp depende dele. Se faltar (ex.: bundle da
+// Vercel não incluiu o binário), a gravação ainda é enviada, mas como anexo
+// comum, e sem esse log ninguém descobre o porquê.
+try {
+    fs.accessSync(ffmpegInstaller.path, fs.constants.X_OK);
+    console.log('[audio] ffmpeg disponível em', ffmpegInstaller.path);
+} catch (e) {
+    console.warn('[audio] ffmpeg NÃO disponível/executável em', ffmpegInstaller.path,
+        '— gravações de voz serão enviadas como anexo, sem forma de onda nativa. Detalhe:', e.message);
+}
+
 // Sem estes handlers, QUALQUER erro solto (ex.: um 'error' de EventEmitter sem
 // listener na conversão de áudio / upload) derruba o processo inteiro — e aí
 // TODAS as conexões (SSE do kanban, polling do chat) caem com ERR_CONNECTION_RESET.
@@ -394,8 +406,30 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
             if (!statuses) continue;
             for (const s of statuses) {
                 if (!['sent', 'delivered', 'read', 'failed'].includes(s.status)) continue;
+
+                // A Meta manda o motivo real da falha em s.errors — sem registrar isso,
+                // a mensagem só aparecia com um "!" vermelho e ninguém sabia o porquê
+                // (janela de 24h fechada, formato de áudio recusado na entrega, número
+                // inválido, etc.).
+                let errorDetail = null;
+                if (s.status === 'failed') {
+                    const err = Array.isArray(s.errors) ? s.errors[0] : null;
+                    errorDetail = err
+                        ? `[${err.code || '?'}] ${err.title || ''}${err.message && err.message !== err.title ? ' — ' + err.message : ''}${err.error_data?.details ? ' (' + err.error_data.details + ')' : ''}`.trim()
+                        : 'Falha na entrega (sem detalhes da Meta).';
+                    console.error('WhatsApp: entrega FALHOU', {
+                        id: s.id,
+                        recipient: s.recipient_id,
+                        detail: errorDetail
+                    });
+                }
+
                 try {
-                    await queryD1('UPDATE wa_messages SET status = ? WHERE id = ?', [s.status, s.id]);
+                    if (errorDetail) {
+                        await queryD1('UPDATE wa_messages SET status = ?, error_detail = ? WHERE id = ?', [s.status, errorDetail, s.id]);
+                    } else {
+                        await queryD1('UPDATE wa_messages SET status = ? WHERE id = ?', [s.status, s.id]);
+                    }
                 } catch(e) {
                     console.error('Erro ao atualizar status da mensagem:', e);
                 }
@@ -613,7 +647,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
                         console.log(`Convertendo gravação de voz (${mimeType}) para OGG/Opus... (buffer original: ${buffer.length} bytes)`);
                         try {
                             buffer = await convertToOggOpus(buffer, sourceExt);
-                            mimeType = 'audio/ogg; codecs=opus';
+                            mimeType = 'audio/ogg';
                             fileName = 'audio.ogg';
                             console.log(`Conversão concluída: buffer OGG final tem ${buffer.length} bytes.`);
                         } catch (convErr) {
@@ -623,9 +657,14 @@ app.post('/api/whatsapp/send', async (req, res) => {
                         }
                     }
 
+                    // A Meta valida o Content-Type do upload de mídia e recusa
+                    // parâmetros de codec no mime (ex.: "audio/ogg; codecs=opus").
+                    // O codec real vai no próprio arquivo — aqui fica só o tipo base.
+                    const uploadMime = mimeType.split(';')[0].trim();
+
                     // Faz o upload para a Meta
-                    console.log(`Fazendo upload de mídia (${mediaType}) para a Meta...`);
-                    mediaId = await uploadMediaToMeta(buffer, mimeType, fileName || `file.${mimeType.split('/')[1]}`);
+                    console.log(`Fazendo upload de mídia (${mediaType}, ${uploadMime}) para a Meta...`);
+                    mediaId = await uploadMediaToMeta(buffer, uploadMime, fileName || `file.${uploadMime.split('/')[1]}`);
                     console.log(`Upload concluído! Media ID: ${mediaId}`);
                 } else {
                     throw new Error("Formato de arquivo base64 ou mídia inválido.");
@@ -1066,6 +1105,31 @@ app.get('/api/whatsapp/chats', async (req, res) => {
     }
 });
 
+// Base de contatos: todo número que já trocou mensagem no WhatsApp, com a data do
+// primeiro e do último contato e o volume de mensagens. O cruzamento com a ficha
+// do lead (nome, origem, etapa no funil) é feito no cliente, que já mantém o
+// array de leads carregado.
+app.get('/api/contacts', async (req, res) => {
+    try {
+        const rows = await queryD1(`
+            SELECT phone,
+                   MIN(timestamp) as first_contact,
+                   MAX(timestamp) as last_contact,
+                   COUNT(*) as total_messages,
+                   SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) as inbound_count,
+                   SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) as outbound_count
+            FROM wa_messages
+            WHERE phone IS NOT NULL AND phone != ''
+            GROUP BY phone
+            ORDER BY first_contact DESC
+        `);
+        res.json({ success: true, data: rows || [] });
+    } catch (e) {
+        console.error('Erro ao listar contatos:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Métricas de resposta por conversa, usadas pelo dashboard.
 app.get('/api/whatsapp/response-metrics', async (req, res) => {
     try {
@@ -1481,6 +1545,8 @@ async function queryD1(sql, params = []) {
 
 // Migration para garantir coluna quoted_id no D1
 queryD1("ALTER TABLE wa_messages ADD COLUMN quoted_id TEXT").catch(() => {});
+// Motivo da falha de entrega (preenchido pelo webhook de status da Meta)
+queryD1("ALTER TABLE wa_messages ADD COLUMN error_detail TEXT").catch(() => {});
 // Migration para suportar troca obrigatória de senha no primeiro acesso
 queryD1("ALTER TABLE crm_users ADD COLUMN must_change_password INTEGER DEFAULT 0").catch(() => {});
 // Personalização de perfil do atendente
@@ -1541,6 +1607,81 @@ queryD1(`CREATE TABLE IF NOT EXISTS lead_audiences (
     has_schedule INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
+
+// ==========================================
+// DINHEIRO — sempre inteiro em centavos internamente
+// ==========================================
+// Aceita "R$ 1.234,56", "1.234,56", "1234.56", "1234", número ou vazio.
+function brlToCents(input) {
+    if (input === null || input === undefined) return null;
+    if (typeof input === 'number') return isFinite(input) ? Math.round(input * 100) : null;
+    let s = String(input).trim().replace(/R\$|\s| /gi, '');
+    if (!s || s === '-') return null;
+    if (s.includes(',')) {
+        // formato pt-BR: ponto é separador de milhar, vírgula é decimal
+        s = s.replace(/\./g, '').replace(',', '.');
+    }
+    const n = parseFloat(s);
+    return isFinite(n) ? Math.round(n * 100) : null;
+}
+
+function centsToBRL(cents) {
+    return ((Number(cents) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function todayISO() {
+    return new Date().toISOString().split('T')[0];
+}
+
+// ==========================================
+// FINANCEIRO — Recebimentos (ledger) e Contas a Receber
+// ==========================================
+// Cada linha é UM lançamento de recebimento (ou estorno). Substitui o campo
+// único e mutável leads.valor_recebido: aqui cabem pagamento parcial, várias
+// parcelas e estorno — cada um com data, forma e quem registrou. Valores SEMPRE
+// em centavos (inteiro), pra soma nunca acumular erro de float.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_pagamentos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id TEXT,
+    attendance_id TEXT,
+    descricao TEXT,
+    paciente TEXT,
+    valor_centavos INTEGER NOT NULL,
+    tipo TEXT NOT NULL DEFAULT 'recebimento',
+    forma_pagamento TEXT,
+    status TEXT NOT NULL DEFAULT 'pendente',
+    vencimento TEXT,
+    pago_em TEXT,
+    parcela INTEGER DEFAULT 1,
+    parcelas_total INTEGER DEFAULT 1,
+    estorno_de INTEGER,
+    criado_por TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+// Migração: os valores de agendamentos_financeiro passam a ter espelho em
+// centavos. As colunas TEXT antigas continuam (D1/SQLite não troca tipo de
+// coluna); o código novo lê/escreve as *_centavos. Backfill idempotente abaixo.
+queryD1("ALTER TABLE agendamentos_financeiro ADD COLUMN valor_primario_centavos INTEGER").catch(() => {});
+queryD1("ALTER TABLE agendamentos_financeiro ADD COLUMN valor_secundario_centavos INTEGER").catch(() => {});
+
+async function backfillAgendamentosCentavos() {
+    try {
+        const rows = await queryD1(
+            "SELECT id, valor_primario, valor_secundario FROM agendamentos_financeiro WHERE valor_primario_centavos IS NULL OR valor_secundario_centavos IS NULL"
+        );
+        for (const r of rows) {
+            await queryD1(
+                "UPDATE agendamentos_financeiro SET valor_primario_centavos = ?, valor_secundario_centavos = ? WHERE id = ?",
+                [brlToCents(r.valor_primario), brlToCents(r.valor_secundario), r.id]
+            );
+        }
+        if (rows.length) console.log(`[financeiro] backfill de centavos: ${rows.length} agendamento(s) migrado(s).`);
+    } catch (e) {
+        console.warn('[financeiro] backfill de centavos falhou (repete no próximo boot):', e.message);
+    }
+}
+backfillAgendamentosCentavos();
 
 // Configurações simples de chave/valor (ex.: meta de receita do dashboard) —
 // evita criar uma tabela dedicada pra cada configuração pontual do sistema.
@@ -2098,7 +2239,10 @@ async function getClinicWhatsAppNumber() {
     if (!response.ok || !json.display_phone_number) {
         throw new Error(json.error ? json.error.message : 'Não foi possível obter o número do WhatsApp da clínica.');
     }
-    cachedClinicWhatsAppNumber = json.display_phone_number.replace(/[^\d]/g, '');
+    // A Meta devolve o número BR sem o 9º dígito do celular (ex.: "+55 84 8262-1850").
+    // Um link wa.me com esse número não abre a conversa — precisa do 9 na frente do
+    // local. normalizePhoneBR() insere o 9 e garante o DDI 55.
+    cachedClinicWhatsAppNumber = normalizePhoneBR(json.display_phone_number);
     return cachedClinicWhatsAppNumber;
 }
 
@@ -2799,7 +2943,7 @@ app.get('/api/users', async (req, res) => {
         return res.status(403).json({ error: 'Apenas administradores podem ver a lista de usuários.' });
     }
     try {
-        const rows = await queryD1('SELECT username, role FROM crm_users ORDER BY username ASC');
+        const rows = await queryD1('SELECT username, role, display_name FROM crm_users ORDER BY username ASC');
         res.json(rows || []);
     } catch (e) {
         console.error(e);
@@ -2820,6 +2964,55 @@ app.post('/api/users', async (req, res) => {
         }
         const hash = await bcrypt.hash(String(password || ''), 12);
         await queryD1('INSERT INTO crm_users (username, password, role, must_change_password) VALUES (?, ?, ?, 1)', [username, hash, role]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+app.put('/api/users/:username', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem editar usuários.' });
+    }
+    const { username } = req.params;
+    const { display_name, role, password } = req.body;
+
+    if (role !== undefined && !['user', 'admin'].includes(role)) {
+        return res.status(400).json({ error: 'Cargo inválido.' });
+    }
+    if (username === 'admin' && role !== undefined && role !== 'admin') {
+        return res.status(400).json({ error: 'Não é possível remover o cargo de administrador do usuário principal.' });
+    }
+    if (display_name !== undefined && String(display_name).length > 80) {
+        return res.status(400).json({ error: 'Nome de exibição muito longo (máximo 80 caracteres).' });
+    }
+    if (password !== undefined && String(password) !== '' && String(password).trim().length < 6) {
+        return res.status(400).json({ error: 'A nova senha precisa ter pelo menos 6 caracteres.' });
+    }
+
+    try {
+        const existing = await queryD1('SELECT username FROM crm_users WHERE username = ?', [username]);
+        if (!existing || existing.length === 0) {
+            return res.status(404).json({ error: 'Usuário não encontrado.' });
+        }
+
+        const updates = [];
+        const params = [];
+        if (display_name !== undefined) { updates.push('display_name = ?'); params.push(String(display_name).trim()); }
+        if (role !== undefined) { updates.push('role = ?'); params.push(role); }
+        if (password !== undefined && String(password) !== '') {
+            const hash = await bcrypt.hash(String(password).trim(), 12);
+            updates.push('password = ?'); params.push(hash);
+            updates.push('must_change_password = ?'); params.push(1);
+        }
+
+        if (updates.length === 0) {
+            return res.json({ success: true });
+        }
+
+        params.push(username);
+        await queryD1(`UPDATE crm_users SET ${updates.join(', ')} WHERE username = ?`, params);
         res.json({ success: true });
     } catch (e) {
         console.error(e);
@@ -3970,6 +4163,245 @@ app.get('/api/historico-financeiro', async (req, res) => {
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: e.message || 'Erro interno do servidor.' });
+    }
+});
+
+// ==========================================
+// FINANCEIRO — Recebimentos (ledger) e Contas a Receber
+// ==========================================
+const FORMAS_PAGAMENTO = ['pix', 'dinheiro', 'cartao_credito', 'cartao_debito', 'boleto', 'transferencia', 'outro'];
+const STATUS_PAGAMENTO = ['pendente', 'pago', 'cancelado'];
+
+function fmtPagamento(r) {
+    return {
+        ...r,
+        valor: centsToBRL(r.valor_centavos),
+        valor_reais: (Number(r.valor_centavos) || 0) / 100,
+    };
+}
+
+// Lista lançamentos. Filtros: lead_id, attendance_id, status, tipo, start, end
+// (período pela "data de referência" = pago_em, senão vencimento, senão criação).
+app.get('/api/pagamentos', async (req, res) => {
+    try {
+        const { lead_id, attendance_id, status, tipo, start, end } = req.query;
+        const where = [], params = [];
+        if (lead_id) { where.push('lead_id = ?'); params.push(lead_id); }
+        if (attendance_id) { where.push('attendance_id = ?'); params.push(attendance_id); }
+        if (status) { where.push('status = ?'); params.push(status); }
+        if (tipo) { where.push('tipo = ?'); params.push(tipo); }
+
+        let rows = await queryD1(
+            `SELECT * FROM crm_pagamentos ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+             ORDER BY COALESCE(pago_em, vencimento, date(created_at)) DESC, id DESC`,
+            params
+        );
+
+        if (start || end) {
+            rows = rows.filter(r => {
+                const ref = r.pago_em || r.vencimento || (r.created_at || '').split(' ')[0];
+                if (start && ref < start) return false;
+                if (end && ref > end) return false;
+                return true;
+            });
+        }
+        res.json({ data: rows.map(fmtPagamento) });
+    } catch (e) {
+        console.error('Erro ao listar pagamentos:', e);
+        res.status(500).json({ error: e.message || 'Erro interno.' });
+    }
+});
+
+// Cria um recebimento. parcelas_total > 1 gera N linhas (1 por parcela),
+// dividindo o valor em centavos sem perder resto e somando 1 mês ao vencimento
+// a cada parcela. pago_em só se aplica à 1ª parcela (entrada/à vista).
+app.post('/api/pagamentos', async (req, res) => {
+    try {
+        const { lead_id, attendance_id, descricao, paciente, valor, valor_centavos,
+            forma_pagamento, status, vencimento, pago_em, parcelas_total } = req.body;
+
+        const totalCents = valor_centavos != null ? Math.round(Number(valor_centavos)) : brlToCents(valor);
+        if (!totalCents || totalCents <= 0) return res.status(400).json({ error: 'Valor inválido.' });
+        if (forma_pagamento && !FORMAS_PAGAMENTO.includes(forma_pagamento)) {
+            return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+        }
+
+        const n = Math.max(1, Math.min(48, parseInt(parcelas_total, 10) || 1));
+        const criado_por = req.user?.username || null;
+        const base = Math.floor(totalCents / n);
+        const resto = totalCents - base * n;
+        const baseVenc = vencimento ? new Date(vencimento + 'T00:00:00') : null;
+
+        for (let i = 0; i < n; i++) {
+            const parcelaCents = base + (i < resto ? 1 : 0);
+            let venc = null;
+            if (baseVenc) {
+                const d = new Date(baseVenc);
+                d.setMonth(d.getMonth() + i);
+                venc = d.toISOString().split('T')[0];
+            }
+            const pgEm = (i === 0 && pago_em) ? pago_em : null;
+            let st = 'pendente';
+            if (pgEm) st = 'pago';
+            else if (n === 1 && status && STATUS_PAGAMENTO.includes(status)) st = status;
+            const finalPgEm = (st === 'pago' && !pgEm) ? todayISO() : pgEm;
+
+            await queryD1(
+                `INSERT INTO crm_pagamentos
+                   (lead_id, attendance_id, descricao, paciente, valor_centavos, tipo,
+                    forma_pagamento, status, vencimento, pago_em, parcela, parcelas_total, criado_por)
+                 VALUES (?, ?, ?, ?, ?, 'recebimento', ?, ?, ?, ?, ?, ?, ?)`,
+                [lead_id || null, attendance_id || null, descricao || null, paciente || null,
+                 parcelaCents, forma_pagamento || null, st, venc, finalPgEm, i + 1, n, criado_por]
+            );
+        }
+        res.status(201).json({ success: true, parcelas: n });
+    } catch (e) {
+        console.error('Erro ao criar pagamento:', e);
+        res.status(400).json({ error: e.message || 'Erro ao registrar recebimento.' });
+    }
+});
+
+// Atualiza status/vencimento/forma/descrição de um lançamento (ex.: marcar pago).
+app.patch('/api/pagamentos/:id', async (req, res) => {
+    try {
+        const { status, pago_em, vencimento, forma_pagamento, descricao } = req.body;
+        const sets = [], params = [];
+
+        if (status !== undefined) {
+            if (!STATUS_PAGAMENTO.includes(status)) return res.status(400).json({ error: 'Status inválido.' });
+            sets.push('status = ?'); params.push(status);
+            if (status === 'pago' && pago_em === undefined) { sets.push('pago_em = ?'); params.push(todayISO()); }
+            if (status === 'pendente') sets.push('pago_em = NULL');
+        }
+        if (pago_em !== undefined) { sets.push('pago_em = ?'); params.push(pago_em || null); }
+        if (vencimento !== undefined) { sets.push('vencimento = ?'); params.push(vencimento || null); }
+        if (forma_pagamento !== undefined) {
+            if (forma_pagamento && !FORMAS_PAGAMENTO.includes(forma_pagamento)) {
+                return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+            }
+            sets.push('forma_pagamento = ?'); params.push(forma_pagamento || null);
+        }
+        if (descricao !== undefined) { sets.push('descricao = ?'); params.push(descricao || null); }
+
+        if (!sets.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+        params.push(req.params.id);
+        await queryD1(`UPDATE crm_pagamentos SET ${sets.join(', ')} WHERE id = ?`, params);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao atualizar pagamento:', e);
+        res.status(400).json({ error: e.message || 'Erro ao atualizar.' });
+    }
+});
+
+// Estorna um lançamento: cria uma linha 'estorno' com valor negativo e marca o
+// original como 'cancelado'. O líquido do período passa a ser a soma dos dois.
+app.post('/api/pagamentos/:id/estorno', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT * FROM crm_pagamentos WHERE id = ?', [req.params.id]);
+        if (!rows.length) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+        const orig = rows[0];
+        if (orig.tipo === 'estorno') return res.status(400).json({ error: 'Não é possível estornar um estorno.' });
+        if (orig.status === 'cancelado') return res.status(400).json({ error: 'Lançamento já está cancelado.' });
+
+        await queryD1(
+            `INSERT INTO crm_pagamentos
+               (lead_id, attendance_id, descricao, paciente, valor_centavos, tipo,
+                forma_pagamento, status, vencimento, pago_em, parcela, parcelas_total, estorno_de, criado_por)
+             VALUES (?, ?, ?, ?, ?, 'estorno', ?, 'pago', NULL, ?, ?, ?, ?, ?)`,
+            [orig.lead_id, orig.attendance_id,
+             'Estorno: ' + (orig.descricao || ('lançamento #' + orig.id)),
+             orig.paciente, -Math.abs(orig.valor_centavos), orig.forma_pagamento,
+             todayISO(), orig.parcela, orig.parcelas_total, orig.id, req.user?.username || null]
+        );
+        await queryD1("UPDATE crm_pagamentos SET status = 'cancelado' WHERE id = ?", [orig.id]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao estornar pagamento:', e);
+        res.status(400).json({ error: e.message || 'Erro ao estornar.' });
+    }
+});
+
+// Exclusão definitiva — só admin. Leva junto o estorno vinculado, se houver.
+app.delete('/api/pagamentos/:id', async (req, res) => {
+    if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem excluir lançamentos.' });
+    }
+    try {
+        await queryD1('DELETE FROM crm_pagamentos WHERE id = ? OR estorno_de = ?', [req.params.id, req.params.id]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao excluir pagamento:', e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+// Contas a receber: pendentes agrupados por faixa de atraso/vencimento (aging).
+app.get('/api/contas-a-receber', async (req, res) => {
+    try {
+        const rows = await queryD1(
+            "SELECT * FROM crm_pagamentos WHERE tipo = 'recebimento' AND status = 'pendente' ORDER BY COALESCE(vencimento, '9999-12-31') ASC, id ASC"
+        );
+        const hoje = todayISO();
+        const buckets = { vencido: 0, hoje: 0, d1_7: 0, d8_30: 0, d30_mais: 0, sem_venc: 0 };
+        let total = 0, totalVencido = 0;
+
+        const itens = rows.map(r => {
+            const c = Number(r.valor_centavos) || 0;
+            total += c;
+            let bucket;
+            if (!r.vencimento) bucket = 'sem_venc';
+            else if (r.vencimento < hoje) { bucket = 'vencido'; totalVencido += c; }
+            else if (r.vencimento === hoje) bucket = 'hoje';
+            else {
+                const dias = Math.ceil((Date.parse(r.vencimento) - Date.parse(hoje)) / 86400000);
+                bucket = dias <= 7 ? 'd1_7' : dias <= 30 ? 'd8_30' : 'd30_mais';
+            }
+            buckets[bucket] += c;
+            const diasAtraso = (r.vencimento && r.vencimento < hoje)
+                ? Math.floor((Date.parse(hoje) - Date.parse(r.vencimento)) / 86400000) : 0;
+            return { ...fmtPagamento(r), bucket, dias_atraso: diasAtraso };
+        });
+
+        const toBRL = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, centsToBRL(v)]));
+        res.json({
+            total_centavos: total, total: centsToBRL(total),
+            vencido_centavos: totalVencido, vencido: centsToBRL(totalVencido),
+            buckets_centavos: buckets, buckets: toBRL(buckets),
+            itens,
+        });
+    } catch (e) {
+        console.error('Erro em contas a receber:', e);
+        res.status(500).json({ error: e.message || 'Erro interno.' });
+    }
+});
+
+// Resumo enxuto pra faixa de KPIs: recebido no período (caixa), a receber e vencido.
+app.get('/api/financeiro/resumo', async (req, res) => {
+    try {
+        const hoje = todayISO();
+        const start = req.query.start || (hoje.slice(0, 8) + '01');
+        const end = req.query.end || hoje;
+        const rows = await queryD1('SELECT valor_centavos, tipo, status, pago_em, vencimento FROM crm_pagamentos');
+
+        let recebido = 0, aReceber = 0, vencido = 0;
+        for (const r of rows) {
+            const c = Number(r.valor_centavos) || 0;
+            if (r.status === 'pago' && r.pago_em && r.pago_em >= start && r.pago_em <= end) recebido += c;
+            if (r.status === 'pendente' && r.tipo === 'recebimento') {
+                aReceber += c;
+                if (r.vencimento && r.vencimento < hoje) vencido += c;
+            }
+        }
+        res.json({
+            periodo: { start, end },
+            recebido_centavos: recebido, recebido: centsToBRL(recebido),
+            a_receber_centavos: aReceber, a_receber: centsToBRL(aReceber),
+            vencido_centavos: vencido, vencido: centsToBRL(vencido),
+        });
+    } catch (e) {
+        console.error('Erro no resumo financeiro:', e);
+        res.status(500).json({ error: e.message || 'Erro interno.' });
     }
 });
 
