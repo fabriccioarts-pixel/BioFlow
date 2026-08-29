@@ -1718,8 +1718,8 @@ function updateChatStageUI(columnId) {
     
     const stageMap = {
         'col-entrada': { name: '📥 Novos Leads', border: 'rgba(96, 165, 250, 0.35)', color: '#60a5fa' },
-        'col-contatado': { name: '💬 Em Atendimento', border: 'rgba(129, 140, 248, 0.35)', color: '#818cf8' },
-        'col-orcado': { name: '📄 Orçado', border: 'rgba(167, 139, 250, 0.35)', color: '#a78bfa' },
+        'col-contatado': { name: '💬 Em Atendimento', border: 'rgba(45, 212, 191, 0.35)', color: '#2dd4bf' },
+        'col-orcado': { name: '📄 Orçado', border: 'rgba(56, 189, 248, 0.35)', color: '#38bdf8' },
         'col-agendado': { name: '📅 Agendado', border: 'rgba(52, 211, 153, 0.35)', color: '#34d399' },
         'col-ganho': { name: '✅ Ganho', border: 'rgba(16, 185, 129, 0.35)', color: '#10b981' },
         'col-perdido': { name: '❌ Não Fechou', border: 'rgba(248, 113, 113, 0.35)', color: '#f87171' }
@@ -1753,7 +1753,7 @@ const DEFAULT_TAGS = [
     { id: 'urgente', label: '🔥 Urgente', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' },
     { id: 'vip', label: '⭐ VIP', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '#f59e0b' },
     { id: 'aguardando', label: '⏳ Aguardando Resposta', bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '#3b82f6' },
-    { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', border: '#a855f7' },
+    { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(45, 212, 191, 0.15)', color: '#5eead4', border: '#2dd4bf' },
     { id: 'orcamento', label: '📄 Orçamento Enviado', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' },
     { id: 'retorno', label: '🔄 Retorno', bg: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '#f97316' }
 ];

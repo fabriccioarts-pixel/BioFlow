@@ -392,13 +392,17 @@
                 </div>
             </div>
 
-            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; align-items: center;">
                 <select id="pg-filtro-status" class="form-control" style="max-width: 200px;" onchange="carregarPagamentos()">
                     <option value="">Todos os status</option>
                     <option value="pendente">Pendente</option>
                     <option value="pago">Pago</option>
                     <option value="cancelado">Cancelado</option>
                 </select>
+                <button class="btn-secondary" id="pg-sync-kanban-btn" onclick="sincronizarKanban()" style="display: none;"
+                    title="Recria os lançamentos a partir do valor/orçamento dos cards do Kanban">
+                    <i class="fa-solid fa-arrows-rotate"></i> Sincronizar com o Kanban
+                </button>
             </div>
 
             <table class="data-table">
@@ -572,7 +576,10 @@
 
         function atualizarVisibilidadeAdmin() {
             const isAdmin = loggedUser && loggedUser.role === 'admin';
-            
+
+            const syncBtn = document.getElementById('pg-sync-kanban-btn');
+            if (syncBtn) syncBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+
             // Mostrar ou ocultar header de Ações
             const thAcoes = document.getElementById('th-acoes');
             if (thAcoes) {
@@ -988,6 +995,31 @@
                     chip('A receber', j.a_receber) +
                     chip('Vencido', j.vencido, j.vencido_centavos > 0 ? '#ef4444' : '');
             } catch (e) { box.innerHTML = ''; }
+        }
+
+        async function sincronizarKanban() {
+            const btn = document.getElementById('pg-sync-kanban-btn');
+            const orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Sincronizando...';
+            try {
+                let offset = 0, total = 0;
+                for (let guard = 0; guard < 200; guard++) {
+                    const r = await fetch(`/api/financeiro/sync-kanban?offset=${offset}`, { method: 'POST' });
+                    const j = await r.json();
+                    if (!r.ok) throw new Error(j.error || 'Erro ao sincronizar');
+                    total += j.sincronizados;
+                    offset = j.next_offset;
+                    if (j.done) break;
+                }
+                showToast(`${total} lead(s) sincronizado(s) com o Financeiro.`, 'success');
+                carregarResumoFin(); carregarPagamentos();
+                FIN_LOADED.receber = false;
+            } catch (e) {
+                showToast(e.message, 'danger');
+            } finally {
+                btn.disabled = false; btn.innerHTML = orig;
+            }
         }
 
         async function carregarPagamentos() {

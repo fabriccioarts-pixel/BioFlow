@@ -188,7 +188,7 @@ function celebrateAgendamento() {
         document.body.appendChild(canvas);
         const ctx = canvas.getContext('2d');
 
-        const colors = ['#10b981', '#34d399', '#a78bfa', '#fbbf24', '#60a5fa', '#f87171'];
+        const colors = ['#10b981', '#34d399', '#2dd4bf', '#fbbf24', '#60a5fa', '#f87171'];
         const gravity = 0.22;
         const dragFactor = 0.0025;
         const particleCount = 160;
@@ -766,7 +766,7 @@ if (lead.notas) {
 metadataIconsHTML += `<i class="fa-regular fa-note-sticky" style="color: var(--accent-warning); margin-right: 4px;" title="Possui observações salvas"></i> `;
 }
 if (orcItems.length > 0) {
-metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: #a78bfa; margin-right: 4px;" title="Orçamento Gerado"></i> `;
+metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: #38bdf8; margin-right: 4px;" title="Orçamento Gerado"></i> `;
 }
 if (lead.agendamento) {
 metadataIconsHTML += `<i class="fa-regular fa-calendar-check" style="color: #2dd4bf; margin-right: 4px;" title="Agendamento Marcado: ${lead.agendamento.data} às ${lead.agendamento.hora}"></i> `;
@@ -807,7 +807,7 @@ card.innerHTML = `
 ${avatarHTML}
 <div style="overflow: hidden; flex: 1; min-width: 0;">
 <div class="card-title" title="${escapeHtml(lead.nome)}">${escapeHtml(lead.nome)}</div>
-<div style="font-size: 0.8rem; font-weight: 500; color: #a78bfa; margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px;"></i> ${procedimentoName}</div>
+<div style="font-size: 0.8rem; font-weight: 500; color: #38bdf8; margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px;"></i> ${procedimentoName}</div>
 </div>
 </div>
 
@@ -5513,9 +5513,9 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     if (ctxLeads) {
         if (leadsChartInst) leadsChartInst.destroy();
         const leadsGrad = ctxLeads.getContext('2d').createLinearGradient(0, 0, 0, ctxLeads.offsetHeight || 220);
-        leadsGrad.addColorStop(0,   'rgba(167, 139, 250, 0.38)');
-        leadsGrad.addColorStop(0.65,'rgba(167, 139, 250, 0.08)');
-        leadsGrad.addColorStop(1,   'rgba(167, 139, 250, 0)');
+        leadsGrad.addColorStop(0,   'rgba(56, 189, 248, 0.38)');
+        leadsGrad.addColorStop(0.65,'rgba(56, 189, 248, 0.08)');
+        leadsGrad.addColorStop(1,   'rgba(56, 189, 248, 0)');
         leadsChartInst = new Chart(ctxLeads, {
             type: 'line',
             data: {
@@ -5523,11 +5523,11 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 datasets: [{
                     label: 'Novos Leads',
                     data: counts,
-                    borderColor: '#a78bfa',
+                    borderColor: '#38bdf8',
                     tension: 0.4,
                     fill: true,
                     backgroundColor: leadsGrad,
-                    pointBackgroundColor: '#a78bfa',
+                    pointBackgroundColor: '#38bdf8',
                     pointBorderColor: '#ffffff',
                     pointBorderWidth: 2,
                     pointRadius: 0,
@@ -5620,8 +5620,8 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
             <defs>
                 <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%"   stop-color="#e8d9a8"/>
-                    <stop offset="100%" stop-color="#a07d1f"/>
+                    <stop offset="0%"   stop-color="#7dd3fc"/>
+                    <stop offset="100%" stop-color="#0284c7"/>
                 </linearGradient>
             </defs>`;
         
@@ -5713,7 +5713,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     // Origem Doughnut Chart
     const origemLabels = Object.keys(origemMap);
     const origemValues = Object.values(origemMap);
-    const origemColors = ['#60a5fa', '#f59e0b', '#10b981', '#a78bfa', '#38bdf8', '#fb923c', '#f472b6'];
+    const origemColors = ['#60a5fa', '#f59e0b', '#10b981', '#2dd4bf', '#38bdf8', '#fb923c', '#f472b6'];
 
     const ctxOrigem = document.getElementById('origemChart');
     if (ctxOrigem) {
@@ -6494,7 +6494,7 @@ const KANBAN_COLUMNS = {
     'col-agendado':    { label: 'Agendado',     color: 'var(--accent-success)', icon: 'fa-calendar-check' },
     'col-ganho':       { label: 'Ganho',        color: '#34d399',               icon: 'fa-trophy' },
     'col-perdido':     { label: 'Perdido',      color: 'var(--accent-danger)',  icon: 'fa-circle-xmark' },
-    'col-atendimento': { label: 'Em Atendimento', color: '#c084fc',             icon: 'fa-headset' },
+    'col-atendimento': { label: 'Em Atendimento', color: '#2dd4bf',             icon: 'fa-headset' },
 };
 
 let _lppCurrentLeadId = null;
@@ -6618,7 +6618,7 @@ async function openLeadProfile(leadId) {
     if (tagIds.length && window.availableTags) {
         tagsEl.innerHTML = tagIds.map(tid => {
             const t = window.availableTags.find(at => at.id == tid || at.name === tid);
-            const color = t?.color || '#a78bfa';
+            const color = t?.color || '#38bdf8';
             return `<span class="lpp-tag" style="color:${color}; border-color:${color}; background:${color}18">${t?.name || tid}</span>`;
         }).join('');
     } else {

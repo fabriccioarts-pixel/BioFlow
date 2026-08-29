@@ -939,7 +939,7 @@ const WHATSAPP_DEFAULT_TAGS_SEED = [
     { id: 'urgente', label: '🔥 Urgente', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' },
     { id: 'vip', label: '⭐ VIP', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '#f59e0b' },
     { id: 'aguardando', label: '⏳ Aguardando Resposta', bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '#3b82f6' },
-    { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', border: '#a855f7' },
+    { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(45, 212, 191, 0.15)', color: '#5eead4', border: '#2dd4bf' },
     { id: 'orcamento', label: '📄 Orçamento Enviado', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' },
     { id: 'retorno', label: '🔄 Retorno', bg: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '#f97316' }
 ];
@@ -3268,7 +3268,7 @@ app.post('/api/leads', async (req, res) => {
             [id, nome, telefone ? normalizePhoneBR(telefone) : '', origem || '', born || '', owner_id || null, column_id || 'col-entrada', fb_click_id || '', email || '', notas || '', tags || '', valor_recebido || null, orcamento || '']
         );
         broadcastLeadsUpdate('created', id);
-        if (valor_recebido || orcamento) syncLeadPagamento(id);
+        if (valor_recebido || orcamento) await syncLeadPagamento(id);
         res.json({ success: true, id });
     } catch (e) {
         console.error(e);
@@ -3375,7 +3375,7 @@ app.put('/api/leads/:id', async (req, res) => {
         // Mantém o espelho do valor do card na tela Financeiro.
         if (valor_recebido !== undefined || orcamento !== undefined ||
             (column_id !== undefined && valueColumns.includes(column_id))) {
-            syncLeadPagamento(id);
+            await syncLeadPagamento(id);
         }
 
         broadcastLeadsUpdate('updated', id);
@@ -3448,7 +3448,7 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
             }
         } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
 
-        syncLeadPagamento(id);
+        await syncLeadPagamento(id);
         res.status(201).json({ success: true, item: newItem, items });
     } catch (e) {
         console.error('Erro ao adicionar orçamento:', e);
@@ -3481,7 +3481,7 @@ app.put('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
             }
         } catch (err) { console.error('Erro na cascata do histórico financeiro:', err); }
 
-        syncLeadPagamento(id);
+        await syncLeadPagamento(id);
         res.json({ success: true, items });
     } catch (e) {
         console.error('Erro ao editar orçamento:', e);
@@ -3500,7 +3500,7 @@ app.delete('/api/leads/:id/orcamentos/:orcId', async (req, res) => {
 
         const items = parseOrcamentoArray(leadRows[0].orcamento).filter(i => i.id !== orcId);
         await queryD1('UPDATE leads SET orcamento = ? WHERE id = ?', [JSON.stringify(items), id]);
-        syncLeadPagamento(id);
+        await syncLeadPagamento(id);
         res.json({ success: true, items });
     } catch (e) {
         console.error('Erro ao excluir orçamento:', e);
@@ -4498,6 +4498,36 @@ app.get('/api/financeiro/resumo', async (req, res) => {
         });
     } catch (e) {
         console.error('Erro no resumo financeiro:', e);
+        res.status(500).json({ error: e.message || 'Erro interno.' });
+    }
+});
+
+// Reprocessa o espelho Kanban -> crm_pagamentos de todos os leads com valor.
+// Em lotes (offset), porque o backfill do boot não roda inteiro no serverless
+// e um loop único estouraria o timeout da função. O front chama em sequência
+// até done=true.
+app.post('/api/financeiro/sync-kanban', async (req, res) => {
+    if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem sincronizar.' });
+    }
+    try {
+        const limit = Math.min(300, parseInt(req.query.limit, 10) || 120);
+        const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+        const leads = await queryD1(
+            `SELECT id FROM leads
+             WHERE (valor_recebido IS NOT NULL AND valor_recebido > 0)
+                OR (orcamento IS NOT NULL AND orcamento NOT IN ('', '[]', '{}'))
+             ORDER BY id LIMIT ? OFFSET ?`,
+            [limit, offset]
+        );
+        for (const l of leads) await syncLeadPagamento(l.id);
+        res.json({
+            sincronizados: leads.length,
+            next_offset: offset + leads.length,
+            done: leads.length < limit,
+        });
+    } catch (e) {
+        console.error('Erro no sync-kanban:', e);
         res.status(500).json({ error: e.message || 'Erro interno.' });
     }
 });
