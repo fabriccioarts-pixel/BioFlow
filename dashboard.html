@@ -43,7 +43,7 @@
             <button class="tab-btn" onclick="window.location.href='agenda.html'" id="tab-agenda">
                 <i class="fa-regular fa-calendar-days"></i> Agenda Completa
             </button>
-            <button class="tab-btn active" id="tab-dashboard" style="background: rgba(99, 102, 241, 0.1); color: var(--accent-primary); border-color: rgba(99, 102, 241, 0.3);">
+            <button class="tab-btn active" id="tab-dashboard" style="background: color-mix(in srgb, var(--accent-primary) 10%, transparent); color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);">
                 <i class="fa-solid fa-chart-line"></i> Dashboard VIP
             </button>
             <div class="dropdown">
@@ -202,15 +202,15 @@
             <div class="dash-kpi-card"
                 style="background: var(--bg-card); border-radius: 16px; padding: 1.5rem; border: 1px solid var(--border-color); position: relative; overflow: hidden;">
                 <div
-                    style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #a78bfa, #c084fc);">
+                    style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--accent-primary), var(--accent-primary-deep));">
                 </div>
                 <div
                     style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
                     <div
-                        style="background: rgba(167,139,250,0.12); border-radius: 10px; padding: 0.6rem; color: #a78bfa; font-size: 1.1rem;">
+                        style="background: color-mix(in srgb, var(--accent-primary) 12%, transparent); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;">
                         <i class="fa-solid fa-percent"></i></div>
                     <span
-                        style="font-size: 0.72rem; background: rgba(167,139,250,0.15); color: #a78bfa; padding: 0.2rem 0.5rem; border-radius: 20px; font-weight: 600;">lead→agend.</span>
+                        style="font-size: 0.72rem; background: color-mix(in srgb, var(--accent-primary) 15%, transparent); color: var(--accent-primary); padding: 0.2rem 0.5rem; border-radius: 20px; font-weight: 600;">lead→agend.</span>
                 </div>
                 <div id="dash-taxa-resposta"
                     style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0%

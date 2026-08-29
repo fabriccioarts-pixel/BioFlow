@@ -5620,8 +5620,8 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
             <defs>
                 <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%"   stop-color="#c4b5fd"/>
-                    <stop offset="100%" stop-color="#7c3aed"/>
+                    <stop offset="0%"   stop-color="#e8d9a8"/>
+                    <stop offset="100%" stop-color="#a07d1f"/>
                 </linearGradient>
             </defs>`;
         

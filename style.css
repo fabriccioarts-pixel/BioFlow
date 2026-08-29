@@ -104,7 +104,7 @@
     --destructive-foreground: 0 0% 98%;
     --border: 230 9% 18%;
     --input: 230 9% 18%;
-    --ring: 230 60% 75%;
+    --ring: 43 62% 58%;
     --radius: 0.5rem;
 
     --bg-dark: hsl(230, 12%, 9%);
@@ -126,7 +126,8 @@
     --sb-card-bg: hsl(230, 12%, 6%);
     --sb-danger: hsl(var(--destructive));
     
-    --accent-primary: #a78bfa;
+    --accent-primary: #d4af37;
+    --accent-primary-deep: #a07d1f;
     --accent-success: #10b981;
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
@@ -145,8 +146,8 @@
     /* Agenda Colors — Dark Mode. A borda usa a mesma cor do card, só que
        um sobretom acima (mesmo matiz, um passo mais claro). */
     --agenda-c1-bg: #4c1d95;
-    --agenda-c1-border: #6d28d9;
-    --agenda-c1-border-strong: #6d28d9;
+    --agenda-c1-border: var(--accent-primary-deep);
+    --agenda-c1-border-strong: var(--accent-primary-deep);
     --agenda-c1-text: #f5f3ff;
     --agenda-c2-bg: #065f46;
     --agenda-c2-border: #0a8a66;
@@ -219,7 +220,8 @@
     --sb-card-bg: hsl(var(--card));
     --sb-danger: hsl(var(--destructive));
     
-    --accent-primary: #7c3aed;
+    --accent-primary: #98771c;
+    --accent-primary-deep: #6d5514;
     --accent-success: #059669;
     --accent-warning: #d97706;
     --accent-danger: #dc2626;
@@ -305,7 +307,7 @@
     --destructive-foreground: 0 0% 98%;
     --border: 230 9% 18%;
     --input: 230 9% 18%;
-    --ring: 230 60% 75%;
+    --ring: 43 62% 58%;
 
     --bg-dark: hsl(230, 12%, 9%);
     --dash-funnel-sep: var(--bg-dark);
@@ -326,7 +328,8 @@
     --sb-card-bg: hsl(230, 12%, 6%);
     --sb-danger: hsl(var(--destructive));
 
-    --accent-primary: #a78bfa;
+    --accent-primary: #d4af37;
+    --accent-primary-deep: #a07d1f;
     --accent-success: #10b981;
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
@@ -808,7 +811,7 @@ header.sb-collapsed.sb-mobile-open {
 }
 
 .sb-cta:hover {
-    background: rgba(167, 139, 250, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 
 .sb-cta i {
@@ -943,7 +946,7 @@ nav.tabs-container.sb-nav {
     display: none !important;
 }
 
-/* Active: violet left bar + tinted surface */
+/* Active: gold left bar + tinted surface */
 .sb-nav .tab-btn.active {
     background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
     border-color: transparent !important;
@@ -1584,7 +1587,7 @@ th {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--accent-primary), #6d28d9);
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-deep));
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -1662,13 +1665,13 @@ th {
 }
 
 #dash-layout-set-default-btn {
-    background: rgba(167, 139, 250, 0.15);
+    background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    border-color: rgba(167, 139, 250, 0.35);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
 }
 
 #dash-layout-set-default-btn:hover {
-    background: rgba(167, 139, 250, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 25%, transparent);
 }
 
 /* Kanban Board */
@@ -3483,7 +3486,7 @@ select.form-control option,
 .column-add-card-btn:hover {
     background: rgba(255, 255, 255, 0.09);
     color: var(--text-main);
-    border-color: var(--accent-primary, #818cf8);
+    border-color: var(--accent-primary, #d4af37);
 }
 
 /* Cards - Premium Clean Theme */
@@ -3512,7 +3515,7 @@ select.form-control option,
 }
 
 .col-orcado .card {
-    border-top: 3px solid #a78bfa !important;
+    border-top: 3px solid var(--accent-primary) !important;
 }
 
 .col-agendado .card {
@@ -3703,7 +3706,7 @@ select.form-control option,
 .dash-layout-editing .dash-kpi-card,
 .dash-layout-editing .dash-layout-card {
     cursor: grab;
-    outline: 1px dashed rgba(167, 139, 250, 0.75);
+    outline: 1px dashed color-mix(in srgb, var(--accent-primary) 75%, transparent);
     outline-offset: -4px;
 }
 
@@ -3837,7 +3840,7 @@ select.form-control option,
 }
 
 .dash-kpi-grid.dash-layout-editing {
-    outline: 1px solid rgba(167, 139, 250, 0.25);
+    outline: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     outline-offset: -1px;
 }
 
@@ -3864,8 +3867,8 @@ select.form-control option,
 
 .dash-layout-editing {
     background-image:
-        linear-gradient(to right, rgba(167, 139, 250, 0.18) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(167, 139, 250, 0.14) 1px, transparent 1px);
+        linear-gradient(to right, color-mix(in srgb, var(--accent-primary) 18%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in srgb, var(--accent-primary) 14%, transparent) 1px, transparent 1px);
     background-size: calc((100% - 2.6rem) / 6) 80px;
     background-position: 2rem 1.5rem;
 }
@@ -4842,7 +4845,7 @@ body:has(#login-overlay.active) header { display: none; }
     width: 2.35rem;
     height: 2.35rem;
     border-radius: 11px;
-    background: linear-gradient(150deg, var(--accent-primary), #6d28d9);
+    background: linear-gradient(150deg, var(--accent-primary), var(--accent-primary-deep));
     color: #fff;
     font-size: 1.05rem;
     box-shadow: 0 8px 20px -8px color-mix(in srgb, var(--accent-primary) 65%, transparent);
@@ -4969,7 +4972,7 @@ body:has(#login-overlay.active) header { display: none; }
 .auth-btn-submit {
     position: relative;
     margin-top: 0.35rem;
-    background: linear-gradient(180deg, var(--accent-primary), #6d28d9);
+    background: linear-gradient(180deg, var(--accent-primary), var(--accent-primary-deep));
     color: #fff;
     height: 2.85rem;
     width: 100%;
@@ -5077,7 +5080,7 @@ body:has(#login-overlay.active) header { display: none; }
     width: 56px;
     height: 56px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent-primary), #6366f1);
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-deep));
     display: flex;
     align-items: center;
     justify-content: center;
