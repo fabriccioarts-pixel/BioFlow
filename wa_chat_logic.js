@@ -1806,12 +1806,12 @@ function updateChatStageUI(columnId) {
     const badgeEl = document.getElementById('chat-current-stage-badge');
     
     const stageMap = {
-        'col-entrada': { name: '📥 Novos Leads', border: 'rgba(96, 165, 250, 0.35)', color: '#60a5fa' },
-        'col-contatado': { name: '💬 Em Atendimento', border: 'rgba(45, 212, 191, 0.35)', color: '#2dd4bf' },
+        'col-entrada': { name: '📥 Entrada', border: 'rgba(52, 211, 153, 0.35)', color: '#34d399' },
+        'col-contatado': { name: '💬 Contatado', border: 'rgba(251, 191, 36, 0.35)', color: '#fbbf24' },
         'col-orcado': { name: '📄 Orçado', border: 'rgba(56, 189, 248, 0.35)', color: '#38bdf8' },
-        'col-agendado': { name: '📅 Agendado', border: 'rgba(52, 211, 153, 0.35)', color: '#34d399' },
+        'col-agendado': { name: '📅 Agendado', border: 'rgba(45, 212, 191, 0.35)', color: '#2dd4bf' },
         'col-ganho': { name: '✅ Ganho', border: 'rgba(16, 185, 129, 0.35)', color: '#10b981' },
-        'col-perdido': { name: '❌ Não Fechou', border: 'rgba(248, 113, 113, 0.35)', color: '#f87171' }
+        'col-perdido': { name: '🔄 Follow Up', border: 'rgba(251, 146, 60, 0.35)', color: '#fb923c' }
     };
 
     const current = stageMap[columnId] || stageMap['col-entrada'];
