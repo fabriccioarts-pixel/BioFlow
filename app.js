@@ -3205,8 +3205,35 @@ async function loadContatos(force = false) {
         const json = await res.json();
         const rows = json.success ? (json.data || []) : [];
 
-        contatosData = rows.map(row => {
-            const lead = (Array.isArray(leads) ? leads : []).find(l => isSamePhone(l.telefone, row.phone));
+        const mergedRows = [];
+        for (const row of rows) {
+            if (!row.phone) continue;
+            const existing = mergedRows.find(r => typeof isSamePhone === 'function' && isSamePhone(r.phone, row.phone));
+            if (existing) {
+                existing.total_messages += Number(row.total_messages || 0);
+                existing.inbound_count += Number(row.inbound_count || 0);
+                if (row.first_contact && (!existing.first_contact || row.first_contact < existing.first_contact)) {
+                    existing.first_contact = row.first_contact;
+                }
+                if (row.last_contact && (!existing.last_contact || row.last_contact > existing.last_contact)) {
+                    existing.last_contact = row.last_contact;
+                }
+                if (String(row.phone).length > String(existing.phone).length) {
+                    existing.phone = row.phone;
+                }
+            } else {
+                mergedRows.push({
+                    phone: row.phone,
+                    first_contact: row.first_contact,
+                    last_contact: row.last_contact,
+                    total_messages: Number(row.total_messages || 0),
+                    inbound_count: Number(row.inbound_count || 0)
+                });
+            }
+        }
+
+        contatosData = mergedRows.map(row => {
+            const lead = (Array.isArray(leads) ? leads : []).find(l => typeof isSamePhone === 'function' && isSamePhone(l.telefone, row.phone));
             return {
                 phone: row.phone,
                 nome: (lead && lead.nome) ? lead.nome : 'Lead WhatsApp',
