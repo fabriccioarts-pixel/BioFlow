@@ -107,7 +107,88 @@ window.addEventListener('beforeunload', () => {
     if (window.chatLockState && window.chatLockState.leadId && !window.chatLockState.locked) {
         releaseLeadConversation(window.chatLockState.leadId);
     }
+    leaveChatPresence();
 });
+
+// ============================================
+// PRESENÇA EM CONVERSA (avatar do atendente no card do chat)
+// Só visual. Não mexe na trava de atendimento (owner_id): serve pra ver, na
+// lista de conversas, quem está com aquela conversa aberta agora.
+// ============================================
+const CHAT_PRESENCE_PING_MS = 20 * 1000;   // renova a presença a cada 20s
+let chatPresenceMap = {};                   // { leadId: [{ username, display_name, avatar_url }] }
+let _chatPresenceLeadId = null;
+let _chatPresencePingTimer = null;
+
+function currentChatUsername() {
+    return (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
+}
+
+// Entrou numa conversa (ou segue nela). Troca de conversa libera a anterior.
+function enterChatPresence(leadId) {
+    if (!leadId) return;
+    if (_chatPresenceLeadId && _chatPresenceLeadId !== leadId) {
+        leaveChatPresence(_chatPresenceLeadId);
+    }
+    _chatPresenceLeadId = leadId;
+    fetch(`/api/leads/${leadId}/viewing`, { method: 'POST' }).catch(() => {});
+    clearInterval(_chatPresencePingTimer);
+    _chatPresencePingTimer = setInterval(() => {
+        if (_chatPresenceLeadId) {
+            fetch(`/api/leads/${_chatPresenceLeadId}/viewing`, { method: 'POST' }).catch(() => {});
+        }
+    }, CHAT_PRESENCE_PING_MS);
+}
+
+// Saiu da conversa (troca de conversa / fechou a aba).
+function leaveChatPresence(leadId) {
+    const id = leadId || _chatPresenceLeadId;
+    if (!id) return;
+    try {
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon(`/api/leads/${id}/leave`, new Blob([], { type: 'text/plain' }));
+        } else {
+            fetch(`/api/leads/${id}/leave`, { method: 'POST', keepalive: true }).catch(() => {});
+        }
+    } catch (e) {}
+    if (id === _chatPresenceLeadId) {
+        _chatPresenceLeadId = null;
+        clearInterval(_chatPresencePingTimer);
+        _chatPresencePingTimer = null;
+    }
+}
+
+// Busca quem está em cada conversa e re-renderiza a lista.
+// Throttle: vários gatilhos (poll de 6s + evento SSE a cada ping de qualquer
+// atendente) não devem virar uma enxurrada de GETs — no máximo 1 a cada 3s.
+let _chatPresenceLastFetch = 0;
+async function refreshChatPresence(force) {
+    const now = Date.now();
+    if (!force && now - _chatPresenceLastFetch < 3000) return;
+    _chatPresenceLastFetch = now;
+    try {
+        const res = await fetch('/api/chat-presence');
+        if (!res.ok) return;
+        chatPresenceMap = await res.json() || {};
+        if (typeof reapplyChatFilters === 'function') reapplyChatFilters();
+    } catch (e) {}
+}
+
+// HTML do cluster de avatares (até 3 + "+N") pra um lead. '' se ninguém.
+function chatPresenceBadgeHTML(leadId) {
+    const viewers = leadId && chatPresenceMap[leadId];
+    if (!viewers || viewers.length === 0) return '';
+    const me = currentChatUsername();
+    const shown = viewers.slice(0, 3).map((v, i) => {
+        const isMe = v.username === me;
+        return `<span class="chat-viewer-avatar${isMe ? ' is-me' : ''}" style="margin-left: ${i ? -8 : 0}px; z-index: ${10 - i};"
+                     title="${escapeHtml(v.display_name)}${isMe ? ' (você)' : ''} está nesta conversa agora">
+                    ${renderAvatarHTML(v.display_name, v.avatar_url, null, 20)}
+                </span>`;
+    }).join('');
+    const extra = viewers.length > 3 ? `<span class="chat-viewer-more">+${viewers.length - 3}</span>` : '';
+    return `<span class="chat-viewers" title="Em atendimento agora">${shown}${extra}</span>`;
+}
 
 function formatChatTime(rawTs) {
     if (!rawTs) return '';
@@ -1384,6 +1465,7 @@ function updateChatSelectionBar() {
 function closeActiveChat() {
     stopLeadLockRenewal();
     applyChatLockUI(false);
+    leaveChatPresence();
     window.currentActiveChat = null;
     window.activeChatMessages = null;
     const empty = document.getElementById('chat-empty-state');
@@ -1501,10 +1583,12 @@ function renderContactsList(chats) {
         // Buscar etiquetas associadas ao lead + trava de atendimento (evita atropelo entre atendentes)
         let leadTagsHTML = '';
         let lockBadgeHTML = '';
+        let presenceBadgeHTML = '';
         let aiBadgeHTML = '';
         if (typeof leads !== 'undefined' && Array.isArray(leads)) {
             const phone = chat.phone;
             const lead = leads.find(l => isSamePhone(l.telefone, phone));
+            if (lead) presenceBadgeHTML = chatPresenceBadgeHTML(lead.id);
             if (lead && Number(lead.ai_enabled) !== 0 && ['col-entrada', 'col-contatado'].includes(lead.column)) {
                 aiBadgeHTML = `<span title="IA respondendo automaticamente" style="display: inline-flex; align-items: center; font-size: 0.7rem; margin-left: 4px;">🤖</span>`;
             }
@@ -1588,6 +1672,7 @@ function renderContactsList(chats) {
                             <strong style="color: var(--text-main); font-size: 0.95rem; font-weight: ${hasUnread ? 700 : 500}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${displayName}</strong>
                             ${aiBadgeHTML}
                             ${lockBadgeHTML}
+                            ${presenceBadgeHTML}
                         </span>
                         <span style="display: flex; align-items: center; flex-shrink: 0;">
                             <span style="font-size: 0.7rem; color: ${timeColor}; font-weight: ${hasUnread ? 600 : 400};">${timeString}</span>
@@ -3871,6 +3956,10 @@ document.addEventListener('keydown', (e) => {
     const chatView = document.getElementById('view-chat');
     if (!chatView || chatView.style.display === 'none') return;
 
+    // A ficha do lead abre por cima da aba (página dedicada) — o Esc é dela.
+    const lpp = document.getElementById('lead-profile-panel');
+    if (lpp && lpp.classList.contains('active')) return;
+
     const floatingOverlaySelectors = [
         '#quick-replies-popup', '#attach-menu-popup', '#tags-menu-popup',
         '#stage-menu-popup', '#transfer-menu-popup', '#modal-image-preview',
@@ -4009,6 +4098,13 @@ async function openChat(phone, name, silent = false) {
         let targetLead = leads.find(l => isSamePhone(l.telefone, phone));
         renderChatTagsUI(targetLead);
         renderLeadInfoPanel(targetLead, phone);
+
+        // Presença: numa abertura de verdade, marca que este atendente entrou na
+        // conversa (avatar no card da lista pros outros). O polling silencioso não
+        // mexe nisso — o ping periódico de enterChatPresence() já mantém vivo.
+        if (!silent && targetLead && typeof enterChatPresence === 'function') {
+            enterChatPresence(targetLead.id);
+        }
     }
 
     if(!silent) document.getElementById('chat-active-messages').innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando mensagens...</div>';
@@ -4729,8 +4825,12 @@ window.addEventListener('DOMContentLoaded', () => {
 if (!window.globalChatCheckInterval) {
     window.globalChatCheckInterval = setInterval(() => {
         if (typeof loadChats === 'function') loadChats(true);
+        if (typeof refreshChatPresence === 'function') refreshChatPresence();
         if (window.currentActiveChat && document.getElementById('view-chat') && document.getElementById('view-chat').style.display !== 'none') {
             if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         }
     }, 6000);
 }
+
+// Primeira carga da presença assim que o script sobe (sem esperar os 6s).
+if (typeof refreshChatPresence === 'function') setTimeout(refreshChatPresence, 800);

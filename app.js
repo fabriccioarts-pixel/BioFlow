@@ -1,7 +1,11 @@
 // === THEME MANAGER ===
 function initTheme() {
     const savedTheme = localStorage.getItem('crm_theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
+    if (savedTheme === 'light') {
+        document.body.setAttribute('data-theme', 'light');
+        const icon = document.querySelector('#theme-toggle i');
+        if (icon) { icon.classList.remove('fa-moon'); icon.classList.add('fa-sun'); }
+    }
 }
 initTheme();
 
@@ -39,13 +43,6 @@ initTheme();
         }
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
-
-function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('crm_theme', next);
-}
 
 // === DADOS DO KANBAN (LOCAL) ===
 let leads = [];
@@ -91,6 +88,145 @@ function parseSqlDate(dateStr) {
 
 // Listas de Opções do Amigo App
 let apiOptions = { places: [], doctors: [], events: [] };
+
+// ── Agenda: profissionais (colunas) ─────────────────────────────────
+// A API só devolve como coluna quem tem agendamento no dia (ou o que veio em
+// /doctors, que às vezes vem incompleto). Guardamos a união de todo profissional
+// já visto — em qualquer dia ou nas opções — pra que as colunas fiquem estáveis
+// e o filtro liste todo mundo, mesmo sem agendamento no dia aberto.
+// "Horário" é o rótulo da coluna de horas — nunca um profissional. Já entrou
+// como coluna-fantasma no localStorage por um bug antigo; filtramos aqui e
+// reescrevemos a lista, pra se auto-corrigir.
+function isAgendaPhantomDoctor(name) {
+    return /^\s*hor[áa]rio\s*$/i.test(String(name || ''));
+}
+let agendaKnownDoctors = new Map();
+try {
+    let _dirty = false;
+    JSON.parse(localStorage.getItem('agendaKnownDoctors') || '[]')
+        .forEach(d => {
+            if (!d || d.id == null) return;
+            if (isAgendaPhantomDoctor(d.name)) { _dirty = true; return; }
+            agendaKnownDoctors.set(String(d.id), { id: d.id, name: d.name || 'Sem nome' });
+        });
+    if (_dirty) localStorage.setItem('agendaKnownDoctors', JSON.stringify([...agendaKnownDoctors.values()]));
+} catch (e) {}
+
+// IDs de profissionais ocultados no filtro da agenda.
+let agendaHiddenProfs = new Set();
+try {
+    JSON.parse(localStorage.getItem('agendaHiddenProfs') || '[]').forEach(id => agendaHiddenProfs.add(String(id)));
+} catch (e) {}
+
+let _agendaOptionsKicked = false;
+
+function agendaRememberDoctors(list) {
+    let changed = false;
+    (list || []).forEach(d => {
+        if (!d || d.id == null || d.id === 0) return;
+        if (isAgendaPhantomDoctor(d.name)) return;
+        const key = String(d.id);
+        const prev = agendaKnownDoctors.get(key);
+        if (!prev || (d.name && d.name !== prev.name)) {
+            agendaKnownDoctors.set(key, { id: d.id, name: d.name || (prev && prev.name) || 'Sem nome' });
+            changed = true;
+        }
+    });
+    if (changed) {
+        try { localStorage.setItem('agendaKnownDoctors', JSON.stringify([...agendaKnownDoctors.values()])); } catch (e) {}
+    }
+}
+
+function agendaPersistHidden() {
+    try { localStorage.setItem('agendaHiddenProfs', JSON.stringify([...agendaHiddenProfs])); } catch (e) {}
+}
+
+function toggleAgendaProf(id, show) {
+    const key = String(id);
+    if (show) agendaHiddenProfs.delete(key);
+    else agendaHiddenProfs.add(key);
+    agendaPersistHidden();
+    renderAgendaGrid();
+}
+
+function agendaProfSetAll(show) {
+    if (show) {
+        agendaHiddenProfs.clear();
+    } else {
+        agendaHiddenProfs = new Set([...agendaKnownDoctors.keys()]);
+    }
+    agendaPersistHidden();
+    renderAgendaGrid();
+}
+
+// Cria (uma vez) o botão + painel do filtro de profissionais na barra da agenda.
+function ensureAgendaProfFilterUI() {
+    if (document.getElementById('agenda-prof-filter')) return;
+    const bar = document.querySelector('#view-agenda .agenda-actions') || document.querySelector('#view-agenda .agenda-filters');
+    if (!bar) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'agenda-prof-filter';
+    wrap.className = 'agenda-prof-filter';
+    wrap.innerHTML = `
+        <button type="button" class="btn-secondary agenda-prof-btn" onclick="toggleAgendaProfPanel(event)">
+            <i class="fa-solid fa-user-doctor"></i>
+            <span>Profissionais</span>
+            <span class="agenda-prof-count" id="agenda-prof-count"></span>
+            <i class="fa-solid fa-chevron-down" style="font-size: 0.7rem;"></i>
+        </button>
+        <div class="agenda-prof-panel" id="agenda-prof-panel" style="display: none;">
+            <div class="agenda-prof-panel-actions">
+                <button type="button" onclick="agendaProfSetAll(true)">Marcar todos</button>
+                <button type="button" onclick="agendaProfSetAll(false)">Limpar</button>
+            </div>
+            <div class="agenda-prof-list" id="agenda-prof-list"></div>
+        </div>`;
+    bar.appendChild(wrap);
+
+    document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) {
+            const p = document.getElementById('agenda-prof-panel');
+            if (p) p.style.display = 'none';
+        }
+    });
+}
+
+function toggleAgendaProfPanel(ev) {
+    if (ev) ev.stopPropagation();
+    const p = document.getElementById('agenda-prof-panel');
+    if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+// Popula a lista de checkboxes do filtro a partir de agendaKnownDoctors.
+function renderAgendaProfFilter(allDoctors) {
+    ensureAgendaProfFilterUI();
+    const list = document.getElementById('agenda-prof-list');
+    const countEl = document.getElementById('agenda-prof-count');
+    if (!list) return;
+
+    const ordered = [...allDoctors].sort((a, b) => a.name.localeCompare(b.name));
+    list.innerHTML = ordered.map(d => {
+        const key = String(d.id);
+        const checked = !agendaHiddenProfs.has(key) ? 'checked' : '';
+        return `<label class="agenda-prof-item">
+            <input type="checkbox" ${checked} onchange="toggleAgendaProf('${key.replace(/'/g, "\\'")}', this.checked)">
+            <span>${escapeHtml(d.name)}</span>
+        </label>`;
+    }).join('') || '<div class="agenda-prof-empty">Nenhum profissional carregado ainda.</div>';
+
+    const total = ordered.length;
+    const visiveis = ordered.filter(d => !agendaHiddenProfs.has(String(d.id))).length;
+    if (countEl) {
+        if (total && visiveis < total) {
+            countEl.textContent = `${visiveis}/${total}`;
+            countEl.style.display = '';
+        } else {
+            countEl.textContent = '';
+            countEl.style.display = 'none';
+        }
+    }
+}
 
 function initApp() {
     initTheme();
@@ -161,19 +297,6 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApp);
 } else {
     initApp();
-}
-
-// === THEME MANAGER ===
-function initTheme() {
-    const savedTheme = localStorage.getItem('crm_theme') || 'dark';
-    if (savedTheme === 'light') {
-        document.body.setAttribute('data-theme', 'light');
-        const icon = document.querySelector('#theme-toggle i');
-        if (icon) {
-            icon.classList.remove('fa-moon');
-            icon.classList.add('fa-sun');
-        }
-    }
 }
 
 // Chuva de confete comemorando um agendamento novo. Canvas próprio, sem
@@ -285,6 +408,10 @@ function initKanbanSSE() {
             const { action } = JSON.parse(e.data);
             if (loggedUser && ['created', 'updated', 'deleted'].includes(action)) {
                 fetchLeadsFromServer(true);
+            }
+            // Alguém entrou/saiu de uma conversa — atualiza os avatares nos cards do chat na hora.
+            if (action === 'presence' && typeof refreshChatPresence === 'function') {
+                refreshChatPresence();
             }
         } catch (_) {}
     };
@@ -1384,6 +1511,16 @@ function closeModals() {
     document.getElementById('integrationActions').style.display = 'flex';
 }
 
+// Esc fecha qualquer modal aberto (.modal-overlay) — menos o overlay de login.
+// Registrado cedo, então roda antes dos outros handlers de Esc (ficha do lead,
+// chat); stopImmediatePropagation evita que eles disparem no mesmo Esc.
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.querySelector('.modal-overlay.active:not(#login-overlay)')) return;
+    e.stopImmediatePropagation();
+    closeModals();
+});
+
 async function saveNewLead() {
     const nome = document.getElementById('nl-nome').value;
     const telefone = document.getElementById('nl-telefone').value;
@@ -1578,8 +1715,8 @@ function openOrcamentoModal(id) {
     renderOrcamentoItemsList(id);
     orcPreencherPaciente(lead);
     orcUpdatePreview();
-    // Pré-carrega os dados da empresa pra impressão sair instantânea.
-    if (!orcEmpresaCache) fetchOrcamentoEmpresa().catch(() => {});
+    // Carrega as empresas e pré-seleciona a do lead (ou a padrão) no seletor.
+    fetchEmpresas().then(() => orcPopularEmpresaSelect(lead.empresa_id)).catch(() => {});
     document.getElementById('modalOrcamento').classList.add('active');
 }
 
@@ -1719,14 +1856,69 @@ async function orcFecharModal() {
     closeModals();
 }
 
-// ── Dados da empresa (cabeçalho do impresso) ──────────────────────────
-let orcEmpresaCache = null;
+// ── Empresas / emitentes do orçamento ────────────────────────────────
+// Cadastro com várias empresas; cada lead pode apontar pra uma (lead.empresa_id).
+// Na impressão resolve: empresa do lead -> padrão -> primeira ativa.
+let orcEmpresasCache = [];
 
-async function fetchOrcamentoEmpresa() {
-    const res = await fetch('/api/settings/orcamento-empresa');
-    const json = await res.json();
-    orcEmpresaCache = json.empresa || {};
-    return orcEmpresaCache;
+async function fetchEmpresas(force) {
+    if (orcEmpresasCache.length && !force) return orcEmpresasCache;
+    try {
+        const res = await fetch('/api/empresas');
+        const json = await res.json();
+        orcEmpresasCache = Array.isArray(json.empresas) ? json.empresas : [];
+    } catch (e) {
+        console.error('Erro ao carregar empresas', e);
+    }
+    return orcEmpresasCache;
+}
+
+function orcEmpresaById(id) {
+    return orcEmpresasCache.find(e => e.id === id) || null;
+}
+
+function orcEmpresaPadrao() {
+    return orcEmpresasCache.find(e => e.ativo && e.is_default)
+        || orcEmpresasCache.find(e => e.ativo)
+        || orcEmpresasCache[0]
+        || null;
+}
+
+// Preenche o <select id="orc-empresa"> do modal de orçamento e pré-seleciona
+// a empresa do lead (ou a padrão).
+function orcPopularEmpresaSelect(empresaIdDoLead) {
+    const sel = document.getElementById('orc-empresa');
+    if (!sel) return;
+    const ativas = orcEmpresasCache.filter(e => e.ativo);
+    if (ativas.length === 0) {
+        sel.innerHTML = '<option value="">Nenhuma empresa cadastrada</option>';
+        sel.value = '';
+        return;
+    }
+    const escolhida = (empresaIdDoLead && orcEmpresaById(empresaIdDoLead) && orcEmpresaById(empresaIdDoLead).ativo)
+        ? empresaIdDoLead
+        : (orcEmpresaPadrao() ? orcEmpresaPadrao().id : '');
+    sel.innerHTML = ativas.map(e =>
+        `<option value="${e.id}">${escapeHtml(e.nome_fantasia || e.razao_social)}${e.is_default ? ' (padrão)' : ''}</option>`
+    ).join('');
+    sel.value = escolhida;
+}
+
+// Grava no lead qual empresa emitir o orçamento.
+async function orcSetEmpresaLead(empresaId) {
+    const id = document.getElementById('orc-lead-id').value;
+    if (!id) return;
+    const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === id);
+    if (lead) lead.empresa_id = empresaId || null;
+    try {
+        await fetch(`/api/leads/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ empresa_id: empresaId || null })
+        });
+    } catch (e) {
+        console.error('Erro ao vincular empresa ao lead', e);
+    }
 }
 
 // Logo da empresa em memória (data URI) enquanto o modal está aberto.
@@ -1796,50 +1988,225 @@ function orcEmpresaLogoRemove() {
     orcRenderEmpLogoPreview('');
 }
 
-async function openOrcamentoEmpresaModal() {
-    empLogoData = null;
-    try {
-        const emp = await fetchOrcamentoEmpresa();
-        document.getElementById('emp-razao').value = emp.razao_social || '';
-        document.getElementById('emp-cnpj').value = emp.cnpj || '';
-        document.getElementById('emp-endereco').value = emp.endereco || '';
-        document.getElementById('emp-telefone').value = emp.telefone || '';
-        document.getElementById('emp-email').value = emp.email || '';
-        orcRenderEmpLogoPreview(emp.logo || '');
-    } catch (e) {
-        console.error('Erro ao carregar dados da empresa', e);
-        orcRenderEmpLogoPreview('');
-    }
-    document.getElementById('modalOrcamentoEmpresa').classList.add('active');
+// ── Gerenciador de empresas (lista + editor) ─────────────────────────
+function empMostrarVista(qual) {
+    const isEditor = qual === 'editor';
+    document.getElementById('emp-list-view').style.display = isEditor ? 'none' : '';
+    document.getElementById('emp-editor-view').style.display = isEditor ? '' : 'none';
+    document.getElementById('emp-list-actions').style.display = isEditor ? 'none' : '';
+    document.getElementById('emp-editor-actions').style.display = isEditor ? '' : 'none';
 }
 
-async function saveOrcamentoEmpresa() {
+function closeEmpresasManager() {
+    document.getElementById('modalOrcamentoEmpresa').classList.remove('active');
+}
+
+async function openEmpresasManager() {
+    document.getElementById('modalOrcamentoEmpresa').classList.add('active');
+    empMostrarVista('lista');
+    document.getElementById('emp-list').innerHTML =
+        '<div class="emp-empty"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando…</div>';
+    await fetchEmpresas(true);
+    empRenderLista();
+}
+
+function empRenderLista() {
+    const box = document.getElementById('emp-list');
+    if (!box) return;
+    if (orcEmpresasCache.length === 0) {
+        box.innerHTML = '<div class="emp-empty">Nenhuma empresa cadastrada ainda.</div>';
+        return;
+    }
+    box.innerHTML = orcEmpresasCache.map(e => `
+        <div class="emp-card">
+            <div class="emp-card-logo">
+                ${e.logo ? `<img src="${e.logo}" alt="">` : '<i class="fa-solid fa-building"></i>'}
+            </div>
+            <div class="emp-card-info">
+                <div class="emp-card-name">${escapeHtml(e.nome_fantasia || e.razao_social)}${e.is_default ? '<span class="emp-badge">Padrão</span>' : ''}${!e.ativo ? '<span class="emp-badge" style="color:#e5a24d;">Inativa</span>' : ''}</div>
+                <div class="emp-card-sub">${escapeHtml(e.cnpj || 'sem CNPJ')}</div>
+            </div>
+            <div class="emp-card-actions">
+                <button title="Editar" onclick="empEditar('${e.id}')"><i class="fa-solid fa-pen"></i></button>
+                ${e.is_default ? '' : `<button title="Tornar padrão" onclick="empTornarPadrao('${e.id}')"><i class="fa-solid fa-star"></i></button>`}
+                <button class="danger" title="Excluir" onclick="empExcluir('${e.id}')"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function empLimparEditor() {
+    empLogoData = null;
+    ['emp-editing-id', 'emp-razao', 'emp-fantasia', 'emp-cnpj', 'emp-ie', 'emp-im',
+     'emp-endereco', 'emp-telefone', 'emp-email', 'emp-site', 'emp-resp', 'emp-pagamento']
+        .forEach(elId => { const el = document.getElementById(elId); if (el) el.value = ''; });
+    document.getElementById('emp-default').checked = false;
+    orcRenderEmpLogoPreview('');
+}
+
+function empNovo() {
+    empLimparEditor();
+    document.getElementById('emp-default').checked = orcEmpresasCache.length === 0;
+    empMostrarVista('editor');
+}
+
+function empEditar(id) {
+    const e = orcEmpresaById(id);
+    if (!e) return;
+    empLimparEditor();
+    const set = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v || ''; };
+    set('emp-editing-id', e.id);
+    set('emp-razao', e.razao_social);
+    set('emp-fantasia', e.nome_fantasia);
+    set('emp-cnpj', e.cnpj);
+    set('emp-ie', e.inscricao_estadual);
+    set('emp-im', e.inscricao_municipal);
+    set('emp-endereco', e.endereco);
+    set('emp-telefone', e.telefone);
+    set('emp-email', e.email);
+    set('emp-site', e.site);
+    set('emp-resp', e.responsavel_tecnico);
+    set('emp-pagamento', e.dados_pagamento);
+    document.getElementById('emp-default').checked = !!e.is_default;
+    orcRenderEmpLogoPreview(e.logo || '');
+    empMostrarVista('editor');
+}
+
+function empVoltarLista() {
+    empMostrarVista('lista');
+}
+
+async function empSalvar() {
+    const val = elId => (document.getElementById(elId).value || '').trim();
+    const id = val('emp-editing-id');
+    if (!val('emp-razao')) {
+        showToast('Informe a razão social.', 'danger');
+        return;
+    }
     const payload = {
-        razao_social: document.getElementById('emp-razao').value.trim(),
-        cnpj: document.getElementById('emp-cnpj').value.trim(),
-        endereco: document.getElementById('emp-endereco').value.trim(),
-        telefone: document.getElementById('emp-telefone').value.trim(),
-        email: document.getElementById('emp-email').value.trim()
+        razao_social: val('emp-razao'),
+        nome_fantasia: val('emp-fantasia'),
+        cnpj: val('emp-cnpj'),
+        inscricao_estadual: val('emp-ie'),
+        inscricao_municipal: val('emp-im'),
+        endereco: val('emp-endereco'),
+        telefone: val('emp-telefone'),
+        email: val('emp-email'),
+        site: val('emp-site'),
+        responsavel_tecnico: val('emp-resp'),
+        dados_pagamento: val('emp-pagamento'),
+        is_default: document.getElementById('emp-default').checked
     };
-    // Só manda `logo` se mexeram nele: data URI novo, ou '' pra apagar.
+    // Só manda `logo` se mexeram: data URI novo, ou '' pra apagar.
     if (empLogoData !== null) payload.logo = empLogoData;
+
     try {
-        const res = await fetch('/api/settings/orcamento-empresa', {
-            method: 'PUT',
+        const res = await fetch(id ? `/api/empresas/${id}` : '/api/empresas', {
+            method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const json = await res.json();
+        const json = await res.json().catch(() => ({}));
         if (!res.ok) {
             showToast(json.error || 'Não foi possível salvar.', 'danger');
             return;
         }
-        orcEmpresaCache = json.empresa || payload;
-        showToast('Dados da empresa salvos.', 'success');
-        document.getElementById('modalOrcamentoEmpresa').classList.remove('active');
+        // Se marcou como padrão ao editar, o POST já cuida; no PUT precisa do PATCH.
+        if (id && payload.is_default && !(orcEmpresaById(id) || {}).is_default) {
+            await fetch(`/api/empresas/${id}/default`, { method: 'PATCH' });
+        }
+        await fetchEmpresas(true);
+        empRenderLista();
+        empVoltarLista();
+        showToast('Empresa salva.', 'success');
+        // Reflete no seletor do orçamento, se estiver aberto.
+        const leadId = document.getElementById('orc-lead-id').value;
+        const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadId);
+        orcPopularEmpresaSelect(lead ? lead.empresa_id : null);
     } catch (e) {
-        console.error('Erro ao salvar dados da empresa', e);
-        showToast('Erro ao salvar dados da empresa.', 'danger');
+        console.error('Erro ao salvar empresa', e);
+        showToast('Erro ao salvar empresa.', 'danger');
+    }
+}
+
+async function empTornarPadrao(id) {
+    try {
+        const res = await fetch(`/api/empresas/${id}/default`, { method: 'PATCH' });
+        if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            showToast(j.error || 'Não foi possível definir a padrão.', 'danger');
+            return;
+        }
+        await fetchEmpresas(true);
+        empRenderLista();
+        const leadId = document.getElementById('orc-lead-id').value;
+        const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadId);
+        orcPopularEmpresaSelect(lead ? lead.empresa_id : null);
+    } catch (e) {
+        console.error('Erro ao definir empresa padrão', e);
+    }
+}
+
+async function empExcluir(id) {
+    const e = orcEmpresaById(id);
+    if (!e) return;
+    if (typeof customConfirm === 'function') {
+        if (!(await customConfirm(`Excluir a empresa "${e.nome_fantasia || e.razao_social}"? Orçamentos que a usavam passam a usar a empresa padrão.`, 'Excluir empresa'))) return;
+    } else if (!confirm('Excluir esta empresa?')) {
+        return;
+    }
+    try {
+        const res = await fetch(`/api/empresas/${id}`, { method: 'DELETE' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            showToast(j.error || 'Não foi possível excluir.', 'danger');
+            return;
+        }
+        await fetchEmpresas(true);
+        empRenderLista();
+        showToast('Empresa excluída.', 'success');
+        const leadId = document.getElementById('orc-lead-id').value;
+        const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadId);
+        orcPopularEmpresaSelect(lead ? lead.empresa_id : null);
+    } catch (e2) {
+        console.error('Erro ao excluir empresa', e2);
+        showToast('Erro ao excluir empresa.', 'danger');
+    }
+}
+
+// Consulta o CNPJ digitado e pré-preenche o formulário.
+async function empBuscarCnpj() {
+    const btn = document.getElementById('emp-cnpj-lookup');
+    const digits = (document.getElementById('emp-cnpj').value || '').replace(/\D/g, '');
+    if (digits.length !== 14) {
+        showToast('Digite os 14 dígitos do CNPJ.', 'danger');
+        return;
+    }
+    const htmlOrig = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span>'; }
+    try {
+        const res = await fetch(`/api/empresas/lookup-cnpj/${digits}`);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            showToast(j.error || 'Não foi possível consultar o CNPJ.', 'danger');
+            return;
+        }
+        const d = j.empresa || {};
+        const setIfEmpty = (elId, v) => {
+            const el = document.getElementById(elId);
+            if (el && v && !el.value.trim()) el.value = v;
+        };
+        if (d.razao_social) document.getElementById('emp-razao').value = d.razao_social;
+        setIfEmpty('emp-fantasia', d.nome_fantasia);
+        setIfEmpty('emp-endereco', d.endereco);
+        setIfEmpty('emp-telefone', d.telefone);
+        setIfEmpty('emp-email', d.email);
+        showToast('Dados do CNPJ carregados. Confira antes de salvar.', 'success');
+    } catch (e) {
+        console.error('Erro no lookup de CNPJ', e);
+        showToast('Consulta de CNPJ indisponível agora.', 'danger');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = htmlOrig; }
     }
 }
 
@@ -1854,9 +2221,10 @@ async function imprimirOrcamento() {
         return;
     }
 
-    let emp = orcEmpresaCache;
-    if (!emp) { try { emp = await fetchOrcamentoEmpresa(); } catch (e) { emp = {}; } }
-    emp = emp || {};
+    // Empresa emitente: a escolhida no seletor -> a do lead -> a padrão.
+    if (orcEmpresasCache.length === 0) { try { await fetchEmpresas(true); } catch (e) {} }
+    const empSelId = (document.getElementById('orc-empresa') || {}).value || (lead && lead.empresa_id) || '';
+    let emp = orcEmpresaById(empSelId) || orcEmpresaPadrao() || {};
 
     const pac = {
         nome: document.getElementById('orc-pac-nome').value.trim(),
@@ -1923,11 +2291,14 @@ async function imprimirOrcamento() {
     <div class="company">
         ${emp.logo ? `<img class="logo" src="${emp.logo}" alt="">` : ''}
         <div>
-            <div class="name">${escapeHtml(emp.razao_social || 'Sua Empresa')}</div>
+            <div class="name">${escapeHtml(emp.nome_fantasia || emp.razao_social || 'Sua Empresa')}</div>
+            ${emp.nome_fantasia && emp.razao_social && emp.nome_fantasia !== emp.razao_social ? `<div class="muted">${escapeHtml(emp.razao_social)}</div>` : ''}
             ${emp.cnpj ? `<div class="muted">CNPJ: ${escapeHtml(emp.cnpj)}</div>` : ''}
+            ${(emp.inscricao_estadual || emp.inscricao_municipal) ? `<div class="muted">${[emp.inscricao_estadual ? 'IE: ' + escapeHtml(emp.inscricao_estadual) : '', emp.inscricao_municipal ? 'IM: ' + escapeHtml(emp.inscricao_municipal) : ''].filter(Boolean).join(' · ')}</div>` : ''}
             ${emp.endereco ? `<div class="muted">${escapeHtml(emp.endereco)}</div>` : ''}
             ${emp.telefone ? `<div class="muted">Tel: ${escapeHtml(emp.telefone)}</div>` : ''}
             ${emp.email ? `<div class="muted">${escapeHtml(emp.email)}</div>` : ''}
+            ${emp.site ? `<div class="muted">${escapeHtml(emp.site)}</div>` : ''}
         </div>
     </div>
     <div class="doc-title">
@@ -1962,14 +2333,19 @@ async function imprimirOrcamento() {
     <div class="total">Total: ${brl(total)}</div>
 </div>
 
+${emp.dados_pagamento ? `<div class="block">
+    <h2>Dados para pagamento</h2>
+    <div class="muted" style="white-space: pre-line;">${escapeHtml(emp.dados_pagamento)}</div>
+</div>` : ''}
+
 <div class="sign">
-    <div>Assinatura da empresa</div>
+    <div>${escapeHtml(emp.responsavel_tecnico || 'Assinatura da empresa')}</div>
     <div>Assinatura do paciente</div>
 </div>
 
 <div class="foot">
     Este orçamento tem caráter informativo e validade de 15 dias a partir da data de emissão.
-    Valores e condições sujeitos a alteração após esse período.
+    Valores e condições sujeitos a alteração após esse período.${emp.responsavel_tecnico ? `<br>Responsável técnico: ${escapeHtml(emp.responsavel_tecnico)}` : ''}
 </div>
 
 <script>window.onload = function () { setTimeout(function () { window.print(); }, 300); };<\/script>
@@ -2622,6 +2998,7 @@ function switchTab(tabId) {
         aniversariantes: 'Aniversariantes',
         contatos: 'Contatos',
         fluxos: 'Fluxos',
+        midias: 'Mídias',
         historico: 'Financeiro',
     };
     if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
@@ -2634,9 +3011,13 @@ function switchTab(tabId) {
     }
     
     if (window.location.pathname.includes('historico.html')) {
-        window.location.href = 'index.html'; 
+        window.location.href = 'index.html';
         return;
     }
+
+    // Trocar de aba pelo menu fecha a ficha do lead — senão a página dedicada
+    // (position:fixed, z-index alto) fica cobrindo a view nova.
+    if (typeof closeLeadProfile === 'function') closeLeadProfile();
 
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     
@@ -2669,6 +3050,8 @@ function switchTab(tabId) {
     if(contatosView) contatosView.style.display = 'none';
     const fluxosView = document.getElementById('view-fluxos');
     if(fluxosView) fluxosView.style.display = 'none';
+    const midiasView = document.getElementById('view-midias');
+    if(midiasView) midiasView.style.display = 'none';
 
     // Para polling do chat ao sair da aba
     if (tabId !== 'chat' && window.chatPollingInterval) {
@@ -2764,6 +3147,12 @@ function switchTab(tabId) {
         if (view) {
             view.style.display = 'flex';
             if (typeof loadFlows === 'function') loadFlows();
+        }
+    } else if (tabId === 'midias') {
+        const view = document.getElementById('view-midias');
+        if (view) {
+            view.style.display = 'flex';
+            if (typeof loadMidias === 'function') loadMidias(null);
         }
     } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes'].includes(tabId)) {
         const view = document.getElementById(`view-${tabId}`);
@@ -3686,6 +4075,11 @@ async function renderAgendaGrid() {
         if (apiOptions.doctors && apiOptions.doctors.length > 0) {
             apiOptions.doctors.forEach(doc => doctorsMap.set(doc.id, { id: doc.id, name: doc.name }));
         }
+        // A rota /api/agenda agora devolve a lista de profissionais junto — garante
+        // todas as colunas já na 1ª renderização, sem depender do /api/options.
+        (result.doctors || []).forEach(doc => {
+            if (doc && doc.id != null) doctorsMap.set(doc.id, { id: doc.id, name: doc.name || 'Sem nome' });
+        });
 
         // Adicionar qualquer profissional que esteja nos agendamentos mas não veio na lista de doctors
         attendances.forEach(att => {
@@ -3694,26 +4088,46 @@ async function renderAgendaGrid() {
             }
         });
 
-        let doctors = Array.from(doctorsMap.values());
-        
-        // Ordenar alfabeticamente para manter a ordem das colunas consistente
-        doctors.sort((a, b) => a.name.localeCompare(b.name));
+        // Acumula todo profissional visto (neste dia + opções) na união persistente,
+        // pra que as colunas não sumam nos dias em que a pessoa não tem agendamento.
+        agendaRememberDoctors(Array.from(doctorsMap.values()));
 
-        if (doctors.length === 0) {
-            doctors = [{ id: 0, name: 'Carregando / Sem Profissionais' }];
+        // Se as opções ainda não trouxeram a lista de profissionais, dispara a busca
+        // uma vez — ela re-renderiza a grade quando terminar.
+        if ((!apiOptions.doctors || apiOptions.doctors.length === 0) && !_agendaOptionsKicked && typeof fetchApiOptions === 'function') {
+            _agendaOptionsKicked = true;
+            fetchApiOptions();
         }
-        
+
+        const allDoctors = Array.from(agendaKnownDoctors.values())
+            .filter(d => !isAgendaPhantomDoctor(d.name))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        // Colunas = união conhecida menos quem está oculto no filtro.
+        let doctors = allDoctors.filter(d => !agendaHiddenProfs.has(String(d.id)));
+
+        let agendaEmptyMsg = '';
+        if (allDoctors.length === 0) {
+            doctors = [{ id: 0, name: 'Carregando profissionais…' }];
+        } else if (doctors.length === 0) {
+            doctors = [{ id: 0, name: 'Nenhum profissional selecionado' }];
+            agendaEmptyMsg = 'Todos os profissionais estão ocultos. Use o filtro "Profissionais" para exibir.';
+        }
+
+        // Atualiza o filtro (checkboxes) com a lista completa conhecida.
+        renderAgendaProfFilter(allDoctors);
+
         // 2. Ajustar CSS Grid Dinâmico
         gridLayout.style.setProperty('--col-count', doctors.length);
         
-        // 3. Renderizar Cabeçalhos das Colunas
-        gridLayout.insertAdjacentHTML('afterbegin', `<div class="grid-col-header time-col-header">Horário</div>`);
-        doctors.forEach(doc => {
-            gridLayout.insertAdjacentHTML('beforeend', `<div class="grid-col-header">${doc.name}</div>`);
-        });
-        
-        // O Grid Body precisa ficar DEPOIS dos headers
-        gridLayout.appendChild(gridBody);
+        // 3. Renderizar Cabeçalhos das Colunas — limpa qualquer header que tenha
+        //    sobrado (inclusive de uma renderização concorrente) e insere tudo de
+        //    uma vez, logo antes do grid-body. Sem isso, duas chamadas simultâneas
+        //    de renderAgendaGrid() empilhavam um "Horário" a mais.
+        gridLayout.querySelectorAll('.grid-col-header').forEach(h => h.remove());
+        const headersHtml = `<div class="grid-col-header time-col-header">Horário</div>` +
+            doctors.map(doc => `<div class="grid-col-header">${escapeHtml(doc.name)}</div>`).join('');
+        gridBody.insertAdjacentHTML('beforebegin', headersHtml);
         
         // 4. Gerar Grade Base (08:00 até 18:00, a cada 20 min)
         const times = [];
@@ -3725,14 +4139,19 @@ async function renderAgendaGrid() {
         }
         
         times.forEach((time, index) => {
-            const row = index + 2; 
+            const row = index + 2;
             gridBody.insertAdjacentHTML('beforeend', `<div class="time-slot" style="grid-column: 1; grid-row: ${row};">${time}</div>`);
-            
+
             for(let c=2; c<=doctors.length+1; c++) {
                 const docId = doctors[c-2].id;
                 gridBody.insertAdjacentHTML('beforeend', `<div class="grid-cell clickable-cell" onclick="openGridScheduleModal('${docId}', '${time}')" style="grid-column: ${c}; grid-row: ${row};"></div>`);
             }
         });
+
+        if (agendaEmptyMsg) {
+            gridBody.insertAdjacentHTML('beforeend',
+                `<div class="agenda-empty-overlay" style="grid-column: 2 / -1; grid-row: 2 / 12;">${escapeHtml(agendaEmptyMsg)}</div>`);
+        }
         
         // 5. Agrupar Agendamentos por Doutor para tratar colisões (overlap)
         const attendancesByDoc = {};
@@ -4793,6 +5212,38 @@ window.customConfirm = function(message, title = 'Confirmação') {
             overlay.remove();
             resolve(false);
         });
+    });
+};
+
+// Substitui o window.prompt() nativo (que não tem a identidade do site).
+// Resolve com a string digitada, ou null se o usuário cancelar.
+window.customPrompt = function(message, defaultValue = '', title = 'Digite') {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        overlay.innerHTML = `
+            <div class="custom-modal-box">
+                <div class="custom-modal-title"><i class="fa-solid fa-pen" style="color: var(--accent-primary);"></i> ${escapeHtml(title)}</div>
+                <div class="custom-modal-message">${escapeHtml(message)}</div>
+                <input type="text" class="custom-modal-input" id="cm-prompt-input">
+                <div class="custom-modal-actions">
+                    <button class="btn-secondary" id="cm-prompt-cancel">Cancelar</button>
+                    <button class="btn-primary" id="cm-prompt-ok">OK</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const input = document.getElementById('cm-prompt-input');
+        input.value = defaultValue == null ? '' : String(defaultValue);
+        const done = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(val); };
+        const onKey = (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); done(input.value); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); }
+        };
+        document.addEventListener('keydown', onKey, true);
+        document.getElementById('cm-prompt-ok').addEventListener('click', () => done(input.value));
+        document.getElementById('cm-prompt-cancel').addEventListener('click', () => done(null));
+        setTimeout(() => { input.focus(); input.select(); }, 30);
     });
 };
 
@@ -7187,6 +7638,17 @@ function lppEditLead() {
     if (typeof openNotesModal === 'function') openNotesModal(_lppCurrentLeadId);
 }
 
+// Para o follow-up automático em andamento a partir da ficha do lead.
+async function lppStopFollowup(leadId) {
+    try {
+        const r = await fetch(`/api/leads/${leadId}/followup/stop`, { method: 'POST' });
+        if (!r.ok) { showToast('Não foi possível parar o follow-up.', 'danger'); return; }
+        showToast('Follow-up interrompido.', 'success');
+        const row = document.getElementById('lpp-followup-row');
+        if (row) row.style.display = 'none';
+    } catch (e) { showToast('Erro ao parar o follow-up.', 'danger'); }
+}
+
 // Alterna entre a prévia resumida e o texto completo das notas.
 function lppToggleNotas() {
     const box = document.getElementById('lpp-notas');
@@ -7364,9 +7826,28 @@ async function openLeadProfile(leadId) {
         ${relTime ? `<div class="lpp-row"><i class="fa-solid fa-clock"></i><span class="lpp-row-label">Último contato</span><span class="lpp-row-value">${relTime}</span></div>` : ''}
         ${owner ? `<div class="lpp-row"><i class="fa-solid fa-user-tie"></i><span class="lpp-row-label">Responsável</span><span class="lpp-row-value">${owner}</span></div>` : ''}
         <div class="lpp-row" id="lpp-last-agent-row"><i class="fa-solid fa-headset"></i><span class="lpp-row-label">Último a responder</span><span class="lpp-row-value" id="lpp-last-agent-value">—</span></div>
+        <div class="lpp-row" id="lpp-followup-row" style="display:none;"><i class="fa-solid fa-clock-rotate-left"></i><span class="lpp-row-label">Follow-up</span><span class="lpp-row-value" id="lpp-followup-value">—</span></div>
         ${lead.valor_recebido ? `<div class="lpp-row"><i class="fa-solid fa-money-bill-wave"></i><span class="lpp-row-label">Valor recebido</span><span class="lpp-row-value" style="color:var(--accent-success);font-weight:700;">${lppFormatMoney(lead.valor_recebido)}</span></div>` : ''}
         ${bdayHtml}
     `;
+
+    // Follow-up automático em andamento pra esse lead (async).
+    (async () => {
+        const row = document.getElementById('lpp-followup-row');
+        const val = document.getElementById('lpp-followup-value');
+        if (!row || !val) return;
+        try {
+            const r = await fetch(`/api/leads/${leadId}/followup`).then(x => x.json());
+            const run = r && r.run;
+            if (run && (run.status === 'agendado' || run.status === 'enviando')) {
+                const prox = run.next_send_at ? (lppRelativeTime(String(run.next_send_at).replace(' ', 'T')) || '') : '';
+                val.innerHTML = `<span style="color:var(--accent-warning,#f59e0b);font-weight:600;">Lembrete ${(+run.step_idx || 0) + 1}</span>`
+                    + (prox ? `<span style="color:var(--text-muted);font-weight:400;"> · próximo ${escapeHtml(prox)}</span>` : '')
+                    + ` <button onclick="lppStopFollowup('${leadId}')" style="margin-left:0.4rem;font-size:0.7rem;padding:1px 7px;border-radius:5px;border:1px solid var(--border-color);background:transparent;color:var(--text-muted);cursor:pointer;">Parar</button>`;
+                row.style.display = '';
+            }
+        } catch (_) { /* silencioso */ }
+    })();
 
     // Último atendente humano que respondeu pelo WhatsApp (async).
     (async () => {
@@ -7472,6 +7953,16 @@ function closeLeadProfile() {
     if (panel) panel.classList.remove('active');
     if (overlay) overlay.style.display = 'none';
 }
+
+// Esc fecha a ficha do lead — a menos que haja um modal aberto por cima
+// (nesse caso o modal fecha primeiro).
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('lead-profile-panel');
+    if (!panel || !panel.classList.contains('active')) return;
+    if (document.querySelector('.modal-overlay.active, .custom-modal-overlay')) return;
+    closeLeadProfile();
+});
 
 // Alterna entre as abas "Orçamentos" e "Histórico de agendamentos" na ficha do lead.
 function lppSwitchTab(name) {
@@ -7972,3 +8463,327 @@ function toggleSidebar() {}
         boot();
     }
 })();
+
+// ============================================================================
+// BIBLIOTECA DE MÍDIA — gerenciador de arquivos p/ enviar mídia aos leads
+// Armazenamento: base64 no D1 (mesmo padrão da crm_voice_library).
+// ============================================================================
+let midxFolder = null;                 // pasta atual (null = raiz)
+let midxData = { folders: [], items: [], breadcrumb: [] };
+let midxSendCtx = null;                 // { id, nome, tipo, legenda }
+let midxSendLead = null;                // { id, nome, telefone }
+let midxLibFolder = null;
+let midxLibData = { folders: [], items: [], breadcrumb: [] };
+
+async function loadMidias(folder) {
+    if (folder !== undefined) midxFolder = folder;
+    const grid = document.getElementById('midx-grid');
+    if (grid) grid.innerHTML = '<div class="midx-empty"><span class="amicro-loader"><span></span><span></span><span></span></span></div>';
+    try {
+        const res = await fetch('/api/media' + (midxFolder ? ('?folder=' + encodeURIComponent(midxFolder)) : ''));
+        midxData = await res.json();
+    } catch (e) { midxData = { folders: [], items: [], breadcrumb: [] }; }
+    renderMidias();
+}
+
+function midxCrumbHtml(data) {
+    const parts = ['<a href="#" onclick="loadMidias(null); return false;">Mídias</a>'];
+    (data.breadcrumb || []).forEach(function (b) { parts.push('<span>/</span><b>' + escapeHtml(b.nome) + '</b>'); });
+    return parts.join(' ');
+}
+
+function renderMidias() {
+    const crumb = document.getElementById('midx-crumb');
+    if (crumb) crumb.innerHTML = midxCrumbHtml(midxData);
+    const grid = document.getElementById('midx-grid');
+    if (!grid) return;
+    const q = (document.getElementById('midx-search') && document.getElementById('midx-search').value || '').trim().toLowerCase();
+    const folders = (midxData.folders || []).filter(function (f) { return !q || (f.nome || '').toLowerCase().includes(q); });
+    const items = (midxData.items || []).filter(function (i) { return !q || (i.nome || '').toLowerCase().includes(q); });
+
+    if (!folders.length && !items.length) {
+        grid.innerHTML = '<div class="midx-empty"><i class="fa-solid fa-folder-open"></i><span>' +
+            (q ? 'Nada encontrado.' : 'Pasta vazia. Arraste um arquivo aqui, ou use "Enviar arquivo".') + '</span></div>';
+        return;
+    }
+
+    const folderHtml = folders.map(function (f) {
+        const nmeta = JSON.stringify(String(f.nome)).replace(/"/g, '&quot;');
+        return '<div class="midx-tile midx-tile--folder" ondblclick="loadMidias(\'' + f.id + '\')"' +
+            ' ondragover="event.preventDefault(); this.classList.add(\'is-dragover\');"' +
+            ' ondragleave="this.classList.remove(\'is-dragover\');"' +
+            ' ondrop="this.classList.remove(\'is-dragover\'); midxMoveDropped(event, \'' + f.id + '\')">' +
+            '<div class="midx-tile-actions">' +
+            '<button title="Renomear" onclick="event.stopPropagation(); midxRename(\'folder\',\'' + f.id + '\', ' + nmeta + ')"><i class="fa-solid fa-pen"></i></button>' +
+            '<button class="is-danger" title="Excluir" onclick="event.stopPropagation(); midxDelete(\'folder\',\'' + f.id + '\')"><i class="fa-solid fa-trash"></i></button>' +
+            '</div>' +
+            '<i class="fa-solid fa-folder midx-tile-ic"></i>' +
+            '<span class="midx-tile-name">' + escapeHtml(f.nome) + '</span>' +
+            '</div>';
+    }).join('');
+
+    const itemHtml = items.map(function (i) {
+        const nmeta = JSON.stringify(String(i.nome)).replace(/"/g, '&quot;');
+        const thumb = i.tipo === 'image'
+            ? '<img class="midx-tile-thumb" loading="lazy" src="' + (i.thumb_base64 ? ('data:image/jpeg;base64,' + i.thumb_base64) : ('/api/media/' + i.id + '/raw')) + '" alt="">'
+            : '<i class="fa-solid ' + (i.tipo === 'video' ? 'fa-film' : i.tipo === 'audio' ? 'fa-music' : 'fa-file-lines') + ' midx-tile-ic"></i>';
+        return '<div class="midx-tile" draggable="true"' +
+            ' ondragstart="event.dataTransfer.setData(\'text/midx\',\'' + i.id + '\')"' +
+            ' ondblclick="midxPreview(\'' + i.id + '\')">' +
+            '<div class="midx-tile-actions">' +
+            '<button title="Renomear" onclick="event.stopPropagation(); midxRename(\'item\',\'' + i.id + '\', ' + nmeta + ')"><i class="fa-solid fa-pen"></i></button>' +
+            '<button class="is-danger" title="Excluir" onclick="event.stopPropagation(); midxDelete(\'item\',\'' + i.id + '\')"><i class="fa-solid fa-trash"></i></button>' +
+            '</div>' +
+            thumb +
+            '<span class="midx-tile-name">' + escapeHtml(i.nome) + '</span>' +
+            '<button class="midx-tile-send" onclick="event.stopPropagation(); midxOpenSend(\'' + i.id + '\')"><i class="fa-brands fa-whatsapp"></i> Enviar</button>' +
+            '</div>';
+    }).join('');
+
+    grid.innerHTML = folderHtml + itemHtml;
+}
+
+async function midxNewFolder() {
+    const nome = await customPrompt('Nome da pasta:', '', 'Nova pasta');
+    if (!nome || !nome.trim()) return;
+    try {
+        await fetch('/api/media/folders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome: nome.trim(), parent_id: midxFolder }) });
+        loadMidias();
+    } catch (e) { showToast('Erro ao criar a pasta.', 'danger'); }
+}
+
+async function midxRename(kind, id, currentName) {
+    const nome = await customPrompt('Novo nome:', currentName || '', 'Renomear');
+    if (nome == null || !nome.trim()) return;
+    const url = kind === 'folder' ? ('/api/media/folders/' + id) : ('/api/media/' + id);
+    try {
+        await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: nome.trim() }) });
+        loadMidias();
+    } catch (e) { showToast('Erro ao renomear.', 'danger'); }
+}
+
+async function midxDelete(kind, id) {
+    const msg = kind === 'folder'
+        ? 'Excluir a pasta? Os arquivos de dentro voltam para a raiz.'
+        : 'Excluir este arquivo da biblioteca?';
+    if (!await customConfirm(msg, 'Excluir')) return;
+    const url = kind === 'folder' ? ('/api/media/folders/' + id) : ('/api/media/' + id);
+    try { await fetch(url, { method: 'DELETE' }); loadMidias(); }
+    catch (e) { showToast('Erro ao excluir.', 'danger'); }
+}
+
+// ---- upload ----
+function midxReadAsDataURL(file) {
+    return new Promise(function (resolve, reject) {
+        const r = new FileReader();
+        r.onload = function () { resolve(r.result); };
+        r.onerror = reject;
+        r.readAsDataURL(file);
+    });
+}
+function midxCompressImage(file, maxDim, quality) {
+    return new Promise(function (resolve, reject) {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = function () {
+            let w = img.naturalWidth, h = img.naturalHeight;
+            if (Math.max(w, h) > maxDim) { const s = maxDim / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            c.getContext('2d').drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            resolve(c.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('img')); };
+        img.src = url;
+    });
+}
+async function midxUploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    let ok = 0;
+    for (const file of files) {
+        try {
+            const isImg = file.type.startsWith('image/');
+            const data = isImg ? await midxCompressImage(file, 1600, 0.82) : await midxReadAsDataURL(file);
+            const thumb = isImg ? (await midxCompressImage(file, 240, 0.7)).split(',')[1] : null;
+            const res = await fetch('/api/media', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nome: file.name, data: data, thumb: thumb, folder_id: midxFolder })
+            });
+            const j = await res.json().catch(function () { return {}; });
+            if (res.ok) ok++; else showToast(j.error || ('Falha em ' + file.name), 'danger');
+        } catch (e) { showToast('Erro ao processar ' + file.name, 'danger'); }
+    }
+    if (ok) showToast(ok === 1 ? 'Arquivo adicionado.' : (ok + ' arquivos adicionados.'), 'success');
+    loadMidias();
+}
+function midxDrop(e) {
+    e.preventDefault();
+    const grid = document.getElementById('midx-grid');
+    if (grid) grid.classList.remove('is-drop');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) midxUploadFiles(e.dataTransfer.files);
+}
+async function midxMoveDropped(e, folderId) {
+    e.preventDefault();
+    const id = e.dataTransfer && e.dataTransfer.getData('text/midx');
+    if (!id) return;
+    try {
+        await fetch('/api/media/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_id: folderId }) });
+        loadMidias();
+    } catch (err) { showToast('Erro ao mover.', 'danger'); }
+}
+
+// ---- preview ----
+function midxPreview(id) {
+    const it = (midxData.items || []).find(function (x) { return x.id === id; });
+    if (!it) return;
+    midxSendCtx = { id: it.id, nome: it.nome, tipo: it.tipo, legenda: it.legenda_padrao || '' };
+    const url = '/api/media/' + id + '/raw';
+    const body = document.getElementById('midx-preview-body');
+    body.innerHTML =
+        it.tipo === 'image' ? '<img src="' + url + '" style="max-width:100%; max-height:56vh; border-radius:8px;">' :
+        it.tipo === 'video' ? '<video src="' + url + '" controls style="max-width:100%; max-height:56vh; border-radius:8px;"></video>' :
+        it.tipo === 'audio' ? '<audio src="' + url + '" controls style="width:100%;"></audio>' :
+        '<iframe src="' + url + '" style="width:100%; height:56vh; border:0; border-radius:8px; background:#fff;"></iframe>';
+    document.getElementById('midx-preview-name').textContent = it.nome;
+    document.getElementById('midx-preview-meta').textContent =
+        (it.tipo || 'arquivo') + ' · ' + Math.max(1, Math.round((it.tamanho_bytes || 0) / 1024)) + ' KB';
+    document.getElementById('midx-preview-legenda').value = it.legenda_padrao || '';
+    document.getElementById('modalMidxPreview').classList.add('active');
+}
+async function midxSaveLegenda() {
+    if (!midxSendCtx) return;
+    const legenda = document.getElementById('midx-preview-legenda').value;
+    try {
+        await fetch('/api/media/' + midxSendCtx.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ legenda_padrao: legenda }) });
+        midxSendCtx.legenda = legenda;
+        const it = (midxData.items || []).find(function (x) { return x.id === midxSendCtx.id; });
+        if (it) it.legenda_padrao = legenda;
+        showToast('Legenda salva.', 'success');
+    } catch (e) { showToast('Erro ao salvar a legenda.', 'danger'); }
+}
+
+// ---- enviar para lead ----
+function midxOpenSend(id) {
+    const it = (midxData.items || []).find(function (x) { return x.id === id; });
+    if (!it) return;
+    midxSendCtx = { id: it.id, nome: it.nome, tipo: it.tipo, legenda: it.legenda_padrao || '' };
+    midxOpenSendModal();
+}
+function midxOpenSendFromPreview() {
+    if (!midxSendCtx) return;
+    document.getElementById('modalMidxPreview').classList.remove('active');
+    midxOpenSendModal();
+}
+function midxOpenSendModal() {
+    midxSendLead = null;
+    document.getElementById('midx-send-file').textContent = midxSendCtx.nome;
+    document.getElementById('midx-send-search').value = '';
+    document.getElementById('midx-send-caption').value = midxSendCtx.legenda || '';
+    document.getElementById('midx-send-leads').style.display = 'none';
+    document.getElementById('midx-send-leads').innerHTML = '';
+    document.getElementById('midx-send-chosen').style.display = 'none';
+    document.getElementById('modalMidxSend').classList.add('active');
+    if (!Array.isArray(leads) || !leads.length) { fetchLeadsFromServer(true); }
+}
+function midxRenderLeadPicker(q) {
+    const box = document.getElementById('midx-send-leads');
+    q = (q || '').trim().toLowerCase();
+    if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const digits = q.replace(/\D/g, '');
+    const hits = (Array.isArray(leads) ? leads : []).filter(function (l) {
+        return (l.nome || '').toLowerCase().includes(q) ||
+            (digits.length >= 3 && String(l.telefone || '').replace(/\D/g, '').includes(digits));
+    }).slice(0, 30);
+    box.style.display = hits.length ? 'block' : 'none';
+    box.innerHTML = hits.map(function (l) {
+        const nm = JSON.stringify(String(l.nome || 'Lead')).replace(/"/g, '&quot;');
+        return '<div class="midx-lead-row" onclick="midxPickLead(\'' + l.id + '\', ' + nm + ')">' +
+            escapeHtml(l.nome || 'Lead') + ' <small>' + escapeHtml(l.telefone || '') + '</small></div>';
+    }).join('') || '';
+}
+function midxPickLead(id, nome) {
+    const l = (Array.isArray(leads) ? leads : []).find(function (x) { return x.id === id; });
+    if (!l) return;
+    midxSendLead = { id: l.id, nome: l.nome || nome, telefone: l.telefone };
+    document.getElementById('midx-send-leads').style.display = 'none';
+    document.getElementById('midx-send-search').value = '';
+    const chosen = document.getElementById('midx-send-chosen');
+    chosen.style.display = 'flex';
+    chosen.innerHTML = '<i class="fa-solid fa-user" style="color:var(--accent-primary);"></i> ' +
+        '<b>' + escapeHtml(midxSendLead.nome) + '</b> <span style="color:var(--text-muted);">' + escapeHtml(midxSendLead.telefone || '') + '</span>';
+}
+async function midxDoSend() {
+    if (!midxSendCtx) return;
+    if (!midxSendLead || !midxSendLead.telefone) { showToast('Escolha o paciente.', 'danger'); return; }
+    const btn = document.getElementById('midx-send-btn');
+    const caption = document.getElementById('midx-send-caption').value.trim();
+    const msg = '[MEDIALIB:' + midxSendCtx.id + ']' + (caption ? ('[CAPTION:' + caption + ']') : '');
+    if (btn) { btn.disabled = true; btn.classList.add('is-loading'); }
+    try {
+        const res = await fetch('/api/whatsapp/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: midxSendLead.telefone, message: msg }) });
+        const j = await res.json().catch(function () { return {}; });
+        if (!res.ok || j.success === false) throw new Error(j.error || 'Falha no envio');
+        closeModals();
+        showToast('Mídia enviada para ' + midxSendLead.nome + '.', 'success');
+        if (window.currentActiveChat && window.currentActiveChat.phone === midxSendLead.telefone && typeof openChat === 'function') {
+            openChat(midxSendLead.telefone, midxSendLead.nome, true);
+        }
+    } catch (e) {
+        showToast(e.message || 'Erro ao enviar.', 'danger');
+    } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove('is-loading'); }
+    }
+}
+
+// ---- seletor a partir do chat ----
+async function openMidxPicker() {
+    if (!window.currentActiveChat || !window.currentActiveChat.phone) { showToast('Abra uma conversa primeiro.', 'danger'); return; }
+    document.getElementById('modalMidxLib').classList.add('active');
+    midxLibNav(null);
+}
+async function midxLibNav(folder) {
+    midxLibFolder = folder;
+    const grid = document.getElementById('midx-lib-grid');
+    if (grid) grid.innerHTML = '<div class="midx-empty"><span class="amicro-loader"><span></span><span></span><span></span></span></div>';
+    try {
+        const res = await fetch('/api/media' + (folder ? ('?folder=' + encodeURIComponent(folder)) : ''));
+        midxLibData = await res.json();
+    } catch (e) { midxLibData = { folders: [], items: [], breadcrumb: [] }; }
+    const crumb = document.getElementById('midx-lib-crumb');
+    if (crumb) crumb.innerHTML = midxCrumbHtml(midxLibData) + ' — clique num arquivo para enviar nesta conversa.';
+    if (!grid) return;
+    const fh = (midxLibData.folders || []).map(function (f) {
+        return '<div class="midx-tile midx-tile--folder" onclick="midxLibNav(\'' + f.id + '\')">' +
+            '<i class="fa-solid fa-folder midx-tile-ic"></i><span class="midx-tile-name">' + escapeHtml(f.nome) + '</span></div>';
+    }).join('');
+    const ih = (midxLibData.items || []).map(function (i) {
+        const thumb = i.tipo === 'image'
+            ? '<img class="midx-tile-thumb" loading="lazy" src="' + (i.thumb_base64 ? ('data:image/jpeg;base64,' + i.thumb_base64) : ('/api/media/' + i.id + '/raw')) + '" alt="">'
+            : '<i class="fa-solid ' + (i.tipo === 'video' ? 'fa-film' : i.tipo === 'audio' ? 'fa-music' : 'fa-file-lines') + ' midx-tile-ic"></i>';
+        const leg = JSON.stringify(String(i.legenda_padrao || '')).replace(/"/g, '&quot;');
+        return '<div class="midx-tile" onclick="midxLibPick(\'' + i.id + '\', ' + leg + ')">' +
+            thumb + '<span class="midx-tile-name">' + escapeHtml(i.nome) + '</span></div>';
+    }).join('');
+    grid.innerHTML = (fh + ih) || '<div class="midx-empty"><i class="fa-solid fa-folder-open"></i><span>Vazio.</span></div>';
+}
+async function midxLibPick(id, legendaPadrao) {
+    const caption = await customPrompt('Legenda (opcional):', legendaPadrao || '', 'Enviar mídia');
+    if (caption === null) return;
+    const to = window.currentActiveChat && window.currentActiveChat.phone;
+    if (!to) return;
+    const msg = '[MEDIALIB:' + id + ']' + (caption.trim() ? ('[CAPTION:' + caption.trim() + ']') : '');
+    closeModals();
+    try {
+        const res = await fetch('/api/whatsapp/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: to, message: msg }) });
+        const j = await res.json().catch(function () { return {}; });
+        if (!res.ok || j.success === false) throw new Error(j.error || 'Falha no envio');
+        if (typeof openChat === 'function') openChat(to, window.currentActiveChat.name, true);
+    } catch (e) { showToast(e.message || 'Erro ao enviar.', 'danger'); }
+}

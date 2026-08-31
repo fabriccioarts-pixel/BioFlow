@@ -386,6 +386,15 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                 }
 
+                // Follow-up automático: o lead respondeu -> registra a última mensagem
+                // dele e interrompe qualquer sequência de lembretes em andamento.
+                try {
+                    if (resolvedLeadId) {
+                        await queryD1("UPDATE leads SET last_msg_at = ?, last_msg_direction = 'in' WHERE id = ?", [msgTimestamp, resolvedLeadId]);
+                        await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [resolvedLeadId]);
+                    }
+                } catch (e) { console.error('follow-up: hook de inbound falhou:', e.message); }
+
                 // Agente de IA de pré-qualificação — precisa de "await" aqui: na Vercel
                 // (serverless), a função é congelada assim que a resposta HTTP é
                 // enviada, então um "fire-and-forget" sem await nunca chegava a
@@ -580,7 +589,9 @@ async function uploadMediaToMeta(buffer, mimeType, fileName) {
 
 // 3. Send Message to WhatsApp (Suporta texto e mídias via Base64 do frontend)
 app.post('/api/whatsapp/send', async (req, res) => {
-    const { to, message, isTemplate, templateName, languageCode, templateParams, quoted_id, isReaction, reactionEmoji } = req.body;
+    const { to, isTemplate, templateName, languageCode, templateParams, quoted_id, isReaction, reactionEmoji } = req.body;
+    // mutável: resolvida abaixo se vier uma referência [MEDIALIB:id] da Biblioteca de Mídia
+    let message = req.body.message;
     // mutável: se a conversão pra voice note falhar, cai pra áudio comum
     let isVoiceRecording = req.body.isVoiceRecording;
 
@@ -597,6 +608,21 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
     try {
         let result;
+
+        // Referência à Biblioteca de Mídia: [MEDIALIB:<id>][CAPTION:...] → vira o
+        // formato padrão [FILE:nome]\n data:mime;base64,... e segue o caminho normal.
+        if (typeof message === 'string' && message.includes('[MEDIALIB:')) {
+            const mlMatch = message.match(/\[MEDIALIB:([^\]]+)\]/);
+            const capMatch = message.match(/\[CAPTION:(.*?)\]/s);
+            if (mlMatch) {
+                const mrows = await queryD1('SELECT nome, mime, data_base64, legenda_padrao FROM crm_media WHERE id = ?', [mlMatch[1]]);
+                if (!mrows || !mrows[0]) return res.status(404).json({ error: 'Mídia da biblioteca não encontrada.' });
+                const mr = mrows[0];
+                const cap = capMatch ? capMatch[1] : (mr.legenda_padrao || '');
+                message = `[FILE:${mr.nome || 'arquivo'}]\n${cap ? `[CAPTION:${cap}]\n` : ''}data:${mr.mime};base64,${mr.data_base64}`;
+            }
+        }
+
         let db_message_body = message;
 
         // Verificar se a mensagem é um arquivo de mídia (imagem, áudio, vídeo, etc.)
@@ -788,7 +814,9 @@ app.post('/api/whatsapp/send', async (req, res) => {
             try {
                 const variants = phoneVariants(to);
                 const placeholders = variants.map(() => '?').join(', ');
-                await queryD1(`UPDATE leads SET ai_enabled = 0 WHERE telefone IN (${placeholders})`, variants);
+                await queryD1(`UPDATE leads SET ai_enabled = 0, last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${placeholders})`, variants);
+                // Envio manual do atendente também interrompe follow-up automático em andamento.
+                await queryD1(`UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE status IN ('agendado','enviando') AND phone IN (${placeholders})`, variants);
             } catch (e) {
                 console.error('Erro ao desligar a IA após envio manual:', e);
             }
@@ -822,7 +850,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
 // Envio de texto simples reaproveitável pela rota HTTP e pela IA, sem duplicar
 // a lógica de mídia/template/reação de /api/whatsapp/send (que continua sendo
 // o único caminho pra esses casos, usados só pelo atendente humano no CRM).
-async function sendWhatsappTextInternal(to, text) {
+async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
     const phone_id = process.env.META_WA_PHONE_ID;
     const token = process.env.META_WA_ACCESS_TOKEN;
     if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
@@ -838,8 +866,12 @@ async function sendWhatsappTextInternal(to, text) {
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [msg_id, to, 'out', text, 'sent', 'ia']
+        [msg_id, to, 'out', text, 'sent', sentBy]
     );
+    try {
+        const v = phoneVariants(to);
+        await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+    } catch (e) {}
     return resultJson;
 }
 
@@ -1552,21 +1584,33 @@ app.get('/api/agenda', async (req, res) => {
     const endDate = req.query.end_date || startDate;
 
     const url = `https://amigobot-api.amigoapp.com.br/attendances?start_date=${startDate}&end_date=${endDate}&status=ALL`;
+    const headers = { 'Authorization': `Bearer ${AMIGO_API_TOKEN}` };
 
     try {
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${AMIGO_API_TOKEN}` }
-        });
-        
+        // Busca os agendamentos e, em paralelo, a lista de profissionais — assim a
+        // grade já monta todas as colunas mesmo nos dias em que alguém não tem
+        // nenhum agendamento (antes elas sumiam).
+        const [response, docsRes] = await Promise.all([
+            fetch(url, { method: 'GET', headers }),
+            fetch('https://amigobot-api.amigoapp.com.br/doctors', { headers }).catch(() => null)
+        ]);
+
         let realData = [];
         try { realData = await response.json(); } catch(e) {}
-        
+
         if (!response.ok) {
             throw new Error(realData.message || 'Erro ao consultar Amigo App');
         }
-        
-        res.status(200).json({ data: realData.data || realData });
+
+        let doctors = [];
+        try {
+            const dj = docsRes && docsRes.ok ? await docsRes.json() : null;
+            doctors = (dj && (dj.data || dj)) || [];
+            if (!Array.isArray(doctors)) doctors = [];
+            doctors = doctors.map(d => ({ id: d.id, name: d.name })).filter(d => d.id != null);
+        } catch (e) {}
+
+        res.status(200).json({ data: realData.data || realData, doctors });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Erro interno' });
@@ -1622,6 +1666,18 @@ queryD1("ALTER TABLE crm_notifications ADD COLUMN avatar_url TEXT").catch(() => 
 // pessoa de uma ação que ela mesma fez (ex.: "você entrou no sistema").
 queryD1("ALTER TABLE crm_notifications ADD COLUMN actor_username TEXT").catch(() => {});
 
+// Presença em conversa: quem está com a conversa de um lead ABERTA agora (só
+// visual — mostra o avatar do atendente no card do chat). Independente da trava
+// de atendimento (owner_id): aqui pode ter mais de uma pessoa e não reatribui
+// o lead. Uma linha por (lead, atendente); some sozinha quando o ping vence.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_chat_presence (
+    lead_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_ping_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (lead_id, username)
+)`).catch(() => {});
+
 // Fluxo de atendimento (nodes): definição do grafo + estado de execução por lead.
 queryD1(`CREATE TABLE IF NOT EXISTS crm_flows (
     id TEXT PRIMARY KEY,
@@ -1645,6 +1701,25 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_flow_runs (
     steps_done INTEGER DEFAULT 0,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
+
+// Follow-up automático: cadência global fica em crm_settings ('followup_config');
+// aqui só o estado de execução por lead. last_msg_* aceleram o "quem está aguardando".
+queryD1(`CREATE TABLE IF NOT EXISTS crm_followup_runs (
+    id TEXT PRIMARY KEY,
+    lead_id TEXT,
+    phone TEXT,
+    origem TEXT,
+    step_idx INTEGER DEFAULT 0,
+    status TEXT,
+    anchor_out_ts DATETIME,
+    last_inbound_ts DATETIME,
+    next_send_at DATETIME,
+    attempts INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+queryD1("ALTER TABLE leads ADD COLUMN last_msg_at DATETIME").catch(() => {});
+queryD1("ALTER TABLE leads ADD COLUMN last_msg_direction TEXT").catch(() => {});
 
 // Considera "online" quem mandou heartbeat nos últimos 90s
 const ONLINE_THRESHOLD_MS = 90 * 1000;
@@ -1854,6 +1929,55 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 )`).catch(() => {});
+
+// ==========================================
+// EMPRESAS / EMITENTES — dados que vão no cabeçalho do orçamento impresso
+// (e futuramente recibos/contratos). Substitui a chave única
+// crm_settings.'orcamento_empresa' por um cadastro com várias empresas, uma
+// marcada como padrão.
+// ==========================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_empresas (
+    id TEXT PRIMARY KEY,
+    razao_social TEXT NOT NULL,
+    nome_fantasia TEXT,
+    cnpj TEXT,
+    inscricao_estadual TEXT,
+    inscricao_municipal TEXT,
+    endereco TEXT,
+    telefone TEXT,
+    email TEXT,
+    site TEXT,
+    responsavel_tecnico TEXT,
+    dados_pagamento TEXT,
+    logo TEXT,
+    is_default INTEGER DEFAULT 0,
+    ativo INTEGER DEFAULT 1,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).then(async () => {
+    // Migração automática: se a tabela está vazia mas já existe a empresa única
+    // no formato antigo (crm_settings.orcamento_empresa), traz ela pra cá como a
+    // primeira empresa e marca como padrão — o impresso continua idêntico, sem
+    // nenhum passo manual.
+    try {
+        const existing = await queryD1('SELECT id FROM crm_empresas LIMIT 1');
+        if (!existing || existing.length === 0) {
+            const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'orcamento_empresa'");
+            let old = {};
+            if (rows && rows[0] && rows[0].value) { try { old = JSON.parse(rows[0].value) || {}; } catch (e) {} }
+            if (old.razao_social || old.cnpj || old.logo) {
+                await queryD1(
+                    `INSERT INTO crm_empresas (id, razao_social, cnpj, endereco, telefone, email, logo, is_default, ativo)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`,
+                    [`emp-${Date.now()}`, old.razao_social || 'Minha Empresa', old.cnpj || '', old.endereco || '',
+                     old.telefone || '', old.email || '', old.logo || '']
+                );
+            }
+        }
+    } catch (e) {
+        console.error('Erro ao migrar empresa padrão:', e);
+    }
+}).catch(() => {});
 
 // ==========================================
 // UNIDADES (multi-clínica) — cada unidade tem sua própria conta/token do Amigo,
@@ -2149,15 +2273,228 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
     }
 });
 
-// Dados da empresa que aparecem no cabeçalho do orçamento impresso.
+// ==========================================
+// EMPRESAS / EMITENTES — CRUD
+// Leitura: qualquer usuário logado (o atendente precisa escolher a empresa ao
+// imprimir um orçamento). Escrita: só admin, igual /api/unidades.
+// ==========================================
+const EMPRESA_LOGO_RE = /^data:image\/(png|jpeg|jpg|webp|svg\+xml);/i;
+
+// Normaliza o corpo da requisição num objeto de colunas de texto da crm_empresas.
+function empresaFieldsFromBody(b) {
+    const s = (v) => String(v || '').trim();
+    return {
+        razao_social: s(b.razao_social),
+        nome_fantasia: s(b.nome_fantasia),
+        cnpj: s(b.cnpj),
+        inscricao_estadual: s(b.inscricao_estadual),
+        inscricao_municipal: s(b.inscricao_municipal),
+        endereco: s(b.endereco),
+        telefone: s(b.telefone),
+        email: s(b.email),
+        site: s(b.site),
+        responsavel_tecnico: s(b.responsavel_tecnico),
+        dados_pagamento: s(b.dados_pagamento)
+    };
+}
+
+// Resolve a empresa que deve aparecer no orçamento de um lead:
+// a escolhida no lead -> a padrão -> a primeira ativa -> null.
+async function resolveEmpresaParaLead(empresaId) {
+    try {
+        if (empresaId) {
+            const rows = await queryD1('SELECT * FROM crm_empresas WHERE id = ? AND ativo = 1', [empresaId]);
+            if (rows && rows[0]) return rows[0];
+        }
+        const def = await queryD1('SELECT * FROM crm_empresas WHERE ativo = 1 ORDER BY is_default DESC, created_at ASC LIMIT 1');
+        return (def && def[0]) || null;
+    } catch (e) {
+        console.error('Erro ao resolver empresa do lead:', e);
+        return null;
+    }
+}
+
+app.get('/api/empresas', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT * FROM crm_empresas ORDER BY is_default DESC, created_at ASC');
+        res.json({ empresas: rows || [] });
+    } catch (e) {
+        console.error('Erro ao listar empresas:', e);
+        res.status(500).json({ error: 'Erro interno ao listar empresas.' });
+    }
+});
+
+app.post('/api/empresas', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem cadastrar empresas.' });
+    }
+    try {
+        const f = empresaFieldsFromBody(req.body || {});
+        if (!f.razao_social) return res.status(400).json({ error: 'Razão social é obrigatória.' });
+
+        let logo = '';
+        if (req.body.logo !== undefined && String(req.body.logo) !== '') {
+            logo = String(req.body.logo);
+            if (!EMPRESA_LOGO_RE.test(logo)) return res.status(400).json({ error: 'Formato de logo inválido.' });
+            if (logo.length > 700000) return res.status(413).json({ error: 'Logo muito pesada. Envie uma imagem menor.' });
+        }
+
+        // A primeira empresa cadastrada, ou um pedido explícito, vira a padrão.
+        const total = await queryD1('SELECT COUNT(*) as total FROM crm_empresas');
+        const makeDefault = (total?.[0]?.total || 0) === 0 || req.body.is_default === true || req.body.is_default === 1;
+
+        const id = `emp-${Date.now()}`;
+        if (makeDefault) await queryD1('UPDATE crm_empresas SET is_default = 0');
+
+        await queryD1(
+            `INSERT INTO crm_empresas
+             (id, razao_social, nome_fantasia, cnpj, inscricao_estadual, inscricao_municipal, endereco, telefone, email, site, responsavel_tecnico, dados_pagamento, logo, is_default, ativo, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+            [id, f.razao_social, f.nome_fantasia, f.cnpj, f.inscricao_estadual, f.inscricao_municipal, f.endereco,
+             f.telefone, f.email, f.site, f.responsavel_tecnico, f.dados_pagamento, logo, makeDefault ? 1 : 0,
+             req.user?.username || null]
+        );
+        res.status(201).json({ success: true, id });
+    } catch (e) {
+        console.error('Erro ao criar empresa:', e);
+        res.status(500).json({ error: 'Erro interno ao criar empresa.' });
+    }
+});
+
+app.put('/api/empresas/:id', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem editar empresas.' });
+    }
+    try {
+        const rows = await queryD1('SELECT id FROM crm_empresas WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+        const f = empresaFieldsFromBody(req.body || {});
+        if (!f.razao_social) return res.status(400).json({ error: 'Razão social é obrigatória.' });
+
+        const updates = [
+            'razao_social = ?', 'nome_fantasia = ?', 'cnpj = ?', 'inscricao_estadual = ?',
+            'inscricao_municipal = ?', 'endereco = ?', 'telefone = ?', 'email = ?', 'site = ?',
+            'responsavel_tecnico = ?', 'dados_pagamento = ?'
+        ];
+        const params = [
+            f.razao_social, f.nome_fantasia, f.cnpj, f.inscricao_estadual, f.inscricao_municipal,
+            f.endereco, f.telefone, f.email, f.site, f.responsavel_tecnico, f.dados_pagamento
+        ];
+
+        // logo: undefined = não mexeram; '' = remover; data URI = trocar.
+        if (req.body.logo !== undefined) {
+            const logo = String(req.body.logo || '');
+            if (logo === '') {
+                updates.push('logo = ?'); params.push('');
+            } else if (EMPRESA_LOGO_RE.test(logo)) {
+                if (logo.length > 700000) return res.status(413).json({ error: 'Logo muito pesada. Envie uma imagem menor.' });
+                updates.push('logo = ?'); params.push(logo);
+            } else {
+                return res.status(400).json({ error: 'Formato de logo inválido.' });
+            }
+        }
+
+        if (req.body.ativo !== undefined) {
+            updates.push('ativo = ?'); params.push(req.body.ativo ? 1 : 0);
+        }
+
+        params.push(req.params.id);
+        await queryD1(`UPDATE crm_empresas SET ${updates.join(', ')} WHERE id = ?`, params);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao editar empresa:', e);
+        res.status(500).json({ error: 'Erro interno ao editar empresa.' });
+    }
+});
+
+app.patch('/api/empresas/:id/default', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem definir a empresa padrão.' });
+    }
+    try {
+        const rows = await queryD1('SELECT id FROM crm_empresas WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).json({ error: 'Empresa não encontrada.' });
+        await queryD1('UPDATE crm_empresas SET is_default = 0');
+        await queryD1('UPDATE crm_empresas SET is_default = 1, ativo = 1 WHERE id = ?', [req.params.id]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao definir empresa padrão:', e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+app.delete('/api/empresas/:id', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem excluir empresas.' });
+    }
+    try {
+        const all = await queryD1('SELECT id, is_default FROM crm_empresas');
+        if ((all?.length || 0) <= 1) {
+            return res.status(400).json({ error: 'Não é possível excluir a única empresa cadastrada.' });
+        }
+        const alvo = all.find(e => e.id === req.params.id);
+        if (!alvo) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+        await queryD1('DELETE FROM crm_empresas WHERE id = ?', [req.params.id]);
+        // Leads que apontavam pra ela voltam a resolver pela padrão.
+        await queryD1('UPDATE leads SET empresa_id = NULL WHERE empresa_id = ?', [req.params.id]);
+
+        // Se apagou a padrão, promove a mais antiga ativa que sobrou.
+        if (alvo.is_default) {
+            const prox = await queryD1('SELECT id FROM crm_empresas WHERE ativo = 1 ORDER BY created_at ASC LIMIT 1');
+            if (prox && prox[0]) await queryD1('UPDATE crm_empresas SET is_default = 1 WHERE id = ?', [prox[0].id]);
+        }
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao excluir empresa:', e);
+        res.status(500).json({ error: 'Erro interno ao excluir empresa.' });
+    }
+});
+
+// Consulta pública de CNPJ (BrasilAPI) — pré-preenche o formulário de cadastro.
+// Falha graciosamente: se cair, o cadastro manual continua funcionando.
+app.get('/api/empresas/lookup-cnpj/:cnpj', async (req, res) => {
+    const digits = String(req.params.cnpj || '').replace(/\D/g, '');
+    if (digits.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' });
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!r.ok) {
+            return res.status(r.status === 404 ? 404 : 502)
+                .json({ error: r.status === 404 ? 'CNPJ não encontrado.' : 'Consulta indisponível agora.' });
+        }
+        const d = await r.json();
+        const endereco = [
+            [d.logradouro, d.numero].filter(Boolean).join(', '),
+            d.complemento, d.bairro,
+            [d.municipio, d.uf].filter(Boolean).join(' - '),
+            d.cep
+        ].filter(Boolean).join(', ');
+        res.json({
+            empresa: {
+                razao_social: d.razao_social || '',
+                nome_fantasia: d.nome_fantasia || '',
+                cnpj: digits,
+                endereco,
+                telefone: d.ddd_telefone_1 || '',
+                email: d.email || ''
+            }
+        });
+    } catch (e) {
+        console.error('Erro no lookup de CNPJ:', e.message);
+        res.status(502).json({ error: 'Consulta de CNPJ indisponível agora.' });
+    }
+});
+
+// --- Compat: endpoints antigos (formato de empresa única) apontam pra empresa
+// padrão do novo cadastro. Deprecados; o front novo usa /api/empresas. ---
 app.get('/api/settings/orcamento-empresa', async (req, res) => {
     try {
-        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'orcamento_empresa'");
-        let dados = {};
-        if (rows && rows[0] && rows[0].value) {
-            try { dados = JSON.parse(rows[0].value); } catch (e) {}
-        }
-        res.json({ empresa: dados || {} });
+        const emp = await resolveEmpresaParaLead(null);
+        res.json({ empresa: emp || {} });
     } catch (e) {
         console.error('Erro ao buscar dados da empresa:', e);
         res.status(500).json({ error: 'Erro interno.' });
@@ -2170,45 +2507,35 @@ app.put('/api/settings/orcamento-empresa', async (req, res) => {
     }
     try {
         const b = req.body || {};
+        const f = empresaFieldsFromBody(b);
 
-        // Preserva o que já estava salvo (ex.: a logo, que o cliente só reenvia se mudou).
-        let atual = {};
-        try {
-            const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'orcamento_empresa'");
-            if (rows && rows[0] && rows[0].value) atual = JSON.parse(rows[0].value) || {};
-        } catch (e) {}
-
-        const dados = {
-            razao_social: String(b.razao_social || '').trim(),
-            cnpj: String(b.cnpj || '').trim(),
-            endereco: String(b.endereco || '').trim(),
-            telefone: String(b.telefone || '').trim(),
-            email: String(b.email || '').trim(),
-            logo: atual.logo || ''
-        };
-
-        // logo: undefined = não mexeram; '' = remover; data URI = trocar.
+        let setLogo = false, logoParam = '';
         if (b.logo !== undefined) {
             const logo = String(b.logo || '');
-            if (logo === '') {
-                dados.logo = '';
-            } else if (/^data:image\/(png|jpeg|jpg|webp|svg\+xml);/i.test(logo)) {
-                if (logo.length > 700000) {
-                    return res.status(413).json({ error: 'Logo muito pesada. Envie uma imagem menor.' });
-                }
-                dados.logo = logo;
-            } else {
-                return res.status(400).json({ error: 'Formato de logo inválido.' });
-            }
+            if (logo === '') { setLogo = true; logoParam = ''; }
+            else if (EMPRESA_LOGO_RE.test(logo)) {
+                if (logo.length > 700000) return res.status(413).json({ error: 'Logo muito pesada. Envie uma imagem menor.' });
+                setLogo = true; logoParam = logo;
+            } else return res.status(400).json({ error: 'Formato de logo inválido.' });
         }
 
-        await queryD1(
-            "INSERT INTO crm_settings (key, value) VALUES ('orcamento_empresa', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [JSON.stringify(dados)]
-        );
-        res.json({ success: true, empresa: dados });
+        const def = await queryD1('SELECT * FROM crm_empresas WHERE ativo = 1 ORDER BY is_default DESC, created_at ASC LIMIT 1');
+        if (def && def[0]) {
+            const cols = ['razao_social = ?', 'cnpj = ?', 'endereco = ?', 'telefone = ?', 'email = ?'];
+            const ps = [f.razao_social || def[0].razao_social, f.cnpj, f.endereco, f.telefone, f.email];
+            if (setLogo) { cols.push('logo = ?'); ps.push(logoParam); }
+            ps.push(def[0].id);
+            await queryD1(`UPDATE crm_empresas SET ${cols.join(', ')} WHERE id = ?`, ps);
+        } else {
+            await queryD1(
+                `INSERT INTO crm_empresas (id, razao_social, cnpj, endereco, telefone, email, logo, is_default, ativo)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`,
+                [`emp-${Date.now()}`, f.razao_social || 'Minha Empresa', f.cnpj, f.endereco, f.telefone, f.email, setLogo ? logoParam : '']
+            );
+        }
+        res.json({ success: true });
     } catch (e) {
-        console.error('Erro ao salvar dados da empresa:', e);
+        console.error('Erro ao salvar dados da empresa (compat):', e);
         res.status(500).json({ error: 'Erro interno.' });
     }
 });
@@ -2303,6 +2630,9 @@ queryD1(`CREATE TABLE IF NOT EXISTS wa_dispatches (
 // lead_audiences, que ficou meses sem existir em produção por depender de
 // alguém chamar aquela rota manualmente.
 queryD1('ALTER TABLE leads ADD COLUMN ai_enabled INTEGER DEFAULT 1').catch(() => {});
+
+// Empresa/emitente escolhida pra este lead no orçamento impresso (cadastro crm_empresas).
+queryD1('ALTER TABLE leads ADD COLUMN empresa_id TEXT').catch(() => {});
 
 // Guarda qual atendente fechou (criou) o orçamento, pra aparecer no relatório de Histórico.
 queryD1('ALTER TABLE agendamentos_financeiro ADD COLUMN orcado_por TEXT').catch(() => {});
@@ -2438,6 +2768,169 @@ app.delete('/api/voice-library/:id', async (req, res) => {
     } catch (e) {
         console.error('Erro ao excluir áudio da biblioteca:', e);
         res.status(500).json({ error: 'Erro interno ao excluir áudio.' });
+    }
+});
+
+// ==========================================
+// BIBLIOTECA DE MÍDIA — pastas + arquivos (base64 no D1, mesmo padrão do voice)
+// ==========================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_media_folders (
+    id TEXT PRIMARY KEY,
+    nome TEXT NOT NULL,
+    parent_id TEXT,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+queryD1(`CREATE TABLE IF NOT EXISTS crm_media (
+    id TEXT PRIMARY KEY,
+    folder_id TEXT,
+    nome TEXT NOT NULL,
+    tipo TEXT,
+    mime TEXT,
+    tamanho_bytes INTEGER,
+    data_base64 TEXT NOT NULL,
+    thumb_base64 TEXT,
+    legenda_padrao TEXT,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+const MEDIA_MAX_BYTES = 4 * 1024 * 1024; // teto pra não estourar a linha do D1
+function mediaTipoFromMime(m) {
+    m = String(m || '');
+    if (m.startsWith('image/')) return 'image';
+    if (m.startsWith('video/')) return 'video';
+    if (m.startsWith('audio/')) return 'audio';
+    return 'document';
+}
+const MEDIA_LIST_COLS = 'id, folder_id, nome, tipo, mime, tamanho_bytes, thumb_base64, legenda_padrao, created_by, created_at';
+
+app.get('/api/media', async (req, res) => {
+    try {
+        const folder = req.query.folder || null;
+        const folders = await queryD1(
+            folder ? 'SELECT id, nome, parent_id, created_at FROM crm_media_folders WHERE parent_id = ? ORDER BY nome'
+                   : 'SELECT id, nome, parent_id, created_at FROM crm_media_folders WHERE parent_id IS NULL ORDER BY nome',
+            folder ? [folder] : []
+        );
+        const items = await queryD1(
+            folder ? `SELECT ${MEDIA_LIST_COLS} FROM crm_media WHERE folder_id = ? ORDER BY created_at DESC`
+                   : `SELECT ${MEDIA_LIST_COLS} FROM crm_media WHERE folder_id IS NULL ORDER BY created_at DESC`,
+            folder ? [folder] : []
+        );
+        let breadcrumb = [];
+        if (folder) {
+            const f = await queryD1('SELECT id, nome FROM crm_media_folders WHERE id = ?', [folder]);
+            if (f && f[0]) breadcrumb = [{ id: f[0].id, nome: f[0].nome }];
+        }
+        res.json({ folders: folders || [], items: items || [], breadcrumb });
+    } catch (e) {
+        console.error('Erro ao listar mídias:', e);
+        res.status(500).json({ error: 'Erro ao listar a biblioteca.' });
+    }
+});
+
+app.get('/api/media/:id/raw', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT data_base64, mime, nome FROM crm_media WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).send('Mídia não encontrada.');
+        res.set('Content-Type', rows[0].mime || 'application/octet-stream');
+        res.set('Content-Disposition', `inline; filename="${String(rows[0].nome || 'arquivo').replace(/["\r\n]/g, '')}"`);
+        res.send(Buffer.from(rows[0].data_base64, 'base64'));
+    } catch (e) {
+        console.error('Erro ao servir mídia:', e);
+        res.status(500).send('Erro interno.');
+    }
+});
+
+app.post('/api/media', async (req, res) => {
+    try {
+        const { nome, data, folder_id, legenda_padrao, thumb } = req.body;
+        const m = String(data || '').match(/^data:(.*?);base64,(.*)$/s);
+        if (!m) return res.status(400).json({ error: 'Arquivo inválido.' });
+        const mime = m[1].split(';')[0].trim();
+        const b64 = m[2];
+        const bytes = Buffer.byteLength(b64, 'base64');
+        if (bytes > MEDIA_MAX_BYTES) {
+            return res.status(413).json({ error: `Arquivo grande demais (${(bytes/1024/1024).toFixed(1)} MB). Máx ${MEDIA_MAX_BYTES/1024/1024} MB nesta versão.` });
+        }
+        const id = `media-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await queryD1(
+            `INSERT INTO crm_media (id, folder_id, nome, tipo, mime, tamanho_bytes, data_base64, thumb_base64, legenda_padrao, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, folder_id || null, (nome || 'arquivo').trim(), mediaTipoFromMime(mime), mime, bytes, b64, thumb || null, legenda_padrao || null, req.user?.username || null]
+        );
+        res.status(201).json({ success: true, id });
+    } catch (e) {
+        console.error('Erro ao salvar mídia:', e);
+        res.status(500).json({ error: e.message || 'Erro ao salvar o arquivo.' });
+    }
+});
+
+app.put('/api/media/:id', async (req, res) => {
+    try {
+        const cur = await queryD1('SELECT id FROM crm_media WHERE id = ?', [req.params.id]);
+        if (!cur || !cur[0]) return res.status(404).json({ error: 'Mídia não encontrada.' });
+        const sets = [], params = [];
+        if (req.body.nome !== undefined) { sets.push('nome = ?'); params.push(String(req.body.nome).trim() || 'arquivo'); }
+        if (req.body.folder_id !== undefined) { sets.push('folder_id = ?'); params.push(req.body.folder_id || null); }
+        if (req.body.legenda_padrao !== undefined) { sets.push('legenda_padrao = ?'); params.push(req.body.legenda_padrao || null); }
+        if (!sets.length) return res.json({ success: true });
+        params.push(req.params.id);
+        await queryD1(`UPDATE crm_media SET ${sets.join(', ')} WHERE id = ?`, params);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao atualizar mídia:', e);
+        res.status(500).json({ error: 'Erro ao atualizar.' });
+    }
+});
+
+app.delete('/api/media/:id', async (req, res) => {
+    try {
+        await queryD1('DELETE FROM crm_media WHERE id = ?', [req.params.id]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao excluir mídia:', e);
+        res.status(500).json({ error: 'Erro ao excluir.' });
+    }
+});
+
+app.post('/api/media/folders', async (req, res) => {
+    try {
+        const nome = (req.body.nome || '').trim();
+        if (!nome) return res.status(400).json({ error: 'Dê um nome à pasta.' });
+        const id = `fold-${Date.now()}`;
+        await queryD1('INSERT INTO crm_media_folders (id, nome, parent_id, created_by) VALUES (?, ?, ?, ?)',
+            [id, nome, req.body.parent_id || null, req.user?.username || null]);
+        res.status(201).json({ success: true, id, nome });
+    } catch (e) {
+        console.error('Erro ao criar pasta:', e);
+        res.status(500).json({ error: 'Erro ao criar a pasta.' });
+    }
+});
+
+app.put('/api/media/folders/:id', async (req, res) => {
+    try {
+        const nome = (req.body.nome || '').trim();
+        if (!nome) return res.status(400).json({ error: 'Nome inválido.' });
+        await queryD1('UPDATE crm_media_folders SET nome = ? WHERE id = ?', [nome, req.params.id]);
+        res.json({ success: true, nome });
+    } catch (e) {
+        console.error('Erro ao renomear pasta:', e);
+        res.status(500).json({ error: 'Erro ao renomear.' });
+    }
+});
+
+app.delete('/api/media/folders/:id', async (req, res) => {
+    try {
+        // conteúdo volta pra raiz e a pasta some (sem cascata destrutiva)
+        await queryD1('UPDATE crm_media SET folder_id = NULL WHERE folder_id = ?', [req.params.id]);
+        await queryD1('UPDATE crm_media_folders SET parent_id = NULL WHERE parent_id = ?', [req.params.id]);
+        await queryD1('DELETE FROM crm_media_folders WHERE id = ?', [req.params.id]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao excluir pasta:', e);
+        res.status(500).json({ error: 'Erro ao excluir a pasta.' });
     }
 });
 
@@ -3440,7 +3933,7 @@ app.post('/api/leads', async (req, res) => {
 // Atualizar dados de um lead (coluna e/ou notas)
 app.put('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
-    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco } = req.body;
+    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco, empresa_id } = req.body;
     try {
         const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [id]);
         const lead = leadRows && leadRows.length > 0 ? leadRows[0] : null;
@@ -3513,6 +4006,10 @@ app.put('/api/leads/:id', async (req, res) => {
         if (endereco !== undefined) {
             updates.push('endereco = ?');
             params.push((endereco || '').trim() || null);
+        }
+        if (empresa_id !== undefined) {
+            updates.push('empresa_id = ?');
+            params.push(empresa_id || null);
         }
 
         if (updates.length > 0) {
@@ -3748,6 +4245,71 @@ app.post('/api/leads/:id/release', async (req, res) => {
         res.json({ success: true });
     } catch (e) {
         console.error(e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+// ==== PRESENÇA EM CONVERSA (avatar do atendente no card do chat) ====
+// Só informativo. Não mexe em owner_id/assigned_at. Um atendente "está na
+// conversa" enquanto pinga; a presença vence sozinha após PRESENCE_TTL_SECONDS.
+const PRESENCE_TTL_SECONDS = 60;
+
+// Entrou na conversa / segue nela (ping a cada ~20s pelo front).
+app.post('/api/leads/:id/viewing', async (req, res) => {
+    const { id } = req.params;
+    const username = req.user.username;
+    try {
+        await queryD1(
+            `INSERT INTO crm_chat_presence (lead_id, username, entered_at, last_ping_at)
+             VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT(lead_id, username) DO UPDATE SET last_ping_at = CURRENT_TIMESTAMP`,
+            [id, username]
+        );
+        broadcastLeadsUpdate('presence', id);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao registrar presença na conversa:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+// Saiu da conversa (troca de conversa / fechou a aba — via sendBeacon).
+app.post('/api/leads/:id/leave', async (req, res) => {
+    const { id } = req.params;
+    const username = req.user.username;
+    try {
+        await queryD1('DELETE FROM crm_chat_presence WHERE lead_id = ? AND username = ?', [id, username]);
+        broadcastLeadsUpdate('presence', id);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Erro ao sair da presença da conversa:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+// Quem está em cada conversa agora. Ignora pings vencidos e faz uma faxina barata
+// das linhas bem antigas. Resposta: { "<leadId>": [{ username, display_name, avatar_url }] }
+app.get('/api/chat-presence', async (req, res) => {
+    try {
+        queryD1("DELETE FROM crm_chat_presence WHERE last_ping_at < datetime('now', '-1 hour')").catch(() => {});
+        const rows = await queryD1(
+            `SELECT p.lead_id, p.username, u.display_name, u.avatar_url
+             FROM crm_chat_presence p
+             LEFT JOIN crm_users u ON u.username = p.username
+             WHERE p.last_ping_at > datetime('now', '-${PRESENCE_TTL_SECONDS} seconds')
+             ORDER BY p.entered_at ASC`
+        );
+        const map = {};
+        (rows || []).forEach(r => {
+            (map[r.lead_id] = map[r.lead_id] || []).push({
+                username: r.username,
+                display_name: r.display_name || r.username,
+                avatar_url: r.avatar_url || null
+            });
+        });
+        res.json(map);
+    } catch (e) {
+        console.error('Erro ao listar presença nas conversas:', e);
         res.status(500).json({ error: 'Erro interno do servidor.' });
     }
 });
@@ -5169,7 +5731,7 @@ async function flowExecNode(node, run, ctx, opts) {
         case 'enviar_texto': {
             const texto = flowInterpolate(cfg.texto, ctx);
             logAcao({ texto });
-            if (!sim && texto.trim()) await sendWhatsappTextInternal(run.phone, texto);
+            if (!sim && texto.trim()) await sendWhatsappTextInternal(run.phone, texto, 'fluxo');
             return { go: node.next || null };
         }
         case 'aguardar_resposta': {
@@ -5356,7 +5918,8 @@ async function flowDispatchInbound(leadId, phone, msgBody) {
     const prior = await queryD1("SELECT id FROM crm_flow_runs WHERE flow_id = ? AND lead_id = ? AND status != 'failed' LIMIT 1", [trig.flow.id, leadId]);
     if (prior && prior[0]) return false;
 
-    const startNode = trig.graph.nodes[0];
+    const startNode = trig.graph.nodes.find(n => n.id === trig.graph.start) || trig.graph.nodes[0];
+    if (!startNode) return false;
     const runId = 'fr-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const ctx = { nome: lead.nome || '', telefone: lead.telefone || '', ultima_resposta: msgBody, gatilho_msg: msgBody };
     await queryD1(
@@ -5446,7 +6009,7 @@ app.post('/api/flows/simulate', async (req, res) => {
         const log = [];
         const ctx = { nome: req.body.nome || 'Paciente Teste', telefone: '5561999990000', ultima_resposta: messages[0] || '', gatilho_msg: messages[0] || '' };
         const fakeRun = { id: 'sim', lead_id: 'sim', phone: 'sim', steps_done: 0 };
-        let startId = graph.nodes[0].id;
+        let startId = (graph.nodes.find(n => n.id === graph.start) || graph.nodes[0]).id;
         let msgIdx = 0;
         let guard = 0;
         while (startId && guard++ < 80) {
@@ -5497,8 +6060,258 @@ app.all('/api/flow-tick', async (req, res) => {
             await flowRun(run, graph, ctx, {});
             processed++;
         }
-        res.json({ processed });
+
+        let followup = { opened: 0, processed: 0 };
+        try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
+
+        res.json({ processed, followup });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ==========================================
+// FOLLOW-UP AUTOMÁTICO (Fase 1 — cadência global)
+// ==========================================
+// Quando um lead para de responder (última mensagem da conversa foi nossa),
+// envia lembretes numa cadência configurável e para assim que ele responder.
+// Fase 1: só texto livre dentro da janela de 24h do WhatsApp; passos fora da
+// janela são pulados (templates ficam pra Fase 2).
+
+const FOLLOWUP_DEFAULT = {
+    ativo: false,
+    steps: [
+        { atraso_min: 180,  texto: 'Oi {{nome}}, você chegou a ver minha última mensagem? Consigo te ajudar por aqui 🙂', template_name: '', so_horario_comercial: true },
+        { atraso_min: 1440, texto: '{{nome}}, ainda tem interesse? Se quiser, me diz o melhor horário que eu retomo com você.', template_name: '', so_horario_comercial: true },
+        { atraso_min: 4320, texto: 'Vou encerrar seu atendimento por aqui por enquanto, mas é só me chamar quando precisar. Um abraço!', template_name: '', so_horario_comercial: true },
+    ],
+    aplicar_colunas: [],
+    parar_em_colunas: ['col-ganho'],
+    quiet_start: '20:00',
+    quiet_end: '08:00',
+    dias_semana: [1, 2, 3, 4, 5, 6],
+    acao_final: 'nada',            // 'nada' | 'mover:col-perdido' | 'tag:sem-resposta'
+    aplicar_com_humano: true,
+    max_por_tick: 25,
+};
+
+async function followupGetConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'followup_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, FOLLOWUP_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return Object.assign({}, FOLLOWUP_DEFAULT);
+}
+
+function followupParseTs(ts) {
+    if (!ts) return null;
+    const s = String(ts).includes('T') ? String(ts) : String(ts).replace(' ', 'T') + 'Z';
+    const d = new Date(s);
+    return isNaN(d) ? null : d;
+}
+function followupInBlockedTime(cfg, date) {
+    let sp;
+    try { sp = new Date(date.toLocaleString('en-US', { timeZone: cfg.timezone || 'America/Sao_Paulo' })); }
+    catch (e) { sp = date; }
+    const dow = sp.getDay();
+    if (Array.isArray(cfg.dias_semana) && cfg.dias_semana.length && !cfg.dias_semana.includes(dow)) return true;
+    const toMin = (str) => { const [h, m] = String(str || '').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+    const qs = toMin(cfg.quiet_start), qe = toMin(cfg.quiet_end);
+    if (qs === qe) return false;
+    const hm = sp.getHours() * 60 + sp.getMinutes();
+    return qs < qe ? (hm >= qs && hm < qe) : (hm >= qs || hm < qe);
+}
+function followupNextAllowed(cfg, fromDate) {
+    let d = new Date(fromDate.getTime());
+    for (let i = 0; i < 8 * 48; i++) {
+        if (!followupInBlockedTime(cfg, d)) return d;
+        d = new Date(d.getTime() + 30 * 60000);
+    }
+    return d;
+}
+function followupAtSql(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
+
+async function followupApplyFinal(cfg, lead) {
+    try {
+        if (cfg.acao_final === 'mover:col-perdido') {
+            await queryD1("UPDATE leads SET column_id = 'col-perdido' WHERE id = ?", [lead.id]);
+        } else if (cfg.acao_final === 'tag:sem-resposta') {
+            const cur = lead.tags ? String(lead.tags).split(',').map(s => s.trim()).filter(Boolean) : [];
+            if (!cur.includes('sem-resposta')) {
+                cur.push('sem-resposta');
+                await queryD1("UPDATE leads SET tags = ? WHERE id = ?", [cur.join(','), lead.id]);
+            }
+        }
+    } catch (e) { console.error('follow-up: ação final falhou:', e.message); }
+}
+
+async function followupTick() {
+    const cfg = await followupGetConfig();
+    let opened = 0, processed = 0;
+    // 'col-ganho' (lead fechado) sempre para; o resto é escolha do admin.
+    const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho']);
+
+    // ---- Estágio A: abrir execuções novas (só cadência global, só se ativa) ----
+    if (cfg.ativo && Array.isArray(cfg.steps) && cfg.steps.length) {
+        const firstDelay = cfg.steps[0].atraso_min || 60;
+        const cutoffDelay = flowDbTime(-firstDelay * 60000);
+        const cutoffOld = flowDbTime(-30 * 86400000);
+        const cand = await queryD1(
+            `SELECT id, nome, telefone, tags, column_id, ai_enabled, campaign_opt_out, last_msg_at
+             FROM leads
+             WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
+               AND last_msg_at <= ? AND last_msg_at >= ?
+               AND (campaign_opt_out IS NULL OR campaign_opt_out = 0)
+             LIMIT 200`, [cutoffDelay, cutoffOld]);
+        for (const lead of (cand || [])) {
+            try {
+                if (termCols.includes(lead.column_id)) continue;
+                if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) continue;
+                if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) continue;
+
+                const open = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND status IN ('agendado','enviando') LIMIT 1", [lead.id]);
+                if (open && open[0]) continue;
+                const sameAnchor = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND anchor_out_ts = ? LIMIT 1", [lead.id, lead.last_msg_at]);
+                if (sameAnchor && sameAnchor[0]) continue;
+
+                const vph = phoneVariants(lead.telefone || '');
+                const vp = vph.map(() => '?').join(', ');
+                const flowWaiting = await queryD1(`SELECT id FROM crm_flow_runs WHERE status = 'waiting_reply' AND phone IN (${vp}) LIMIT 1`, vph);
+                if (flowWaiting && flowWaiting[0]) continue;
+                const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
+
+                const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+                await queryD1(
+                    'INSERT INTO crm_followup_runs (id, lead_id, phone, origem, step_idx, status, anchor_out_ts, last_inbound_ts, next_send_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
+                    [runId, lead.id, lead.telefone || '', 'global', 'agendado', lead.last_msg_at, (lastIn && lastIn[0] && lastIn[0].timestamp) || null, flowDbTime()]);
+                opened++;
+            } catch (e) { console.error('follow-up: abertura falhou:', e.message); }
+        }
+    }
+
+    // ---- Estágio B: processar execuções agendadas ----
+    const lim = Math.min(100, Math.max(1, parseInt(cfg.max_por_tick, 10) || 25));
+    const runs = await queryD1(
+        `SELECT * FROM crm_followup_runs WHERE status = 'agendado' AND next_send_at IS NOT NULL AND next_send_at <= ? ORDER BY next_send_at ASC LIMIT ${lim}`,
+        [flowDbTime()]);
+
+    for (const run of (runs || [])) {
+        try {
+            const lr = await queryD1('SELECT * FROM leads WHERE id = ?', [run.lead_id]);
+            const lead = lr && lr[0];
+            if (!lead) { await queryD1("UPDATE crm_followup_runs SET status = 'parado' WHERE id = ?", [run.id]); continue; }
+            const vph = phoneVariants(run.phone || lead.telefone || '');
+            const vp = vph.map(() => '?').join(', ');
+
+            // parada: o lead respondeu depois da âncora
+            const inAfter = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) AND timestamp > ? LIMIT 1`, [...vph, run.anchor_out_ts]);
+            if (inAfter && inAfter[0]) { await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
+            if (Number(lead.campaign_opt_out) === 1) { await queryD1("UPDATE crm_followup_runs SET status = 'opt_out', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
+            if (termCols.includes(lead.column_id) || (run.origem === 'global' && !cfg.ativo)) { await queryD1("UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
+
+            const steps = Array.isArray(cfg.steps) ? cfg.steps : [];
+            if (run.step_idx >= steps.length) {
+                await followupApplyFinal(cfg, lead);
+                await queryD1("UPDATE crm_followup_runs SET status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]);
+                processed++; continue;
+            }
+            const step = steps[run.step_idx];
+
+            if (step.so_horario_comercial && followupInBlockedTime(cfg, new Date())) {
+                const nv = followupNextAllowed(cfg, new Date());
+                await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [followupAtSql(nv), run.id]);
+                continue;
+            }
+
+            const lastInRow = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
+            const lastInTs = (lastInRow && lastInRow[0] && lastInRow[0].timestamp) || run.last_inbound_ts;
+            const lastInDate = followupParseTs(lastInTs);
+            const within24 = lastInDate ? (Date.now() - lastInDate.getTime()) < 24 * 3600000 : false;
+
+            const texto = flowInterpolate(step.texto, { nome: lead.nome || '', telefone: lead.telefone || '' });
+            if (within24 && texto.trim()) {
+                try { await sendWhatsappTextInternal(lead.telefone, texto, 'followup'); }
+                catch (e) { console.error('follow-up: envio falhou:', e.message); }
+            }
+            // fora da janela (ou passo sem texto): pulado — templates ficam pra Fase 2.
+
+            const nextIdx = run.step_idx + 1;
+            const anchor = followupParseTs(run.anchor_out_ts) || new Date();
+            if (nextIdx < steps.length) {
+                const nextAt = new Date(anchor.getTime() + (steps[nextIdx].atraso_min || 60) * 60000);
+                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, followupAtSql(nextAt), run.id]);
+            } else {
+                await followupApplyFinal(cfg, lead);
+                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, run.id]);
+            }
+            processed++;
+        } catch (e) { console.error('follow-up: run erro:', e.message); }
+    }
+
+    return { opened, processed };
+}
+
+app.get('/api/followup/config', async (req, res) => {
+    try { res.json({ config: await followupGetConfig() }); }
+    catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/followup/config', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const b = req.body || {};
+        const clean = {
+            ativo: !!b.ativo,
+            steps: (Array.isArray(b.steps) ? b.steps : []).slice(0, 10).map(s => ({
+                atraso_min: Math.max(1, parseInt(s.atraso_min, 10) || 60),
+                texto: String(s.texto || '').slice(0, 2000),
+                template_name: String(s.template_name || '').trim().slice(0, 120),
+                so_horario_comercial: !!s.so_horario_comercial,
+            })),
+            aplicar_colunas: Array.isArray(b.aplicar_colunas) ? b.aplicar_colunas.map(String) : [],
+            parar_em_colunas: Array.isArray(b.parar_em_colunas) ? b.parar_em_colunas.map(String) : ['col-ganho'],
+            quiet_start: String(b.quiet_start || '20:00').slice(0, 5),
+            quiet_end: String(b.quiet_end || '08:00').slice(0, 5),
+            dias_semana: Array.isArray(b.dias_semana) ? b.dias_semana.map(n => parseInt(n, 10)).filter(n => n >= 0 && n <= 6) : [1, 2, 3, 4, 5, 6],
+            acao_final: ['nada', 'mover:col-perdido', 'tag:sem-resposta'].includes(b.acao_final) ? b.acao_final : 'nada',
+            aplicar_com_humano: b.aplicar_com_humano !== false,
+            max_por_tick: Math.min(100, Math.max(1, parseInt(b.max_por_tick, 10) || 25)),
+        };
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('followup_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        res.json({ success: true, config: clean });
+    } catch (e) { console.error('Erro ao salvar config de follow-up:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.get('/api/leads/:id/followup', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT * FROM crm_followup_runs WHERE lead_id = ? ORDER BY updated_at DESC LIMIT 1", [req.params.id]);
+        res.json({ run: (rows && rows[0]) || null });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.post('/api/leads/:id/followup/stop', async (req, res) => {
+    try {
+        await queryD1("UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [req.params.id]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.post('/api/leads/:id/followup/start', async (req, res) => {
+    try {
+        const lr = await queryD1('SELECT * FROM leads WHERE id = ?', [req.params.id]);
+        const lead = lr && lr[0];
+        if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+        const open = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND status IN ('agendado','enviando') LIMIT 1", [lead.id]);
+        if (open && open[0]) return res.json({ success: true, already: true });
+        const vph = phoneVariants(lead.telefone || '');
+        const vp = vph.map(() => '?').join(', ');
+        const lastOut = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'out' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
+        const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
+        const anchor = (lastOut && lastOut[0] && lastOut[0].timestamp) || flowDbTime();
+        const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        await queryD1(
+            'INSERT INTO crm_followup_runs (id, lead_id, phone, origem, step_idx, status, anchor_out_ts, last_inbound_ts, next_send_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
+            [runId, lead.id, lead.telefone || '', 'manual:' + ((req.user && req.user.username) || '?'), 'agendado', anchor, (lastIn && lastIn[0] && lastIn[0].timestamp) || null, flowDbTime()]);
+        res.json({ success: true, id: runId });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 // Iniciar Servidor (Sempre roda localmente, exceto na Vercel)
