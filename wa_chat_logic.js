@@ -1352,9 +1352,12 @@ document.addEventListener('click', (e) => {
     }
 });
 
+let hasLoadedChatsOnce = false;
+
 // Reaplica busca por texto + filtro de categoria ativos — usar sempre no lugar de
 // renderContactsList(allChatsList) direto, senão o filtro ativo é perdido no re-render.
 function reapplyChatFilters() {
+    if (!hasLoadedChatsOnce) return;
     const searchInput = document.getElementById('chat-search-input');
     filterChatContacts(searchInput ? searchInput.value : '');
 }
@@ -1790,6 +1793,7 @@ async function loadChats(silent = false) {
             }
 
             allChatsList = newChats;
+            hasLoadedChatsOnce = true;
             reapplyChatFilters();
         }
     } catch(e) {
