@@ -17,8 +17,8 @@
     <link rel="icon" type="image/svg+xml" href="Favicon.svg">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
-        .sb-logo-full { height: 20px; width: auto; max-width: 150px; object-fit: contain; display: block; flex-shrink: 0; }
-        .sb-logo-mark { height: 26px; width: 26px; object-fit: contain; display: none; flex-shrink: 0; }
+        .sb-logo-full { height: 26px; width: auto; max-width: 190px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-mark { height: 28px; width: 28px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
 
@@ -33,6 +33,187 @@
         }
         .kanban-filters .kf-daterange > div input[type="date"] {
             height: 100%;
+        }
+
+        /* Orçamento — bloco "Dados do paciente" + busca */
+        #modalOrcamento .orcx-patient {
+            padding: 0.85rem;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.08));
+            border-radius: 12px;
+            background: var(--bg-dark, rgba(0,0,0,0.15));
+            display: flex;
+            flex-direction: column;
+            gap: 0.7rem;
+        }
+        #modalOrcamento .orcx-empresa-btn {
+            margin-left: auto;
+            align-self: flex-start;
+            width: 34px;
+            height: 34px;
+            flex-shrink: 0;
+            border-radius: 9px;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            background: transparent;
+            color: var(--text-muted, #999);
+            cursor: pointer;
+            transition: background 0.14s, color 0.14s;
+        }
+        #modalOrcamento .orcx-empresa-btn:hover {
+            background: var(--accent-primary, #c8a04a);
+            color: #fff;
+        }
+        #modalOrcamento #orc-pac-dropdown {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            z-index: 40;
+            max-height: 240px;
+            overflow-y: auto;
+            padding: 0.3rem;
+            background: var(--bg-dark, #1c1c1c);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 10px;
+            box-shadow: 0 18px 38px -14px rgba(0, 0, 0, 0.55);
+        }
+        #modalOrcamento #orc-pac-dropdown .ag-dropdown-item {
+            padding: 0.5rem 0.6rem;
+            font-size: 0.83rem;
+            color: var(--text-main, #eee);
+            border: 0;
+            border-radius: 7px;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        #modalOrcamento #orc-pac-dropdown .ag-dropdown-item:hover {
+            background: var(--accent-primary-soft, rgba(200,160,74,0.16));
+        }
+
+        #modalOrcamento .orc-pac-status {
+            font-size: 0.72rem;
+            font-weight: 500;
+            margin-left: 0.5rem;
+            letter-spacing: 0.02em;
+            text-transform: none;
+        }
+        #modalOrcamento .orc-pac-status[data-s="dirty"] { color: #d9a441; }
+        #modalOrcamento .orc-pac-status[data-s="saving"] { color: var(--text-muted, #999); }
+        #modalOrcamento .orc-pac-status[data-s="saved"] { color: #4caf7d; }
+
+        /* Dados da Empresa — seletor de logo */
+        #modalOrcamentoEmpresa .emp-logo-row {
+            display: flex;
+            gap: 0.9rem;
+            align-items: flex-start;
+        }
+        #modalOrcamentoEmpresa .emp-logo-preview {
+            width: 96px;
+            height: 96px;
+            flex-shrink: 0;
+            border-radius: 10px;
+            border: 1px dashed var(--border-color, rgba(255,255,255,0.18));
+            background: var(--bg-dark, rgba(0,0,0,0.15));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted, #888);
+            font-size: 1.4rem;
+            overflow: hidden;
+        }
+        #modalOrcamentoEmpresa .emp-logo-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        #modalOrcamentoEmpresa .emp-logo-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            align-items: flex-start;
+        }
+        #modalOrcamentoEmpresa .emp-logo-actions .aix-hint {
+            font-size: 0.72rem;
+            color: var(--text-muted, #888);
+            line-height: 1.35;
+        }
+
+        /* ===== FLUXOS DE ATENDIMENTO ===== */
+        #view-fluxos { flex-direction: column; padding: 1.25rem clamp(1rem, 4vw, 2rem); overflow-y: auto; }
+        .fx-wrap { display: flex; gap: 1.25rem; align-items: flex-start; max-width: 1200px; width: 100%; }
+        .fx-sidebar { width: 280px; flex-shrink: 0; position: sticky; top: 0; }
+        .fx-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+        .fx-sidebar-head h2 { font-size: 1.05rem; margin: 0; }
+        .fx-hint { font-size: 0.76rem; color: var(--text-muted); margin: 0 0 0.85rem; line-height: 1.4; }
+        #fx-list { display: flex; flex-direction: column; gap: 0.35rem; }
+        .fx-list-empty { font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 0; }
+        .fx-list-item {
+            display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left;
+            padding: 0.55rem 0.7rem; border: 1px solid var(--border-color); border-radius: var(--radius);
+            background: var(--bg-card); color: var(--text-main); cursor: pointer; font-size: 0.85rem;
+            transition: border-color 0.12s, background 0.12s;
+        }
+        .fx-list-item:hover { border-color: var(--text-muted); }
+        .fx-list-item.is-active { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+        .fx-list-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); opacity: 0.4; flex-shrink: 0; }
+        .fx-dot.on { background: #22c55e; opacity: 1; }
+        .fx-badge { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #22c55e; }
+
+        .fx-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+        .fx-empty {
+            display: flex; flex-direction: column; align-items: center; gap: 0.6rem; padding: 4rem 1rem;
+            color: var(--text-muted); font-size: 0.9rem; border: 1px dashed var(--border-color); border-radius: var(--radius);
+        }
+        .fx-empty i { font-size: 1.8rem; opacity: 0.5; }
+        .fx-editor-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .fx-name-input {
+            flex: 1; min-width: 180px; font-size: 1rem; font-weight: 600; padding: 0.5rem 0.7rem;
+            border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-card); color: var(--text-main);
+        }
+        .fx-editor-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+        .fx-switch { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+
+        .fx-block { border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-card); padding: 1rem 1.15rem; }
+        .fx-block-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.85rem; display: flex; align-items: center; gap: 0.4rem; }
+        .fx-block label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.7rem; }
+        .fx-block label:last-child { margin-bottom: 0; }
+        .fx-block input[type="text"], .fx-block input[type="number"], .fx-block select, .fx-block textarea {
+            display: block; width: 100%; margin-top: 0.3rem; padding: 0.45rem 0.6rem; font: inherit; font-size: 0.85rem;
+            border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-main); color: var(--text-main); box-sizing: border-box;
+        }
+        .fx-block textarea { resize: vertical; }
+        .fx-mini { font-size: 0.7rem; font-weight: 400; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+        .fx-row { display: flex; gap: 0.75rem; }
+        .fx-row > label { flex: 1; }
+
+        .fx-node { border: 1px solid var(--border-color); border-radius: 9px; margin-bottom: 0.7rem; overflow: hidden; }
+        .fx-node-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.6rem; background: var(--bg-main); border-bottom: 1px solid var(--border-color); }
+        .fx-node-id { font-size: 0.72rem; font-weight: 700; color: var(--accent-primary); min-width: 26px; }
+        .fx-node-type { flex: 1; margin-top: 0 !important; }
+        .fx-node-move { display: flex; gap: 0.15rem; }
+        .fx-node-move button {
+            width: 26px; height: 26px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card);
+            color: var(--text-muted); cursor: pointer; font-size: 0.72rem; display: inline-flex; align-items: center; justify-content: center;
+        }
+        .fx-node-move button:hover { color: var(--text-main); }
+        .fx-node-del:hover { color: #ef4444 !important; border-color: #ef4444 !important; }
+        .fx-node-body { padding: 0.8rem 0.7rem; }
+        .fx-node-end { padding: 0.2rem 0; }
+        .fx-add-btn {
+            width: 100%; padding: 0.55rem; border: 1px dashed var(--border-color); border-radius: 8px; background: transparent;
+            color: var(--text-muted); cursor: pointer; font-size: 0.82rem; font-weight: 600;
+        }
+        .fx-add-btn:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
+
+        .fx-sim-log { margin-top: 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; }
+        .fx-sim-line { padding: 0.3rem 0.5rem; border-radius: 6px; background: var(--bg-main); }
+        .fx-sim-line b { color: var(--accent-primary); }
+        .fx-sim-info { color: var(--text-muted); background: transparent; font-style: italic; }
+        .fx-sim-err { color: #ef4444; }
+        #view-fluxos #fx-sim-input { width: 100%; }
+        @media (max-width: 820px) {
+            .fx-wrap { flex-direction: column; }
+            .fx-sidebar { width: 100%; position: static; }
         }
     </style>
 </head>
@@ -144,6 +325,9 @@
             </button>
             <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard" title="Dashboard">
                 <i class="fa-solid fa-chart-line"></i> Dashboard
+            </button>
+            <button class="tab-btn" onclick="switchTab('fluxos')" id="tab-fluxos" title="Fluxos automáticos de atendimento no WhatsApp">
+                <i class="fa-solid fa-diagram-project"></i> Fluxos
             </button>
             <div class="dropdown" onmouseenter="openCampanhasFlyout()" onmouseleave="scheduleCloseCampanhasFlyout()">
                 <button class="tab-btn" id="tab-campanhas-main">
@@ -469,12 +653,12 @@
                     title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
             </div>
 
-            <!-- Coluna: Perdido -->
+            <!-- Coluna: Follow Up -->
             <div class="column col-perdido">
                 <div class="column-header">
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <div class="column-title">
-                            <i class="fa-solid fa-xmark" style="color: #f87171;"></i> Perdido
+                            <i class="fa-solid fa-arrow-rotate-left" style="color: #fb923c;"></i> Follow Up
                         </div>
                     </div>
                     <div class="column-stats" id="stats-perdido">
@@ -542,7 +726,7 @@
                             <option value="col-orcado">Orçado</option>
                             <option value="col-agendado">Agendado</option>
                             <option value="col-ganho">Ganho</option>
-                            <option value="col-perdido">Perdido</option>
+                            <option value="col-perdido">Follow Up</option>
                             <option value="all">⚠️ Todos os Leads (Cuidado)</option>
                             <optgroup label="Públicos Salvos" id="campaign-audience-optgroup"></optgroup>
                         </select>
@@ -1007,6 +1191,25 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div id="dash-tempo-resposta" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">--</div>
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">1ª Resposta</div>
             </div>
+            <div class="dash-kpi-card"
+                style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(167,139,250,0.14); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;"><i class="fa-solid fa-gem"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--text-muted); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;" title="Não muda com o período — é o valor acumulado por paciente ao longo de todo o histórico.">histórico</span>
+                </div>
+                <div id="dash-ltv-medio" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">R$ 0,00</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">LTV médio / paciente</div>
+                <div id="dash-ltv-pacientes" style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.75; margin-top: 0.15rem;">0 pacientes</div>
+            </div>
+            <div class="dash-kpi-card"
+                style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
+                    <div style="background: rgba(52,211,153,0.14); border-radius: 10px; padding: 0.6rem; color: #34d399; font-size: 1.1rem;"><i class="fa-solid fa-repeat"></i></div>
+                    <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--text-muted); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;">recorrência</span>
+                </div>
+                <div id="dash-compras-paciente" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">0,0×</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem; font-weight: 500;">Compras / paciente</div>
+            </div>
         </div>
 
         <!-- Meta de Receita -->
@@ -1210,8 +1413,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div>
                     <h2>Agente de IA</h2>
                     <p class="aix-sub">Controla, para todo o sistema, se a IA responde automaticamente as novas mensagens
-                        no WhatsApp (leads em Entrada / Contatado). Cada conversa também tem seu próprio interruptor no
-                        painel do chat.</p>
+                        no WhatsApp (leads em Entrada / Contatado) e como ela conduz a conversa. Cada conversa também tem
+                        seu próprio interruptor no painel do chat.</p>
                 </div>
             </div>
 
@@ -1223,10 +1426,22 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <span class="ui-switch-track"></span>
                         </span>
                         <span>
-                            <span class="aix-toggle-text">IA de pré-qualificação ativa</span>
+                            <span class="aix-toggle-text">Agente de IA ativo</span>
                             <span class="aix-toggle-sub">Respostas automáticas para leads em Entrada e Contatado.</span>
                         </span>
                     </label>
+                </div>
+
+                <div class="aix-block">
+                    <div class="aix-block-label">Modo do agente</div>
+                    <p class="aix-block-help">Como a IA conduz a conversa antes de passar para um atendente.</p>
+                    <div class="aix-chips" id="whatsapp-ai-mode-chips">
+                        <button type="button" class="aix-chip" data-mode="qualificacao"
+                            onclick="setAiMode(this)">Qualificação</button>
+                        <button type="button" class="aix-chip" data-mode="vendas" onclick="setAiMode(this)">Vendas</button>
+                    </div>
+                    <input type="hidden" id="whatsapp-ai-mode" value="qualificacao">
+                    <p class="aix-block-help" id="whatsapp-ai-mode-desc" style="margin-top: 0.5rem;"></p>
                 </div>
 
                 <div class="aix-block">
@@ -1252,8 +1467,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <textarea id="whatsapp-ai-context-textarea" spellcheck="false"></textarea>
                     <div class="aix-note">
                         <i class="fa-solid fa-lock"></i>
-                        <span>Regra fixa, sempre aplicada: a IA nunca fala de preço e passa a conversa para um atendente
-                            no momento certo — independentemente do que estiver escrito acima.</span>
+                        <span>Regra fixa, sempre aplicada: a IA nunca inventa preço e passa a conversa para um atendente no
+                            momento certo (no modo Vendas, ao aceitar agendar) — independentemente do que estiver escrito
+                            acima.</span>
                     </div>
                 </div>
             </div>
@@ -1932,6 +2148,23 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
         </div>
     </main>
+
+    <!-- ABA: FLUXOS DE ATENDIMENTO (automação com nodes) -->
+    <div class="view-section" id="view-fluxos" style="display: none;">
+        <div class="fx-wrap">
+            <aside class="fx-sidebar">
+                <div class="fx-sidebar-head">
+                    <h2>Fluxos de atendimento</h2>
+                    <button class="btn-save" onclick="flowNew()"><i class="fa-solid fa-plus"></i> Novo</button>
+                </div>
+                <p class="fx-hint">Sequências automáticas que respondem o lead no WhatsApp <b>antes</b> do agente de IA.</p>
+                <div id="fx-list"></div>
+            </aside>
+            <section class="fx-editor" id="fx-editor">
+                <div class="fx-empty"><i class="fa-solid fa-diagram-project"></i><span>Selecione um fluxo à esquerda ou crie um novo.</span></div>
+            </section>
+        </div>
+    </div>
 
     <!-- ABA 2: AGENDA GRADE COMPLETA -->
     <div class="agenda-grid-container" id="view-agenda" style="display: none;">
@@ -3345,12 +3578,49 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <p class="orcx-sub">Registre os procedimentos de interesse, os valores e as condições oferecidas ao
                         paciente.</p>
                 </div>
+                <button type="button" class="orcx-empresa-btn" title="Dados da empresa (cabeçalho do impresso)"
+                    onclick="openOrcamentoEmpresaModal()"><i class="fa-solid fa-building"></i></button>
             </div>
 
             <input type="hidden" id="orc-lead-id">
             <input type="hidden" id="orc-editing-id">
 
             <div class="orcx-body">
+                <div class="orcx-patient">
+                    <div class="orcx-list-label">Dados do paciente
+                        <span id="orc-pac-status" class="orc-pac-status"></span>
+                    </div>
+                    <div class="orcx-field" style="position: relative;">
+                        <input type="text" id="orc-pac-busca" class="form-control" autocomplete="off"
+                            placeholder="Buscar paciente por nome ou telefone (inclui contatos do WhatsApp)…"
+                            oninput="orcBuscarPaciente(this.value)">
+                        <div id="orc-pac-dropdown" style="display: none;"></div>
+                    </div>
+                    <div class="orcx-row">
+                        <div class="orcx-field">
+                            <label for="orc-pac-nome">Nome</label>
+                            <input type="text" id="orc-pac-nome" class="form-control" oninput="orcPacienteDirty()">
+                        </div>
+                        <div class="orcx-field">
+                            <label for="orc-pac-cpf">CPF</label>
+                            <input type="text" id="orc-pac-cpf" class="form-control" inputmode="numeric"
+                                placeholder="000.000.000-00" oninput="orcMaskCpf(this); orcPacienteDirty()">
+                        </div>
+                    </div>
+                    <div class="orcx-row">
+                        <div class="orcx-field">
+                            <label for="orc-pac-telefone">Telefone</label>
+                            <input type="text" id="orc-pac-telefone" class="form-control" placeholder="(00) 00000-0000"
+                                oninput="orcPacienteDirty()">
+                        </div>
+                        <div class="orcx-field">
+                            <label for="orc-pac-endereco">Endereço</label>
+                            <input type="text" id="orc-pac-endereco" class="form-control"
+                                placeholder="Rua, nº, bairro, cidade" oninput="orcPacienteDirty()">
+                        </div>
+                    </div>
+                </div>
+
                 <div>
                     <div class="orcx-list-label">Procedimentos orçados</div>
                     <div id="orc-items-list"></div>
@@ -3410,11 +3680,73 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
 
             <div class="modal-actions orcx-footer">
-                <button class="btn-cancel" onclick="closeModals()">Fechar</button>
+                <button class="btn-cancel" onclick="orcFecharModal()">Fechar</button>
+                <button class="btn-cancel" id="orc-imprimir-btn" onclick="imprimirOrcamento()"
+                    style="margin-right: auto;"><i class="fa-solid fa-print"></i> Imprimir orçamento</button>
                 <button class="btn-cancel" id="orc-cancel-edit-btn" onclick="cancelEditOrcamentoItem()"
                     style="display: none;">Cancelar edição</button>
                 <button class="btn-save" id="orc-save-btn" onclick="addOrcamentoItem()"><i class="fa-solid fa-plus"></i>
                     Adicionar Procedimento</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Dados da Empresa (cabeçalho do orçamento impresso) -->
+    <div class="modal-overlay" id="modalOrcamentoEmpresa">
+        <div class="modal aix-modal">
+            <div class="aix-head">
+                <span class="aix-head-icon"><i class="fa-solid fa-building"></i></span>
+                <div>
+                    <h2>Dados da Empresa</h2>
+                    <p class="aix-sub">Aparecem no cabeçalho do orçamento impresso. Só administradores editam.</p>
+                </div>
+            </div>
+            <div class="aix-body">
+                <div class="aix-block">
+                    <div class="aix-block-label">Logo da empresa</div>
+                    <div class="emp-logo-row">
+                        <div class="emp-logo-preview" id="emp-logo-preview">
+                            <i class="fa-regular fa-image"></i>
+                        </div>
+                        <div class="emp-logo-actions">
+                            <input type="file" id="emp-logo-input" accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                                style="display: none;" onchange="orcEmpresaLogoPick(this)">
+                            <button type="button" class="btn-cancel" onclick="document.getElementById('emp-logo-input').click()">
+                                <i class="fa-solid fa-upload"></i> Escolher imagem
+                            </button>
+                            <button type="button" class="btn-cancel" id="emp-logo-remove" onclick="orcEmpresaLogoRemove()"
+                                style="display: none;"><i class="fa-solid fa-trash"></i> Remover</button>
+                            <div class="aix-hint">PNG, JPG, WebP ou SVG. Aparece no topo do orçamento impresso.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Razão social</div>
+                    <input type="text" id="emp-razao" class="form-control" placeholder="Nome da empresa / clínica">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">CNPJ</div>
+                    <input type="text" id="emp-cnpj" class="form-control" inputmode="numeric"
+                        placeholder="00.000.000/0000-00" oninput="orcMaskCnpj(this)">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Endereço</div>
+                    <input type="text" id="emp-endereco" class="form-control" placeholder="Rua, nº, bairro, cidade - UF">
+                </div>
+                <div class="aix-block" style="flex-direction: row; gap: 0.8rem;">
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">Telefone</div>
+                        <input type="text" id="emp-telefone" class="form-control" placeholder="(00) 0000-0000">
+                    </div>
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">E-mail</div>
+                        <input type="email" id="emp-email" class="form-control" placeholder="contato@empresa.com">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions aix-footer">
+                <button class="btn-cancel" onclick="closeModals()">Cancelar</button>
+                <button class="btn-save" onclick="saveOrcamentoEmpresa()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
             </div>
         </div>
     </div>
@@ -3945,6 +4277,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js"></script>
     <script src="app.js"></script>
+    <script src="flows.js"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
     <!-- Menu de Contexto (botão direito) das conversas: não lido, favorito, fixar, arquivar -->
@@ -4048,47 +4381,74 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         </div>
     </div>
 
-    <!-- Menu Flutuante Global de Opções do Card -->
-    <div id="card-global-dropdown" style="
-        display: none;
-        position: fixed;
-        background: #1c1c1e;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 12px;
-        box-shadow: none;
-        z-index: 9999;
-        width: 180px;
-        overflow: hidden;
-        font-family: inherit;
-        color: #f4f4f5;
-    ">
-        <div style="padding: 0.4rem 0;">
-            <div onclick="triggerCardAction('chat')"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
-                onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-                onmouseout="this.style.background='transparent'">
-                <i class="fa-brands fa-whatsapp"
-                    style="width: 16px; text-align: center; color: var(--accent-success);"></i> WhatsApp
+    <!-- Menu Flutuante Global de Opções do Card (clique no "⋮" ou botão direito) -->
+    <div id="card-global-dropdown" class="card-ctx">
+        <div class="card-ctx-main" id="card-ctx-main">
+            <button class="card-ctx-item" onclick="triggerCardAction('chat')">
+                <i class="fa-brands fa-whatsapp" style="color: var(--accent-success);"></i> Enviar WhatsApp
+            </button>
+            <button class="card-ctx-item" onclick="triggerCardAction('ficha')">
+                <i class="fa-solid fa-pen-to-square" style="color: var(--accent-warning);"></i> Ficha e Notas
+            </button>
+            <button class="card-ctx-item" id="card-menu-item-orc" onclick="triggerCardAction('orcamento')">
+                <i class="fa-solid fa-file-invoice-dollar" style="color: #38bdf8;"></i> Orçamento
+            </button>
+            <div class="card-ctx-sep"></div>
+            <button class="card-ctx-item" onclick="triggerCardAction('avancar')">
+                <i class="fa-solid fa-forward-step" style="color: var(--accent-primary);"></i>
+                <span id="card-ctx-avancar-label">Mover p/ próxima etapa</span>
+            </button>
+            <button class="card-ctx-item" onclick="triggerCardAction('etiquetas')">
+                <i class="fa-solid fa-tags" style="color: #c084fc;"></i> Etiquetas
+                <i class="fa-solid fa-chevron-right card-ctx-caret"></i>
+            </button>
+            <button class="card-ctx-item" onclick="triggerCardAction('inativar')">
+                <i class="fa-solid fa-ban" style="color: var(--nav-arrow);"></i> Inativar
+            </button>
+            <div class="card-ctx-sep"></div>
+            <button class="card-ctx-item card-ctx-item--danger" onclick="triggerCardAction('excluir')">
+                <i class="fa-solid fa-trash"></i> Excluir
+            </button>
+        </div>
+        <div class="card-ctx-tags" id="card-ctx-tags" style="display: none;"></div>
+    </div>
+
+    <!-- Modal: Editar Etiquetas -->
+    <div class="modal-overlay" id="modalTags">
+        <div class="modal" style="max-width: 460px;">
+            <h2><i class="fa-solid fa-tags" style="color: var(--accent-primary);"></i> Etiquetas</h2>
+            <p class="modal-subtitle">Crie, renomeie ou remova as etiquetas usadas nos cards do Kanban.</p>
+
+            <div
+                style="background: var(--bg-main); padding: 0.7rem; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 1rem;">
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="text" id="tge-name" placeholder="Nome da etiqueta…"
+                        style="flex: 1; min-width: 0; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.5rem 0.65rem; border-radius: 7px; font-size: 0.85rem; outline: none;">
+                    <label
+                        style="position: relative; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 7px; cursor: pointer; flex-shrink: 0;"
+                        title="Cor da etiqueta">
+                        <i class="fa-solid fa-palette" id="tge-color-icon" style="color: #3b82f6; font-size: 0.95rem;"></i>
+                        <input type="color" id="tge-color" value="#3b82f6"
+                            style="position: absolute; inset: 0; opacity: 0; cursor: pointer;"
+                            oninput="document.getElementById('tge-color-icon').style.color = this.value">
+                    </label>
+                    <button type="button" class="btn-primary" id="tge-save-btn" onclick="tgeSave()"
+                        style="padding: 0.5rem 0.8rem; font-size: 0.82rem; font-weight: 600; flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.35rem;"><i
+                            class="fa-solid fa-plus"></i> Adicionar</button>
+                    <button type="button" id="tge-cancel-btn" onclick="tgeCancelEdit()"
+                        style="display: none; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem; flex-shrink: 0;"
+                        title="Cancelar edição"><i class="fa-solid fa-xmark"></i></button>
+                </div>
             </div>
-            <div onclick="triggerCardAction('ficha')"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
-                onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-                onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-pen-to-square"
-                    style="width: 16px; text-align: center; color: var(--accent-warning);"></i> Ficha e Notas
-            </div>
-            <div onclick="triggerCardAction('orcamento')" id="card-menu-item-orc"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500;"
-                onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-                onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-file-invoice-dollar" style="width: 16px; text-align: center; color: #38bdf8;"></i>
-                Orçamento
-            </div>
-            <div onclick="triggerCardAction('excluir')"
-                style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; transition: 0.15s; font-weight: 500; color: #f87171; border-top: 1px solid rgba(255,255,255,0.05);"
-                onmouseover="this.style.background='rgba(248,113,113,0.1)'"
-                onmouseout="this.style.background='transparent'">
-                <i class="fa-solid fa-trash" style="width: 16px; text-align: center;"></i> Excluir
+
+            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600; margin-bottom: 0.4rem;">
+                Cadastradas</div>
+            <div id="tge-list"
+                style="display: flex; flex-direction: column; gap: 0.4rem; max-height: 300px; overflow-y: auto;"></div>
+
+            <div class="modal-separator"></div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Fechar</button>
             </div>
         </div>
     </div>
@@ -4177,52 +4537,74 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 <div id="lead-profile-overlay" onclick="closeLeadProfile()" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:10000; backdrop-filter:blur(2px);"></div>
 <div id="lead-profile-panel" class="lead-profile-panel">
     <div class="lpp-header">
-        <button class="lpp-close-btn" onclick="closeLeadProfile()"><i class="fa-solid fa-xmark"></i></button>
-        <div class="lpp-avatar-wrap">
-            <div id="lpp-avatar" class="lpp-avatar"></div>
-            <div class="lpp-identity">
-                <h2 id="lpp-name" class="lpp-name"></h2>
-                <div id="lpp-contact" class="lpp-contact"></div>
+        <button class="lpp-close-btn" onclick="closeLeadProfile()" aria-label="Fechar">Fechar</button>
+        <div class="lpp-identity-row">
+            <div class="lpp-avatar-wrap">
+                <div id="lpp-avatar" class="lpp-avatar"></div>
+                <div class="lpp-identity">
+                    <h2 id="lpp-name" class="lpp-name"></h2>
+                    <div id="lpp-contact" class="lpp-contact"></div>
+                </div>
             </div>
         </div>
-        <div id="lpp-tags" class="lpp-tags"></div>
-        <div id="lpp-column-badge" class="lpp-column-badge"></div>
         <div class="lpp-quick-actions">
+            <button id="lpp-btn-edit" class="lpp-action-btn lpp-action-btn--ghost" onclick="lppEditLead()">
+                <i class="fa-solid fa-pen"></i> Editar
+            </button>
             <button id="lpp-btn-chat" class="lpp-action-btn lpp-action-btn--chat" onclick="lppOpenChat()">
                 <i class="fa-brands fa-whatsapp"></i> Abrir Chat
             </button>
         </div>
+        <div id="lpp-tags" class="lpp-tags"></div>
+        <div id="lpp-column-badge" class="lpp-column-badge"></div>
     </div>
 
     <div class="lpp-body">
-        <!-- Origem -->
-        <div class="lpp-section">
-            <div class="lpp-section-title"><i class="fa-solid fa-location-dot"></i> Origem</div>
-            <div id="lpp-origem" class="lpp-section-content"></div>
+        <div class="lpp-grid">
+            <!-- Origem -->
+            <div class="lpp-card lpp-section">
+                <div class="lpp-section-title"><i class="fa-solid fa-location-dot"></i> Origem</div>
+                <div id="lpp-origem" class="lpp-section-content"></div>
+            </div>
+
+            <!-- Informações -->
+            <div class="lpp-card lpp-section">
+                <div class="lpp-section-title"><i class="fa-solid fa-circle-info"></i> Informações</div>
+                <div id="lpp-info" class="lpp-section-content"></div>
+            </div>
         </div>
 
-        <!-- Informações -->
-        <div class="lpp-section">
-            <div class="lpp-section-title"><i class="fa-solid fa-circle-info"></i> Informações</div>
-            <div id="lpp-info" class="lpp-section-content"></div>
+        <!-- Orçamentos + Histórico em abas -->
+        <div class="lpp-card lpp-tabs-card">
+            <div class="lpp-tabs" role="tablist" aria-label="Detalhes do lead">
+                <button type="button" class="lpp-tab is-active" role="tab" aria-selected="true"
+                    id="lpp-tab-orc" aria-controls="lpp-panel-orc" onclick="lppSwitchTab('orc')">
+                    <i class="fa-solid fa-file-invoice-dollar"></i> Orçamentos
+                </button>
+                <button type="button" class="lpp-tab" role="tab" aria-selected="false"
+                    id="lpp-tab-hist" aria-controls="lpp-panel-hist" onclick="lppSwitchTab('hist')">
+                    <i class="fa-solid fa-calendar-check"></i> Histórico de agendamentos
+                </button>
+            </div>
+
+            <div class="lpp-tabpanel" id="lpp-panel-orc" role="tabpanel" aria-labelledby="lpp-tab-orc">
+                <div id="lpp-orc-section">
+                    <div id="lpp-orcamentos" class="lpp-section-content"></div>
+                </div>
+            </div>
+
+            <div class="lpp-tabpanel" id="lpp-panel-hist" role="tabpanel" aria-labelledby="lpp-tab-hist" hidden>
+                <div id="lpp-hist-section">
+                    <div id="lpp-historico" class="lpp-section-content"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Notas -->
-        <div class="lpp-section" id="lpp-notas-section">
+        <div class="lpp-card lpp-section lpp-notas-card" id="lpp-notas-section">
             <div class="lpp-section-title"><i class="fa-solid fa-note-sticky"></i> Notas</div>
             <div id="lpp-notas" class="lpp-section-content lpp-notas-text"></div>
-        </div>
-
-        <!-- Orçamentos -->
-        <div class="lpp-section" id="lpp-orc-section">
-            <div class="lpp-section-title"><i class="fa-solid fa-file-invoice-dollar"></i> Orçamentos</div>
-            <div id="lpp-orcamentos" class="lpp-section-content"></div>
-        </div>
-
-        <!-- Histórico de Agendamentos -->
-        <div class="lpp-section" id="lpp-hist-section">
-            <div class="lpp-section-title"><i class="fa-solid fa-calendar-check"></i> Histórico de Agendamentos</div>
-            <div id="lpp-historico" class="lpp-section-content"></div>
+            <button type="button" id="lpp-notas-toggle" class="lpp-notas-toggle" onclick="lppToggleNotas()" hidden>Ver mais</button>
         </div>
     </div>
 </div>

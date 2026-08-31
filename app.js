@@ -731,6 +731,7 @@ card.className = 'card';
 card.draggable = false;
 card.id = `card-${lead.id}`;
 card.addEventListener('pointerdown', (e) => startKanbanCardDrag(e, lead.id, card));
+card.addEventListener('contextmenu', (e) => openCardContextMenu(e, lead.id));
 
 // 1. Procedimento de Interesse (Extração com fallback inteligente)
 let procedimentoName = '';
@@ -871,7 +872,7 @@ const emptyMessages = {
 'col-orcado': { title: 'Nenhum orçamento enviado', desc: 'Pacientes com valores em negociação aparecerão nesta etapa.', icon: 'fa-file-invoice-dollar' },
 'col-agendado': { title: 'Nenhum agendamento marcado', desc: 'Pacientes com consulta ou procedimento agendado ficarão aqui.', icon: 'fa-calendar-check' },
 'col-ganho': { title: 'Sem conversões recentes', desc: 'Os pacientes com pacotes fechados aparecerão aqui.', icon: 'fa-circle-check' },
-'col-perdido': { title: 'Nenhum contato arquivado', desc: 'Leads não qualificados ou sem interesse ficarão nesta etapa.', icon: 'fa-circle-xmark' }
+'col-perdido': { title: 'Nada em follow up', desc: 'Leads que precisam de acompanhamento / retomada de contato ficarão nesta etapa.', icon: 'fa-arrow-rotate-left' }
 };
 const msg = emptyMessages[id] || { title: 'Sem registros', desc: 'Nenhum paciente nesta etapa.', icon: 'fa-folder-open' };
 colList.innerHTML = `
@@ -1465,8 +1466,14 @@ async function saveLeadNotes() {
             console.error('Erro ao salvar edições', e);
         }
     }
-    
+
     document.getElementById('modalLeadNotes').classList.remove('active');
+
+    // Se a ficha do lead está aberta, re-renderiza pra refletir a edição na hora.
+    const lpp = document.getElementById('lead-profile-panel');
+    if (lpp && lpp.classList.contains('active') && typeof openLeadProfile === 'function') {
+        openLeadProfile(id);
+    }
 }
 
 // Máscara de moeda BRL (1.234,56) digitada da direita pra esquerda, como app de banco:
@@ -1569,8 +1576,410 @@ function openOrcamentoModal(id) {
     document.getElementById('orc-lead-id').value = id;
     cancelEditOrcamentoItem();
     renderOrcamentoItemsList(id);
+    orcPreencherPaciente(lead);
     orcUpdatePreview();
+    // Pré-carrega os dados da empresa pra impressão sair instantânea.
+    if (!orcEmpresaCache) fetchOrcamentoEmpresa().catch(() => {});
     document.getElementById('modalOrcamento').classList.add('active');
+}
+
+// Preenche os campos "Dados do paciente" do modal de Orçamento a partir do lead.
+function orcPreencherPaciente(lead) {
+    const set = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v || ''; };
+    set('orc-pac-nome', lead.nome);
+    set('orc-pac-cpf', lead.cpf);
+    set('orc-pac-telefone', lead.telefone);
+    set('orc-pac-endereco', lead.endereco);
+    const busca = document.getElementById('orc-pac-busca');
+    if (busca) busca.value = '';
+    const dd = document.getElementById('orc-pac-dropdown');
+    if (dd) { dd.style.display = 'none'; dd.innerHTML = ''; }
+    clearTimeout(_orcPacienteTimer);
+    _orcPacienteDirty = false;
+    orcSetSaveState('');
+}
+
+// ── Máscaras CPF / CNPJ ────────────────────────────────────────────────
+function orcMaskCpf(el) {
+    let d = el.value.replace(/\D/g, '').slice(0, 11);
+    if (d.length > 9) el.value = `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+    else if (d.length > 6) el.value = `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6)}`;
+    else if (d.length > 3) el.value = `${d.slice(0,3)}.${d.slice(3)}`;
+    else el.value = d;
+}
+
+function orcMaskCnpj(el) {
+    let d = el.value.replace(/\D/g, '').slice(0, 14);
+    let out = d;
+    if (d.length > 12) out = `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+    else if (d.length > 8) out = `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8)}`;
+    else if (d.length > 5) out = `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5)}`;
+    else if (d.length > 2) out = `${d.slice(0,2)}.${d.slice(2)}`;
+    el.value = out;
+}
+
+// ── Busca de paciente (leads, incluindo contatos vindos do WhatsApp) ───
+function orcBuscarPaciente(term) {
+    const dd = document.getElementById('orc-pac-dropdown');
+    if (!dd) return;
+    const t = (term || '').trim().toLowerCase();
+    const tDigits = t.replace(/\D/g, '');
+    if (t.length < 2) { dd.style.display = 'none'; dd.innerHTML = ''; return; }
+
+    const matches = (Array.isArray(leads) ? leads : []).filter(l => {
+        const nome = (l.nome || '').toLowerCase();
+        const tel = (l.telefone || '').replace(/\D/g, '');
+        return nome.includes(t) || (tDigits.length >= 3 && tel.includes(tDigits));
+    }).slice(0, 8);
+
+    if (matches.length === 0) {
+        dd.innerHTML = `<div class="ag-dropdown-item" style="opacity:.6;cursor:default;">Nenhum paciente encontrado</div>`;
+        dd.style.display = 'block';
+        return;
+    }
+
+    dd.innerHTML = matches.map(l => `
+        <div class="ag-dropdown-item" onclick="orcSelecionarPaciente('${l.id}')">
+            <strong>${escapeHtml(l.nome || 'Sem nome')}</strong>
+            <span style="opacity:.7;"> · ${escapeHtml(l.telefone || 'sem telefone')}</span>
+        </div>
+    `).join('');
+    dd.style.display = 'block';
+}
+
+function orcSelecionarPaciente(leadId) {
+    const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadId);
+    if (!lead) return;
+    document.getElementById('orc-lead-id').value = lead.id;
+    orcPreencherPaciente(lead);
+    renderOrcamentoItemsList(lead.id);
+    cancelEditOrcamentoItem();
+}
+
+// Salva alterações nos dados do paciente (debounce) no lead correspondente.
+let _orcPacienteTimer = null;
+let _orcPacienteDirty = false;
+function orcPacienteDirty() {
+    _orcPacienteDirty = true;
+    orcSetSaveState('editando');
+    clearTimeout(_orcPacienteTimer);
+    _orcPacienteTimer = setTimeout(() => orcSalvarPaciente(true), 800);
+}
+
+// Indicador visual "editando / salvando / salvo" ao lado do título da seção.
+function orcSetSaveState(state) {
+    const el = document.getElementById('orc-pac-status');
+    if (!el) return;
+    if (state === 'editando') { el.textContent = 'alterações não salvas'; el.dataset.s = 'dirty'; }
+    else if (state === 'salvando') { el.textContent = 'salvando…'; el.dataset.s = 'saving'; }
+    else if (state === 'salvo') { el.textContent = 'salvo ✓'; el.dataset.s = 'saved'; }
+    else { el.textContent = ''; el.dataset.s = ''; }
+}
+
+async function orcSalvarPaciente(silent) {
+    clearTimeout(_orcPacienteTimer);
+    const id = document.getElementById('orc-lead-id').value;
+    if (!id) return;
+    const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === id);
+    if (!lead) return;
+    if (!_orcPacienteDirty) return;
+
+    const nome = document.getElementById('orc-pac-nome').value.trim();
+    const telefone = document.getElementById('orc-pac-telefone').value.trim();
+    const cpf = document.getElementById('orc-pac-cpf').value.trim();
+    const endereco = document.getElementById('orc-pac-endereco').value.trim();
+
+    lead.nome = nome || lead.nome;
+    lead.telefone = telefone;
+    lead.cpf = cpf;
+    lead.endereco = endereco;
+    if (typeof renderBoard === 'function') renderBoard();
+
+    orcSetSaveState('salvando');
+    try {
+        const res = await fetch(`/api/leads/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome: lead.nome, telefone, cpf, endereco })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        _orcPacienteDirty = false;
+        orcSetSaveState('salvo');
+        if (!silent) showToast('Dados do paciente salvos.', 'success');
+    } catch (e) {
+        console.error('Erro ao salvar dados do paciente', e);
+        orcSetSaveState('editando');
+        if (!silent) showToast('Não foi possível salvar os dados do paciente.', 'danger');
+    }
+}
+
+// Fecha o modal de orçamento garantindo que edições pendentes do paciente sejam gravadas.
+async function orcFecharModal() {
+    if (_orcPacienteDirty) await orcSalvarPaciente(false);
+    closeModals();
+}
+
+// ── Dados da empresa (cabeçalho do impresso) ──────────────────────────
+let orcEmpresaCache = null;
+
+async function fetchOrcamentoEmpresa() {
+    const res = await fetch('/api/settings/orcamento-empresa');
+    const json = await res.json();
+    orcEmpresaCache = json.empresa || {};
+    return orcEmpresaCache;
+}
+
+// Logo da empresa em memória (data URI) enquanto o modal está aberto.
+// null = ainda não mexeram; '' = removeram de propósito.
+let empLogoData = null;
+
+function orcRenderEmpLogoPreview(dataUri) {
+    const box = document.getElementById('emp-logo-preview');
+    const rm = document.getElementById('emp-logo-remove');
+    if (!box) return;
+    if (dataUri) {
+        box.innerHTML = `<img src="${dataUri}" alt="Logo">`;
+        if (rm) rm.style.display = '';
+    } else {
+        box.innerHTML = '<i class="fa-regular fa-image"></i>';
+        if (rm) rm.style.display = 'none';
+    }
+}
+
+function orcEmpresaLogoPick(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+        showToast('Imagem muito grande (máx. 4 MB).', 'danger');
+        input.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+        // SVG é texto leve — guarda como veio. Raster passa por downscale.
+        if (file.type === 'image/svg+xml') {
+            empLogoData = reader.result;
+            orcRenderEmpLogoPreview(empLogoData);
+            input.value = '';
+            return;
+        }
+        const img = new Image();
+        img.onload = () => {
+            const MAX = 480;
+            let { width, height } = img;
+            if (width > MAX || height > MAX) {
+                const r = Math.min(MAX / width, MAX / height);
+                width = Math.round(width * r);
+                height = Math.round(height * r);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            // PNG preserva transparência; se ficar pesado, cai pra JPEG.
+            let out = canvas.toDataURL('image/png');
+            if (out.length > 300000) out = canvas.toDataURL('image/jpeg', 0.85);
+            empLogoData = out;
+            orcRenderEmpLogoPreview(empLogoData);
+            input.value = '';
+        };
+        img.onerror = () => { showToast('Não foi possível ler a imagem.', 'danger'); input.value = ''; };
+        img.src = reader.result;
+    };
+    reader.onerror = () => { showToast('Não foi possível ler o arquivo.', 'danger'); input.value = ''; };
+    reader.readAsDataURL(file);
+}
+
+function orcEmpresaLogoRemove() {
+    empLogoData = '';
+    orcRenderEmpLogoPreview('');
+}
+
+async function openOrcamentoEmpresaModal() {
+    empLogoData = null;
+    try {
+        const emp = await fetchOrcamentoEmpresa();
+        document.getElementById('emp-razao').value = emp.razao_social || '';
+        document.getElementById('emp-cnpj').value = emp.cnpj || '';
+        document.getElementById('emp-endereco').value = emp.endereco || '';
+        document.getElementById('emp-telefone').value = emp.telefone || '';
+        document.getElementById('emp-email').value = emp.email || '';
+        orcRenderEmpLogoPreview(emp.logo || '');
+    } catch (e) {
+        console.error('Erro ao carregar dados da empresa', e);
+        orcRenderEmpLogoPreview('');
+    }
+    document.getElementById('modalOrcamentoEmpresa').classList.add('active');
+}
+
+async function saveOrcamentoEmpresa() {
+    const payload = {
+        razao_social: document.getElementById('emp-razao').value.trim(),
+        cnpj: document.getElementById('emp-cnpj').value.trim(),
+        endereco: document.getElementById('emp-endereco').value.trim(),
+        telefone: document.getElementById('emp-telefone').value.trim(),
+        email: document.getElementById('emp-email').value.trim()
+    };
+    // Só manda `logo` se mexeram nele: data URI novo, ou '' pra apagar.
+    if (empLogoData !== null) payload.logo = empLogoData;
+    try {
+        const res = await fetch('/api/settings/orcamento-empresa', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (!res.ok) {
+            showToast(json.error || 'Não foi possível salvar.', 'danger');
+            return;
+        }
+        orcEmpresaCache = json.empresa || payload;
+        showToast('Dados da empresa salvos.', 'success');
+        document.getElementById('modalOrcamentoEmpresa').classList.remove('active');
+    } catch (e) {
+        console.error('Erro ao salvar dados da empresa', e);
+        showToast('Erro ao salvar dados da empresa.', 'danger');
+    }
+}
+
+// ── Impressão do orçamento ───────────────────────────────────────────
+async function imprimirOrcamento() {
+    const id = document.getElementById('orc-lead-id').value;
+    const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === id);
+    const itens = lead ? parseOrcamentoArray(lead.orcamento) : [];
+
+    if (itens.length === 0) {
+        showToast('Adicione ao menos um procedimento antes de imprimir.', 'danger');
+        return;
+    }
+
+    let emp = orcEmpresaCache;
+    if (!emp) { try { emp = await fetchOrcamentoEmpresa(); } catch (e) { emp = {}; } }
+    emp = emp || {};
+
+    const pac = {
+        nome: document.getElementById('orc-pac-nome').value.trim(),
+        cpf: document.getElementById('orc-pac-cpf').value.trim(),
+        telefone: document.getElementById('orc-pac-telefone').value.trim(),
+        endereco: document.getElementById('orc-pac-endereco').value.trim()
+    };
+
+    const brl = n => 'R$ ' + (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let total = 0;
+    const linhas = itens.map(it => {
+        const valor = parseFloat(String(it.valor).replace(',', '.')) || 0;
+        const desc = Math.min(Math.max(parseFloat(it.desconto) || 0, 0), 100);
+        const final = valor * (1 - desc / 100);
+        total += final;
+        return `<tr>
+            <td>${escapeHtml(it.procedimento || '—')}</td>
+            <td class="num">${brl(valor)}</td>
+            <td class="num">${desc ? desc + '%' : '—'}</td>
+            <td class="num">${brl(final)}</td>
+            <td>${escapeHtml(it.formaPagamento || '—')}</td>
+        </tr>${it.condicoes ? `<tr class="cond"><td colspan="5">${escapeHtml(it.condicoes)}</td></tr>` : ''}`;
+    }).join('');
+
+    const hoje = new Date();
+    const dataEmissao = hoje.toLocaleDateString('pt-BR');
+    const validade = new Date(hoje.getTime() + 15 * 86400000).toLocaleDateString('pt-BR');
+
+    const row = (label, val) => val ? `<div><span class="lbl">${label}</span> ${escapeHtml(val)}</div>` : '';
+
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>Orçamento${pac.nome ? ' - ' + escapeHtml(pac.nome) : ''}</title>
+<style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; padding: 40px; font-size: 13px; line-height: 1.5; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .muted { color: #666; }
+    .doc-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #333; padding-bottom: 16px; margin-bottom: 20px; gap: 24px; }
+    .doc-head .company { max-width: 60%; display: flex; gap: 14px; align-items: flex-start; }
+    .doc-head .company .logo { max-height: 64px; max-width: 180px; object-fit: contain; flex-shrink: 0; }
+    .doc-head .company .name { font-size: 16px; font-weight: 700; }
+    .doc-title { text-align: right; }
+    .doc-title .big { font-size: 22px; font-weight: 700; letter-spacing: 1px; }
+    .block { margin-bottom: 20px; }
+    .block h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #555; border-bottom: 1px solid #ddd; padding-bottom: 4px; margin: 0 0 8px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; }
+    .lbl { color: #888; display: inline-block; min-width: 70px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e2e2; }
+    th { background: #f4f4f4; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    tr.cond td { font-size: 11px; color: #666; padding-top: 2px; border-bottom: 1px solid #e2e2e2; }
+    .total { text-align: right; font-size: 16px; font-weight: 700; margin-top: 12px; }
+    .foot { margin-top: 32px; font-size: 11px; color: #666; border-top: 1px solid #ddd; padding-top: 12px; }
+    .sign { margin-top: 56px; display: flex; justify-content: space-between; gap: 40px; }
+    .sign div { flex: 1; border-top: 1px solid #333; padding-top: 6px; text-align: center; font-size: 11px; }
+    @media print { body { padding: 0; } .noprint { display: none; } }
+    .noprint { position: fixed; top: 12px; right: 12px; }
+    .noprint button { padding: 8px 16px; font-size: 13px; cursor: pointer; }
+</style></head><body>
+<div class="noprint"><button onclick="window.print()">Imprimir</button></div>
+
+<div class="doc-head">
+    <div class="company">
+        ${emp.logo ? `<img class="logo" src="${emp.logo}" alt="">` : ''}
+        <div>
+            <div class="name">${escapeHtml(emp.razao_social || 'Sua Empresa')}</div>
+            ${emp.cnpj ? `<div class="muted">CNPJ: ${escapeHtml(emp.cnpj)}</div>` : ''}
+            ${emp.endereco ? `<div class="muted">${escapeHtml(emp.endereco)}</div>` : ''}
+            ${emp.telefone ? `<div class="muted">Tel: ${escapeHtml(emp.telefone)}</div>` : ''}
+            ${emp.email ? `<div class="muted">${escapeHtml(emp.email)}</div>` : ''}
+        </div>
+    </div>
+    <div class="doc-title">
+        <div class="big">ORÇAMENTO</div>
+        <div class="muted">Emissão: ${dataEmissao}</div>
+        <div class="muted">Válido até: ${validade}</div>
+    </div>
+</div>
+
+<div class="block">
+    <h2>Dados do paciente</h2>
+    <div class="grid">
+        ${row('Nome', pac.nome) || '<div class="muted">Paciente não informado</div>'}
+        ${row('CPF', pac.cpf)}
+        ${row('Telefone', pac.telefone)}
+        ${row('Endereço', pac.endereco)}
+    </div>
+</div>
+
+<div class="block">
+    <h2>Itens do orçamento</h2>
+    <table>
+        <thead><tr>
+            <th>Produto / Serviço</th>
+            <th class="num">Valor</th>
+            <th class="num">Desconto</th>
+            <th class="num">Valor final</th>
+            <th>Forma de pagamento</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+    </table>
+    <div class="total">Total: ${brl(total)}</div>
+</div>
+
+<div class="sign">
+    <div>Assinatura da empresa</div>
+    <div>Assinatura do paciente</div>
+</div>
+
+<div class="foot">
+    Este orçamento tem caráter informativo e validade de 15 dias a partir da data de emissão.
+    Valores e condições sujeitos a alteração após esse período.
+</div>
+
+<script>window.onload = function () { setTimeout(function () { window.print(); }, 300); };<\/script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Permita pop-ups para imprimir o orçamento.', 'danger'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
 }
 
 function cancelEditOrcamentoItem() {
@@ -2212,6 +2621,7 @@ function switchTab(tabId) {
         sumidos: 'Sumidos',
         aniversariantes: 'Aniversariantes',
         contatos: 'Contatos',
+        fluxos: 'Fluxos',
         historico: 'Financeiro',
     };
     if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
@@ -2257,6 +2667,8 @@ function switchTab(tabId) {
     if(origemView) origemView.style.display = 'none';
     const contatosView = document.getElementById('view-contatos');
     if(contatosView) contatosView.style.display = 'none';
+    const fluxosView = document.getElementById('view-fluxos');
+    if(fluxosView) fluxosView.style.display = 'none';
 
     // Para polling do chat ao sair da aba
     if (tabId !== 'chat' && window.chatPollingInterval) {
@@ -2346,6 +2758,12 @@ function switchTab(tabId) {
                     }
                 }, 5000);
             }
+        }
+    } else if (tabId === 'fluxos') {
+        const view = document.getElementById('view-fluxos');
+        if (view) {
+            view.style.display = 'flex';
+            if (typeof loadFlows === 'function') loadFlows();
         }
     } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes'].includes(tabId)) {
         const view = document.getElementById(`view-${tabId}`);
@@ -2457,8 +2875,10 @@ function renderContatos() {
         const nomeSafe = escapeHtml(r.nome || 'Lead WhatsApp');
         const phoneJs = String(r.phone || '').replace(/'/g, "\\'");
         const nomeJs = nomeSafe.replace(/'/g, "\\'");
+        const leadIdJs = r.leadId ? String(r.leadId).replace(/'/g, "\\'") : '';
+        const rowClickable = !!r.leadId;
         return `
-        <tr>
+        <tr ${rowClickable ? `onclick="openLeadProfile('${leadIdJs}')" style="cursor:pointer;" title="Ver ficha completa do paciente"` : ''}>
             <td style="font-weight:500;">
                 <div style="display:flex; align-items:center; gap:0.75rem;">
                     <div style="width:32px; height:32px; border-radius:50%; background:rgba(59,130,246,0.1); display:flex; align-items:center; justify-content:center; color:var(--accent-primary); flex-shrink:0;">
@@ -2474,7 +2894,7 @@ function renderContatos() {
             <td>${fmtContatoDate(r.last_contact)}</td>
             <td style="text-align:center;">${r.total_messages}<br><small style="color:var(--text-muted);">${r.inbound_count} recebidas</small></td>
             <td style="text-align:center;">
-                <button class="btn-secondary" onclick="abrirConversaContato('${phoneJs}', '${nomeJs}')"
+                <button class="btn-secondary" onclick="event.stopPropagation(); abrirConversaContato('${phoneJs}', '${nomeJs}')"
                     style="width:100%; justify-content:center; background:rgba(16,185,129,0.15); color:var(--accent-success); border-color:rgba(16,185,129,0.3); padding:0.5rem;">
                     <i class="fa-brands fa-whatsapp"></i> Abrir conversa
                 </button>
@@ -5086,6 +5506,9 @@ function renderDashboard() {
     let perdasTotal = 0;
     const rankingMap = {};
     const origemMap = {};
+    // LTV: agrupa por paciente (telefone canônico dedup entre cards diferentes).
+    // Sempre histórico — "valor no tempo de vida" não faz sentido por período.
+    const ltvMap = {};
 
     leads.forEach(lead => {
         let val = parseFloat(lead.valor_recebido) || 0;
@@ -5121,6 +5544,13 @@ function renderDashboard() {
         if (lead.column === 'col-ganho') {
             if (inPeriod) ganhosTotal++;
             if (revenueInPeriod) { receitaRealizada += val; if (val > 0) agendamentosComValor++; }
+            // LTV histórico: acumula receita realizada por paciente.
+            if (val > 0) {
+                const pkey = (typeof canonicalPhoneBR === 'function' && canonicalPhoneBR(lead.telefone)) || ('lead:' + lead.id);
+                if (!ltvMap[pkey]) ltvMap[pkey] = { revenue: 0, deals: 0 };
+                ltvMap[pkey].revenue += val;
+                ltvMap[pkey].deals += 1;
+            }
         } else if (lead.column === 'col-agendado') {
             if (inPeriod) agendadosTotal++;
             if (revenueInPeriod) { receitaPrevista += val; if (val > 0) agendamentosComValor++; }
@@ -5143,6 +5573,14 @@ function renderDashboard() {
     });
 
     const ticketMedio = agendamentosComValor > 0 ? ((receitaPrevista + receitaRealizada) / agendamentosComValor) : 0;
+
+    // LTV (histórico, não filtrado por período)
+    const ltvPatients = Object.keys(ltvMap).length;
+    const ltvValues = Object.values(ltvMap);
+    const ltvTotalRevenue = ltvValues.reduce((s, p) => s + p.revenue, 0);
+    const ltvDeals = ltvValues.reduce((s, p) => s + p.deals, 0);
+    const ltvMedio = ltvPatients > 0 ? ltvTotalRevenue / ltvPatients : 0;
+    const comprasPorPaciente = ltvPatients > 0 ? ltvDeals / ltvPatients : 0;
     const leadsNoPeriodo = leads.filter(lead => isInPeriod(lead.created_at)).length;
     const taxaConversao = leadsNoPeriodo > 0 ? Math.round(((agendadosTotal + ganhosTotal) / leadsNoPeriodo) * 100) : 0;
     const tempoMedioResposta = responseCount > 0 ? responseMinutesTotal / responseCount : NaN;
@@ -5151,6 +5589,9 @@ function renderDashboard() {
     if (el('dash-receita-prevista')) el('dash-receita-prevista').innerText = 'R$ ' + receitaPrevista.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
     if (el('dash-receita-realizada')) el('dash-receita-realizada').innerText = 'R$ ' + receitaRealizada.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
     if (el('dash-ticket-medio')) el('dash-ticket-medio').innerText = 'R$ ' + ticketMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-ltv-medio')) el('dash-ltv-medio').innerText = 'R$ ' + ltvMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-ltv-pacientes')) el('dash-ltv-pacientes').innerText = ltvPatients + (ltvPatients === 1 ? ' paciente' : ' pacientes');
+    if (el('dash-compras-paciente')) el('dash-compras-paciente').innerText = comprasPorPaciente.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '×';
     if (el('dash-leads-ativos')) el('dash-leads-ativos').innerText = leadsAtivos;
     if (el('dash-taxa-resposta')) el('dash-taxa-resposta').innerText = taxaConversao + '%';
     if (el('dash-agendamentos-total')) el('dash-agendamentos-total').innerText = agendadosTotal + ganhosTotal;
@@ -5188,26 +5629,23 @@ function renderDashboard() {
                     avatarHtml = `<div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-main); color: var(--text-main); display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; flex-shrink: 0; border: 1px solid var(--border-color);">${initials}</div>`;
                 }
 
-                return `<div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem; background: var(--header-btn-bg); border-radius: 12px; border: 1px solid var(--header-btn-border);">
-                    <div style="font-size: 1.1rem; width: 1.5rem; text-align: center; flex-shrink: 0;">${medal}</div>
-                    
-                    <div style="flex-shrink: 0;">
-                        ${avatarHtml}
+                return `<div style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.8rem; background: var(--header-btn-bg); border-radius: 12px; border: 1px solid var(--header-btn-border);">
+                    <div style="display: flex; align-items: center; gap: 0.55rem; min-width: 0;">
+                        <span style="font-size: 1.05rem; width: 1.4rem; text-align: center; flex-shrink: 0;">${medal}</span>
+                        <span style="flex-shrink: 0; display: inline-flex;">${avatarHtml}</span>
+                        <span style="font-weight: 700; color: var(--text-main); font-size: 0.9rem; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${displayName}">${displayName}</span>
                     </div>
 
-                    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;">
-                            <span style="font-weight: 700; color: var(--text-main); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;" title="${displayName}">${displayName}</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0;">${r.leads} leads &middot; ${conv}% conv.</span>
-                        </div>
-                        <div style="height: 5px; background: var(--border-color); border-radius: 99px; overflow: hidden;">
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;">
+                        <span style="font-size: 0.72rem; color: var(--text-muted);">${r.leads} leads &middot; ${conv}% conv.</span>
+                        <span style="font-weight: 700; color: #10b981; font-size: 0.85rem; white-space: nowrap;">R$ ${r.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    </div>
+
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="flex: 1; height: 5px; background: var(--border-color); border-radius: 99px; overflow: hidden;">
                             <div style="height: 100%; width: ${barPct}%; background: var(--accent-primary); border-radius: 99px;"></div>
                         </div>
-                    </div>
-                    
-                    <div style="text-align: right; white-space: nowrap; flex-shrink: 0; margin-left: 0.25rem;">
-                        <div style="font-weight: 700; color: #10b981; font-size: 0.9rem;">R$ ${r.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                        <div style="font-size: 0.72rem; color: var(--text-muted);">${r.agendamentos} agend.</div>
+                        <span style="font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; flex-shrink: 0;">${r.agendamentos} agend.</span>
                     </div>
                 </div>`;
             }).join('');
@@ -5932,6 +6370,32 @@ function applyAiDelayToChips(seconds) {
     if (!matched && chips[0]) chips[0].classList.add('active');
 }
 
+const AI_MODE_DESCRIPTIONS = {
+    qualificacao: 'Entende a necessidade do lead e passa rápido para um atendente — não fala de preço.',
+    vendas: 'Apresenta o procedimento, trata objeções e conduz o lead até aceitar agendar uma avaliação. Passa para o atendente na hora de fechar. Continua sem inventar preço.'
+};
+
+// Sincroniza os chips de "modo do agente" com o input hidden + atualiza a descrição.
+function setAiMode(btn) {
+    const value = btn ? btn.getAttribute('data-mode') : 'qualificacao';
+    const hidden = document.getElementById('whatsapp-ai-mode');
+    if (hidden) hidden.value = value;
+    document.querySelectorAll('#whatsapp-ai-mode-chips .aix-chip').forEach(c => c.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    const desc = document.getElementById('whatsapp-ai-mode-desc');
+    if (desc) desc.textContent = AI_MODE_DESCRIPTIONS[value] || '';
+}
+
+function applyAiModeToChips(mode) {
+    const m = mode === 'vendas' ? 'vendas' : 'qualificacao';
+    const hidden = document.getElementById('whatsapp-ai-mode');
+    if (hidden) hidden.value = m;
+    const chips = document.querySelectorAll('#whatsapp-ai-mode-chips .aix-chip');
+    chips.forEach(c => c.classList.toggle('active', c.getAttribute('data-mode') === m));
+    const desc = document.getElementById('whatsapp-ai-mode-desc');
+    if (desc) desc.textContent = AI_MODE_DESCRIPTIONS[m] || '';
+}
+
 async function openWhatsappAiSettingsModal() {
     try {
         const [toggleRes, contextRes] = await Promise.all([
@@ -5943,6 +6407,7 @@ async function openWhatsappAiSettingsModal() {
         document.getElementById('whatsapp-ai-global-toggle').checked = !!toggleJson.enabled;
         document.getElementById('whatsapp-ai-context-textarea').value = contextJson.context || '';
         applyAiDelayToChips(toggleJson.delaySeconds);
+        applyAiModeToChips(toggleJson.mode);
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -5953,12 +6418,13 @@ async function saveWhatsappAiSettings() {
     const enabled = document.getElementById('whatsapp-ai-global-toggle').checked;
     const context = document.getElementById('whatsapp-ai-context-textarea').value;
     const delaySeconds = parseInt((document.getElementById('whatsapp-ai-delay') || {}).value, 10) || 0;
+    const mode = (document.getElementById('whatsapp-ai-mode') || {}).value || 'qualificacao';
     try {
         const [toggleRes, contextRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled, delaySeconds })
+                body: JSON.stringify({ enabled, delaySeconds, mode })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',
@@ -6362,73 +6828,94 @@ async function deleteWhatsappTemplate(name) {
 }
 
 
-// === CONTROLE DE MENU DE OPÇÕES DO CARD ===
+// === CONTROLE DE MENU DE OPÇÕES DO CARD (⋮ e botão direito) ===
 let activeCardMenuId = null;
+
+// Ordem do funil pra "mover pra próxima etapa" (Follow Up / col-perdido fica de fora).
+const KANBAN_FUNNEL_ORDER = ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho'];
+
+function closeCardMenu() {
+    const menu = document.getElementById('card-global-dropdown');
+    if (menu) menu.style.display = 'none';
+    activeCardMenuId = null;
+}
+
+// Núcleo: mostra o menu numa coordenada da viewport (menu é position:fixed).
+function showCardMenu(leadId, x, y) {
+    const menu = document.getElementById('card-global-dropdown');
+    if (!menu) return;
+    activeCardMenuId = leadId;
+
+    const lead = leads.find(l => l.id === leadId);
+
+    // volta pra visão principal (some o submenu de etiquetas)
+    const main = document.getElementById('card-ctx-main');
+    const tags = document.getElementById('card-ctx-tags');
+    if (main) main.style.display = 'flex';
+    if (tags) { tags.style.display = 'none'; tags.innerHTML = ''; }
+
+    // item Orçamento só quando faz sentido
+    const orcItem = document.getElementById('card-menu-item-orc');
+    if (orcItem) {
+        const show = lead && (lead.column === 'col-orcado' || parseOrcamentoArray(lead.orcamento).length > 0);
+        orcItem.style.display = show ? 'flex' : 'none';
+    }
+    // rótulo do "avançar" com o nome da próxima etapa
+    const avLabel = document.getElementById('card-ctx-avancar-label');
+    if (avLabel && lead) {
+        const i = KANBAN_FUNNEL_ORDER.indexOf(lead.column);
+        const next = i >= 0 && i < KANBAN_FUNNEL_ORDER.length - 1 ? KANBAN_FUNNEL_ORDER[i + 1] : null;
+        avLabel.textContent = next ? `Mover p/ ${(KANBAN_COLUMNS[next] || {}).label || 'próxima etapa'}` : 'Já na última etapa';
+        avLabel.parentElement.disabled = !next;
+    }
+
+    menu.style.display = 'block';
+    // mede depois de exibir pra saber o tamanho real e não estourar a tela
+    const r = menu.getBoundingClientRect();
+    let left = x, top = y;
+    if (left + r.width > window.innerWidth - 8) left = window.innerWidth - r.width - 8;
+    if (top + r.height > window.innerHeight - 8) top = window.innerHeight - r.height - 8;
+    menu.style.left = Math.max(8, left) + 'px';
+    menu.style.top = Math.max(8, top) + 'px';
+}
 
 window.toggleCardDropdown = function(event, leadId) {
     event.preventDefault();
     event.stopPropagation();
-    
     const menu = document.getElementById('card-global-dropdown');
     if (!menu) return;
-    
-    if (menu.style.display === 'block' && activeCardMenuId === leadId) {
-        menu.style.display = 'none';
-        activeCardMenuId = null;
-        return;
-    }
-    
-    activeCardMenuId = leadId;
-    
-    const lead = leads.find(l => l.id === leadId);
-    const orcItem = document.getElementById('card-menu-item-orc');
-    if (orcItem && lead) {
-        // Exibe o item de orçamento apenas se o lead estiver na coluna de orçado ou já tiver orçamento
-        if (lead.column === 'col-orcado' || parseOrcamentoArray(lead.orcamento).length > 0) {
-            orcItem.style.display = 'flex';
-        } else {
-            orcItem.style.display = 'none';
-        }
-    }
-
+    if (menu.style.display === 'block' && activeCardMenuId === leadId) { closeCardMenu(); return; }
     const rect = event.currentTarget.getBoundingClientRect();
-    let top = rect.bottom + window.scrollY;
-    let left = rect.left + window.scrollX - 140;
-    
-    if (left < 10) left = 10;
-    
-    // Abre para cima se não couber na parte inferior
-    if (rect.bottom + 180 > window.innerHeight) {
-        top = rect.top + window.scrollY - 150;
-    }
-    
-    menu.style.top = `${top}px`;
-    menu.style.left = `${left}px`;
-    menu.style.position = 'absolute';
-    menu.style.display = 'block';
+    showCardMenu(leadId, rect.left - 170, rect.bottom + 4);
 };
 
-// Fechar menu ao clicar fora
-document.addEventListener('click', function(e) {
-    const menu = document.getElementById('card-global-dropdown');
-    if (menu && menu.style.display === 'block') {
-        if (!menu.contains(e.target) && !e.target.closest('.card-options-btn')) {
-            menu.style.display = 'none';
-            activeCardMenuId = null;
-        }
-    }
-});
+// Botão direito em cima do card abre o mesmo menu, no cursor.
+window.openCardContextMenu = function(event, leadId) {
+    event.preventDefault();
+    event.stopPropagation();
+    showCardMenu(leadId, event.clientX, event.clientY);
+};
 
-window.triggerCardAction = function(action) {
+// Fecha ao clicar/right-click fora
+['click', 'contextmenu'].forEach(evt => document.addEventListener(evt, function(e) {
+    const menu = document.getElementById('card-global-dropdown');
+    if (!menu || menu.style.display !== 'block') return;
+    if (menu.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('.card-options-btn')) return;
+    if (evt === 'contextmenu' && e.target.closest && e.target.closest('.card')) return; // deixa o card reabrir
+    closeCardMenu();
+}));
+
+window.triggerCardAction = async function(action) {
     const leadId = activeCardMenuId;
-    
-    const menu = document.getElementById('card-global-dropdown');
-    if (menu) menu.style.display = 'none';
-    activeCardMenuId = null;
-
     if (!leadId) return;
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
+
+    // Etiquetas abre um submenu — não fecha o menu.
+    if (action === 'etiquetas') { renderCardCtxTags(leadId); return; }
+
+    closeCardMenu();
 
     if (action === 'chat') {
         openLeadChat(lead.telefone, lead.nome);
@@ -6436,8 +6923,196 @@ window.triggerCardAction = function(action) {
         openNotesModal(leadId);
     } else if (action === 'orcamento') {
         openOrcamentoModal(leadId);
+    } else if (action === 'avancar') {
+        advanceLeadStage(leadId);
+    } else if (action === 'inativar') {
+        if (await customConfirm(`Inativar "${lead.nome || 'este lead'}"? Ele vai para Follow Up e o agente de IA para de responder essa conversa.`, 'Inativar lead')) {
+            inativarLead(leadId);
+        }
     } else if (action === 'excluir') {
         deleteLead(leadId);
+    }
+};
+
+// Move o lead pra próxima etapa do funil, com os mesmos modais do drag-and-drop.
+async function advanceLeadStage(leadId) {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    const i = KANBAN_FUNNEL_ORDER.indexOf(lead.column);
+    if (i < 0 || i >= KANBAN_FUNNEL_ORDER.length - 1) {
+        showToast('Este lead já está na última etapa.', 'success');
+        return;
+    }
+    const target = KANBAN_FUNNEL_ORDER[i + 1];
+    lead.column = target;
+    renderBoard();
+    await updateLeadColumnOnServer(leadId, target);
+    if (target === 'col-agendado') { celebrateAgendamento(); setTimeout(() => openAgendamentoModal(leadId), 400); }
+    else if (target === 'col-orcado' && typeof openOrcamentoModal === 'function') { openOrcamentoModal(leadId); }
+    else if (target === 'col-ganho') { openNotesModal(leadId); }
+}
+
+async function inativarLead(leadId) {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    lead.column = 'col-perdido';
+    lead.ai_enabled = 0;
+    renderBoard();
+    try {
+        await fetch(`/api/leads/${leadId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ column_id: 'col-perdido', ai_enabled: 0 })
+        });
+        showToast('Lead movido para Follow Up e IA desligada.', 'success');
+    } catch (e) {
+        showToast('Falha ao inativar o lead.', 'danger');
+    }
+}
+
+window.backToCardCtxMain = function() {
+    const main = document.getElementById('card-ctx-main');
+    const box = document.getElementById('card-ctx-tags');
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+    if (main) main.style.display = 'flex';
+};
+
+// Submenu de etiquetas dentro do menu de contexto.
+function renderCardCtxTags(leadId) {
+    const lead = leads.find(l => l.id === leadId);
+    const main = document.getElementById('card-ctx-main');
+    const box = document.getElementById('card-ctx-tags');
+    if (!lead || !box) return;
+    const all = (typeof getAvailableTags === 'function') ? getAvailableTags() : (window.availableTags || []);
+    const current = new Set((lead.tags || '').split(',').map(t => t.trim()).filter(Boolean));
+
+    box.innerHTML = `
+        <div class="card-ctx-tags-head">
+            <button type="button" onclick="backToCardCtxMain()" title="Voltar"><i class="fa-solid fa-chevron-left"></i></button>
+            <span><i class="fa-solid fa-tags"></i> Etiquetas</span>
+        </div>
+        ${all.map(t => {
+            const on = current.has(t.id);
+            return `<button type="button" class="card-ctx-tag" aria-checked="${on}" onclick="toggleCardCtxTag('${leadId}','${t.id}', this)">
+                <i class="fa-solid fa-check card-ctx-tag-check"></i>
+                <span class="card-ctx-tag-badge" style="background:${t.bg || 'transparent'};color:${t.color || 'inherit'};border-color:${t.border || t.color || 'var(--border-color)'};">${escapeHtml(t.label || t.id)}</span>
+            </button>`;
+        }).join('') || '<div style="padding:0.6rem;color:var(--text-muted);font-size:0.8rem;">Nenhuma etiqueta cadastrada.</div>'}
+        <div class="card-ctx-sep"></div>
+        <button type="button" class="card-ctx-item" onclick="openTagsEditor()">
+            <i class="fa-solid fa-gear" style="color: var(--text-muted);"></i> Editar etiquetas
+        </button>
+    `;
+    if (main) main.style.display = 'none';
+    box.style.display = 'block';
+    // reposiciona caso o submenu tenha outro tamanho
+    const menu = document.getElementById('card-global-dropdown');
+    const r = menu.getBoundingClientRect();
+    if (r.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px';
+}
+
+// === EDITOR DE ETIQUETAS (modal #modalTags) — reaproveita a persistência do chat ===
+let _tgeEditingId = null;
+
+window.openTagsEditor = function() {
+    closeCardMenu();
+    tgeCancelEdit();
+    tgeRenderList();
+    const m = document.getElementById('modalTags');
+    if (m) m.classList.add('active');
+};
+
+function tgeRenderList() {
+    const box = document.getElementById('tge-list');
+    if (!box) return;
+    const tags = (typeof getAvailableTags === 'function') ? getAvailableTags() : [];
+    const protectedIds = (typeof PROTECTED_TAG_IDS !== 'undefined') ? PROTECTED_TAG_IDS : [];
+    box.innerHTML = tags.length ? tags.map(t => {
+        const prot = protectedIds.includes(t.id);
+        return `<div style="display:flex; align-items:center; justify-content:space-between; padding:0.45rem 0.6rem; background:var(--bg-main); border:1px solid var(--border-color); border-radius:7px;">
+            <span class="card-ctx-tag-badge" style="background:${t.bg};color:${t.color};border-color:${t.border || t.color};">${escapeHtml(t.label || t.id)}</span>
+            <span style="display:flex; gap:0.1rem;">
+                <button onclick="tgeStartEdit('${t.id}')" title="Editar nome/cor" style="background:none;border:0;color:var(--text-muted);cursor:pointer;padding:0.2rem 0.4rem;font-size:0.85rem;"><i class="fa-solid fa-pen"></i></button>
+                ${prot
+                    ? `<i class="fa-solid fa-lock" title="Etiqueta usada pelo sistema — não pode ser excluída" style="color:var(--text-muted);padding:0.2rem 0.4rem;font-size:0.8rem;"></i>`
+                    : `<button onclick="tgeDelete('${t.id}')" title="Excluir" style="background:none;border:0;color:var(--accent-danger);cursor:pointer;padding:0.2rem 0.4rem;font-size:0.85rem;"><i class="fa-solid fa-trash"></i></button>`}
+            </span>
+        </div>`;
+    }).join('') : '<div style="text-align:center; color:var(--text-muted); font-size:0.83rem; padding:1rem;">Nenhuma etiqueta ainda.</div>';
+}
+
+window.tgeStartEdit = function(id) {
+    const t = (getAvailableTags() || []).find(x => x.id === id);
+    if (!t) return;
+    _tgeEditingId = id;
+    const n = document.getElementById('tge-name'); if (n) n.value = t.label || '';
+    const c = document.getElementById('tge-color'); if (c) c.value = t.color || '#3b82f6';
+    const ci = document.getElementById('tge-color-icon'); if (ci) ci.style.color = t.color || '#3b82f6';
+    const s = document.getElementById('tge-save-btn'); if (s) s.innerHTML = '<i class="fa-solid fa-check"></i> Salvar';
+    const x = document.getElementById('tge-cancel-btn'); if (x) x.style.display = 'inline-flex';
+};
+
+window.tgeCancelEdit = function() {
+    _tgeEditingId = null;
+    const n = document.getElementById('tge-name'); if (n) n.value = '';
+    const c = document.getElementById('tge-color'); if (c) c.value = '#3b82f6';
+    const ci = document.getElementById('tge-color-icon'); if (ci) ci.style.color = '#3b82f6';
+    const s = document.getElementById('tge-save-btn'); if (s) s.innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar';
+    const x = document.getElementById('tge-cancel-btn'); if (x) x.style.display = 'none';
+};
+
+function tgeAfterChange() {
+    tgeRenderList();
+    if (typeof renderBoard === 'function') renderBoard();
+    const sub = document.getElementById('card-ctx-tags');
+    if (activeCardMenuId && sub && sub.style.display === 'block') renderCardCtxTags(activeCardMenuId);
+}
+
+window.tgeSave = async function() {
+    const name = (document.getElementById('tge-name')?.value || '').trim();
+    if (!name) { showToast('Informe o nome da etiqueta.', 'danger'); return; }
+    const hex = document.getElementById('tge-color')?.value || '#3b82f6';
+    const bg = (typeof hexToRgba === 'function') ? hexToRgba(hex, 0.15) : hex + '26';
+    const tags = (getAvailableTags() || []).slice();
+    if (_tgeEditingId) {
+        const i = tags.findIndex(t => t.id === _tgeEditingId);
+        if (i >= 0) tags[i] = { ...tags[i], label: name, bg, color: hex, border: hex };
+    } else {
+        tags.push({ id: 'custom_' + Date.now(), label: name, bg, color: hex, border: hex });
+    }
+    await saveAvailableTags(tags);
+    tgeCancelEdit();
+    tgeAfterChange();
+};
+
+window.tgeDelete = async function(id) {
+    const protectedIds = (typeof PROTECTED_TAG_IDS !== 'undefined') ? PROTECTED_TAG_IDS : [];
+    if (protectedIds.includes(id)) {
+        showToast('Essa etiqueta é usada pelo sistema e não pode ser excluída.', 'danger');
+        return;
+    }
+    if (!await customConfirm('Excluir esta etiqueta? Ela some dos cards que a usam.', 'Excluir etiqueta')) return;
+    await saveAvailableTags((getAvailableTags() || []).filter(t => t.id !== id));
+    tgeAfterChange();
+};
+
+window.toggleCardCtxTag = async function(leadId, tagId, btn) {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    const arr = (lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const idx = arr.indexOf(tagId);
+    if (idx >= 0) arr.splice(idx, 1); else arr.push(tagId);
+    lead.tags = arr.join(',');
+    if (btn) btn.setAttribute('aria-checked', idx >= 0 ? 'false' : 'true');
+    renderBoard();
+    try {
+        await fetch(`/api/leads/${leadId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags: lead.tags })
+        });
+    } catch (e) {
+        showToast('Falha ao salvar a etiqueta.', 'danger');
     }
 };
 
@@ -6493,7 +7168,7 @@ const KANBAN_COLUMNS = {
     'col-orcado':      { label: 'Orçado',       color: 'var(--accent-warning)', icon: 'fa-file-invoice-dollar' },
     'col-agendado':    { label: 'Agendado',     color: 'var(--accent-success)', icon: 'fa-calendar-check' },
     'col-ganho':       { label: 'Ganho',        color: '#34d399',               icon: 'fa-trophy' },
-    'col-perdido':     { label: 'Perdido',      color: 'var(--accent-danger)',  icon: 'fa-circle-xmark' },
+    'col-perdido':     { label: 'Follow Up',    color: '#fb923c',               icon: 'fa-arrow-rotate-left' },
     'col-atendimento': { label: 'Em Atendimento', color: '#2dd4bf',             icon: 'fa-headset' },
 };
 
@@ -6504,6 +7179,21 @@ function lppOpenChat() {
     if (!lead) return;
     closeLeadProfile();
     openLeadChat(lead.telefone, lead.nome);
+}
+
+// Abre o modal de edição do lead (nome, telefone, e-mail, origem, notas, valor…) a partir da ficha.
+function lppEditLead() {
+    if (!_lppCurrentLeadId) return;
+    if (typeof openNotesModal === 'function') openNotesModal(_lppCurrentLeadId);
+}
+
+// Alterna entre a prévia resumida e o texto completo das notas.
+function lppToggleNotas() {
+    const box = document.getElementById('lpp-notas');
+    const toggle = document.getElementById('lpp-notas-toggle');
+    if (!box) return;
+    const clamped = box.classList.toggle('is-clamped');
+    if (toggle) toggle.textContent = clamped ? 'Ver mais' : 'Ver menos';
 }
 
 function lppCopyPhone(event, phone) {
@@ -6595,7 +7285,7 @@ async function openLeadProfile(leadId) {
 
     const panel = document.getElementById('lead-profile-panel');
     const overlay = document.getElementById('lead-profile-overlay');
-    if (!panel || !overlay) return;
+    if (!panel) return;
 
     const chatBtn = document.getElementById('lpp-btn-chat');
     if (chatBtn) chatBtn.style.display = lead.telefone ? '' : 'none';
@@ -6673,22 +7363,58 @@ async function openLeadProfile(leadId) {
         ${createdDate ? `<div class="lpp-row"><i class="fa-solid fa-calendar-plus"></i><span class="lpp-row-label">Criado em</span><span class="lpp-row-value">${createdDate}</span></div>` : ''}
         ${relTime ? `<div class="lpp-row"><i class="fa-solid fa-clock"></i><span class="lpp-row-label">Último contato</span><span class="lpp-row-value">${relTime}</span></div>` : ''}
         ${owner ? `<div class="lpp-row"><i class="fa-solid fa-user-tie"></i><span class="lpp-row-label">Responsável</span><span class="lpp-row-value">${owner}</span></div>` : ''}
+        <div class="lpp-row" id="lpp-last-agent-row"><i class="fa-solid fa-headset"></i><span class="lpp-row-label">Último a responder</span><span class="lpp-row-value" id="lpp-last-agent-value">—</span></div>
         ${lead.valor_recebido ? `<div class="lpp-row"><i class="fa-solid fa-money-bill-wave"></i><span class="lpp-row-label">Valor recebido</span><span class="lpp-row-value" style="color:var(--accent-success);font-weight:700;">${lppFormatMoney(lead.valor_recebido)}</span></div>` : ''}
         ${bdayHtml}
     `;
 
-    // Notas
+    // Último atendente humano que respondeu pelo WhatsApp (async).
+    (async () => {
+        const valEl = document.getElementById('lpp-last-agent-value');
+        if (!valEl) return;
+        try {
+            const r = await fetch(`/api/leads/${leadId}/ultimo-atendente`).then(x => x.json());
+            if (r && r.atendente) {
+                const raw = r.quando ? String(r.quando).replace(' ', 'T') : '';
+                const rel = raw ? (lppRelativeTime(raw) || lppFormatDate(raw)) : '';
+                const quando = rel ? ` · ${rel}` : '';
+                valEl.innerHTML = `${escapeHtml(r.atendente)}<span style="color:var(--text-muted);font-weight:400;">${quando}</span>`;
+            } else if (r && r.via_ia) {
+                valEl.innerHTML = `<span style="color:var(--text-muted);">Agente de IA</span>`;
+            } else {
+                const row = document.getElementById('lpp-last-agent-row');
+                if (row) row.style.display = 'none';
+            }
+        } catch (_) {
+            const row = document.getElementById('lpp-last-agent-row');
+            if (row) row.style.display = 'none';
+        }
+    })();
+
+    // Notas — em card, com prévia resumida e "Ver mais" quando o texto é longo.
     const notasSection = document.getElementById('lpp-notas-section');
     const notasEl = document.getElementById('lpp-notas');
+    const notasToggle = document.getElementById('lpp-notas-toggle');
     if (lead.notas && lead.notas.trim()) {
-        notasEl.textContent = lead.notas;
+        notasEl.textContent = lead.notas.trim();
+        notasEl.classList.remove('is-clamped');
         notasSection.style.display = '';
+        requestAnimationFrame(() => {
+            const overflowing = notasEl.scrollHeight > 150;
+            if (overflowing) notasEl.classList.add('is-clamped');
+            if (notasToggle) {
+                notasToggle.hidden = !overflowing;
+                notasToggle.textContent = 'Ver mais';
+            }
+        });
     } else {
         notasSection.style.display = 'none';
     }
 
+    // Abas: sempre começa em "Orçamentos" ao abrir a ficha.
+    lppSwitchTab('orc');
+
     // Orçamentos
-    const orcSection = document.getElementById('lpp-orc-section');
     const orcEl = document.getElementById('lpp-orcamentos');
     const orcamentos = lppParseOrcamento(lead.orcamento);
     if (orcamentos.length) {
@@ -6702,16 +7428,13 @@ async function openLeadProfile(leadId) {
                 <span class="lpp-orc-valor">${lppFormatMoney(o.valor)}</span>
             </div>
         `).join('') + (orcamentos.length > 1 ? `<div class="lpp-orc-total"><span>Total</span><span>${lppFormatMoney(total)}</span></div>` : '');
-        orcSection.style.display = '';
     } else {
-        orcSection.style.display = 'none';
+        orcEl.innerHTML = '<span class="lpp-empty">Nenhum orçamento registrado.</span>';
     }
 
     // Histórico de agendamentos (async)
-    const histSection = document.getElementById('lpp-hist-section');
     const histEl = document.getElementById('lpp-historico');
     histEl.innerHTML = `<span class="amicro-loader"><span></span><span></span><span></span></span>`;
-    histSection.style.display = '';
 
     try {
         const agendamentos = await fetch(`/api/leads/${leadId}/agendamentos`).then(r => r.json());
@@ -6736,17 +7459,34 @@ async function openLeadProfile(leadId) {
         histEl.innerHTML = '<span class="lpp-empty">Erro ao carregar histórico.</span>';
     }
 
-    // Show panel
-    overlay.style.display = 'block';
-    requestAnimationFrame(() => panel.classList.add('active'));
+    // Abre como página dedicada (ocupa a tela toda).
+    if (overlay) overlay.style.display = 'none';
+    panel.classList.add('active');
+    const body = panel.querySelector('.lpp-body');
+    if (body) body.scrollTop = 0;
 }
 
 function closeLeadProfile() {
     const panel = document.getElementById('lead-profile-panel');
     const overlay = document.getElementById('lead-profile-overlay');
-    if (!panel || !overlay) return;
-    panel.classList.remove('active');
-    overlay.style.display = 'none';
+    if (panel) panel.classList.remove('active');
+    if (overlay) overlay.style.display = 'none';
+}
+
+// Alterna entre as abas "Orçamentos" e "Histórico de agendamentos" na ficha do lead.
+function lppSwitchTab(name) {
+    const tabs = { orc: 'lpp-tab-orc', hist: 'lpp-tab-hist' };
+    const panels = { orc: 'lpp-panel-orc', hist: 'lpp-panel-hist' };
+    Object.keys(tabs).forEach(key => {
+        const tabEl = document.getElementById(tabs[key]);
+        const panelEl = document.getElementById(panels[key]);
+        const active = key === name;
+        if (tabEl) {
+            tabEl.classList.toggle('is-active', active);
+            tabEl.setAttribute('aria-selected', active ? 'true' : 'false');
+        }
+        if (panelEl) panelEl.hidden = !active;
+    });
 }
 
 // === SIDEBAR: rail fixo que expande ao passar o mouse ===

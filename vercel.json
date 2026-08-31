@@ -4,5 +4,11 @@
       "source": "/api/(.*)",
       "destination": "/api/index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/flow-tick",
+      "schedule": "*/2 * * * *"
+    }
   ]
 }

@@ -156,7 +156,7 @@ function phoneVariants(raw) {
 // Montado via app.use('/api', requireAuth) — dentro do middleware, req.path já vem
 // SEM o prefixo /api (o Express remove o trecho do mount point), por isso a lista
 // abaixo usa os caminhos relativos ao mount.
-const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook']);
+const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick']);
 
 function requireAuth(req, res, next) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
@@ -392,7 +392,17 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 // terminar (a chamada ao Gemini era interrompida no meio). A Meta
                 // tolera alguns segundos de resposta antes de reentregar a mensagem.
                 if (msg_type === 'text' && msg_body && resolvedLeadId) {
-                    await handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro no agente de IA:', e));
+                    // Motor de fluxo roda ANTES da IA. Se um fluxo assumir a conversa,
+                    // a IA não responde esse turno.
+                    let handledByFlow = false;
+                    try {
+                        handledByFlow = await flowDispatchInbound(resolvedLeadId, from, msg_body);
+                    } catch (e) {
+                        console.error('Erro no motor de fluxo:', e);
+                    }
+                    if (!handledByFlow) {
+                        await handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro no agente de IA:', e));
+                    }
                 }
             } catch(e) {
                 console.error("Erro ao processar webhook no DB:", e);
@@ -765,9 +775,10 @@ app.post('/api/whatsapp/send', async (req, res) => {
         // Salvar no banco local wa_messages
         try {
             let msg_id = result.messages ? result.messages[0].id : Date.now().toString();
+            const sentBy = (req.user && req.user.username) ? req.user.username : null;
             await queryD1(
-                'INSERT INTO wa_messages (id, phone, direction, message, status, quoted_id) VALUES (?, ?, ?, ?, ?, ?)',
-                [msg_id, to, 'out', db_message_body, 'sent', quoted_id || null]
+                'INSERT INTO wa_messages (id, phone, direction, message, status, quoted_id, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [msg_id, to, 'out', db_message_body, 'sent', quoted_id || null, sentBy]
             );
 
             // Essa rota só é chamada pelo atendente logado no CRM (a IA manda mensagem
@@ -826,8 +837,8 @@ async function sendWhatsappTextInternal(to, text) {
 
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
-        'INSERT INTO wa_messages (id, phone, direction, message, status) VALUES (?, ?, ?, ?, ?)',
-        [msg_id, to, 'out', text, 'sent']
+        'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [msg_id, to, 'out', text, 'sent', 'ia']
     );
     return resultJson;
 }
@@ -873,9 +884,13 @@ REGRAS DE TOM:
 - Sempre termine sua resposta com uma pergunta aberta, pra entender melhor a necessidade do paciente (o que ele busca, há quanto tempo, o que já tentou, etc.).
 - Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.`;
 
-// Parte FIXA, nunca editável pela tela — é o que faz o mecanismo de handoff
-// funcionar (token de silêncio). Sempre é anexada ao contexto, customizado ou
-// não, pra ninguém conseguir quebrar a qualificação sem querer ao editar o texto.
+// Partes FIXAS de comportamento, nunca editáveis pela tela — é o que faz o
+// mecanismo de handoff funcionar (token de silêncio). Uma delas é sempre anexada
+// ao contexto conforme o MODO do agente, pra ninguém quebrar o handoff sem
+// querer ao editar o texto do contexto.
+const WHATSAPP_AI_QUALIFIED_TOKEN = 'QUALIFICADO_SILENCIO';
+
+// Modo "qualificação" (padrão): entende a necessidade e passa rápido pro humano.
 const WHATSAPP_AI_SILENCE_RULE = `
 
 REGRA CRÍTICA DE SILÊNCIO:
@@ -883,7 +898,33 @@ Você NUNCA fala sobre valores/preços. Se o paciente perguntar quanto custa qua
 QUALIFICADO_SILENCIO
 (sem mais nada — nem pontuação, nem explicação). Isso sinaliza ao sistema que a IA deve parar de responder aquele contato.`;
 
-const WHATSAPP_AI_QUALIFIED_TOKEN = 'QUALIFICADO_SILENCIO';
+// Modo "vendas": conduz a conversa até o paciente aceitar agendar uma avaliação,
+// tratando objeções — mas continua sem inventar preço e com o mesmo token de
+// handoff, que agora dispara mais pra frente (na hora de fechar).
+const WHATSAPP_AI_SALES_RULE = `
+
+REGRA DE MODO — VENDAS:
+Seu papel é NÃO parar de conversar. Você conduz o paciente, passo a passo, até ele ACEITAR AGENDAR UMA AVALIAÇÃO presencial. Enquanto isso não acontecer, você SEMPRE responde — nunca devolve o controle.
+
+Como conduzir:
+- Faça descoberta: entenda o objetivo, há quanto tempo, o que já tentou, o impacto no dia a dia. Uma pergunta por vez.
+- Depois da descoberta, apresente o procedimento com profundidade usando o contexto acima: como funciona, benefícios, o que esperar, cuidados. NÃO invente dados.
+- Trate objeções com empatia ("vou pensar", medo, falta de tempo, "depois eu vejo"): acolha, reforce segurança e resultados, e volte a propor a avaliação.
+- Termine TODA mensagem com um próximo passo: convide para agendar a avaliação e ofereça duas opções ("prefere de manhã ou à tarde?", "essa semana ou a próxima?").
+- NUNCA invente preço, promoção ou horário disponível. Se perguntarem valor: explique que depende da avaliação, que lá a pessoa recebe o plano e o valor certos, e proponha agendar.
+- Nunca diga que é uma IA/robô/sistema.
+
+NÃO FAÇA HANDOFF (não responda o token) quando o paciente só:
+- respondeu uma pergunta de descoberta (ex.: "faz uns meses", "é pra disposição", "já tentei vitamina");
+- demonstrou interesse ou fez uma pergunta sobre o procedimento;
+- levantou uma objeção. Nesses casos, CONTINUE a conversa você mesmo.
+
+QUANDO PARAR (handoff): só então responda EXATAMENTE a palavra QUALIFICADO_SILENCIO (sozinha, sem pontuação):
+- o paciente concordou em agendar, ou informou um dia/horário;
+- pediu explicitamente para falar com uma pessoa da equipe;
+- insistiu num valor exato mesmo depois de você já ter explicado;
+- perguntou sobre um agendamento que já existe, remarcação, ou fez uma dúvida médica específica.
+Fora desses casos, você NUNCA responde o token.`;
 
 async function getWhatsappAiContext() {
     try {
@@ -891,6 +932,16 @@ async function getWhatsappAiContext() {
         return (rows && rows[0] && rows[0].value) ? rows[0].value : WHATSAPP_AI_DEFAULT_CONTEXT;
     } catch (e) {
         return WHATSAPP_AI_DEFAULT_CONTEXT;
+    }
+}
+
+// Modo do agente: 'vendas' ou 'qualificacao' (padrão).
+async function getWhatsappAiMode() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_mode'");
+        return (rows && rows[0] && rows[0].value === 'vendas') ? 'vendas' : 'qualificacao';
+    } catch (e) {
+        return 'qualificacao';
     }
 }
 
@@ -913,7 +964,9 @@ async function callGeminiForWhatsappReply(phone) {
 
     const history = await getWhatsappAiHistory(phone);
     const context = await getWhatsappAiContext();
-    const systemPrompt = context + WHATSAPP_AI_SILENCE_RULE;
+    const mode = await getWhatsappAiMode();
+    const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
+    const systemPrompt = context + behaviorRule;
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
@@ -1006,15 +1059,22 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
         if (!replyText) return;
 
         if (replyText.startsWith(WHATSAPP_AI_QUALIFIED_TOKEN)) {
+            const aiMode = await getWhatsappAiMode();
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
             await tagLeadAsQualified(leadId);
             const notas = await queryD1('SELECT notas FROM leads WHERE id = ?', [leadId]);
             const notaAtual = notas?.[0]?.notas || '';
-            const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 IA identificou lead qualificado em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
+            const motivo = aiMode === 'vendas'
+                ? 'IA de vendas conduziu a conversa — lead pronto pra fechar/agendar'
+                : 'IA identificou lead qualificado';
+            const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
             await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
+            const notifMsg = aiMode === 'vendas'
+                ? '🤖 IA de vendas: lead pronto pra fechar — assumir conversa no WhatsApp.'
+                : '🤖 Lead qualificado pela IA — assumir conversa no WhatsApp.';
             await queryD1(
                 'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-                [`ai-qual-${leadId}-${Date.now()}`, `🤖 Lead qualificado pela IA — assumir conversa no WhatsApp.`]
+                [`ai-qual-${leadId}-${Date.now()}`, notifMsg]
             );
             return;
         }
@@ -1547,6 +1607,8 @@ async function queryD1(sql, params = []) {
 queryD1("ALTER TABLE wa_messages ADD COLUMN quoted_id TEXT").catch(() => {});
 // Motivo da falha de entrega (preenchido pelo webhook de status da Meta)
 queryD1("ALTER TABLE wa_messages ADD COLUMN error_detail TEXT").catch(() => {});
+// Quem enviou a mensagem de saída: username do atendente, 'ia' pra resposta automática, NULL pra legado
+queryD1("ALTER TABLE wa_messages ADD COLUMN sent_by TEXT").catch(() => {});
 // Migration para suportar troca obrigatória de senha no primeiro acesso
 queryD1("ALTER TABLE crm_users ADD COLUMN must_change_password INTEGER DEFAULT 0").catch(() => {});
 // Personalização de perfil do atendente
@@ -1559,6 +1621,30 @@ queryD1("ALTER TABLE crm_notifications ADD COLUMN avatar_url TEXT").catch(() => 
 // Quem disparou a notificação (ex.: login) — usado pra não notificar a própria
 // pessoa de uma ação que ela mesma fez (ex.: "você entrou no sistema").
 queryD1("ALTER TABLE crm_notifications ADD COLUMN actor_username TEXT").catch(() => {});
+
+// Fluxo de atendimento (nodes): definição do grafo + estado de execução por lead.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_flows (
+    id TEXT PRIMARY KEY,
+    nome TEXT,
+    ativo INTEGER DEFAULT 0,
+    prioridade INTEGER DEFAULT 0,
+    graph_json TEXT,
+    version INTEGER DEFAULT 1,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+queryD1(`CREATE TABLE IF NOT EXISTS crm_flow_runs (
+    id TEXT PRIMARY KEY,
+    flow_id TEXT,
+    flow_version INTEGER,
+    lead_id TEXT,
+    phone TEXT,
+    status TEXT,
+    current_node_id TEXT,
+    context_json TEXT,
+    next_wake_at DATETIME,
+    steps_done INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
 
 // Considera "online" quem mandou heartbeat nos últimos 90s
 const ONLINE_THRESHOLD_MS = 90 * 1000;
@@ -2020,7 +2106,8 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const enabled = rows && rows[0] ? rows[0].value === '1' : true; // liga por padrão
         const delaySeconds = await getWhatsappAiReplyDelay();
-        res.json({ enabled, delaySeconds, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY });
+        const mode = await getWhatsappAiMode();
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -2047,10 +2134,82 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
         } else {
             delaySeconds = await getWhatsappAiReplyDelay();
         }
-        res.json({ success: true, enabled: enabled === '1', delaySeconds });
+        let mode = await getWhatsappAiMode();
+        if (req.body?.mode !== undefined) {
+            mode = req.body.mode === 'vendas' ? 'vendas' : 'qualificacao';
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [mode]
+            );
+        }
+        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
+    }
+});
+
+// Dados da empresa que aparecem no cabeçalho do orçamento impresso.
+app.get('/api/settings/orcamento-empresa', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'orcamento_empresa'");
+        let dados = {};
+        if (rows && rows[0] && rows[0].value) {
+            try { dados = JSON.parse(rows[0].value); } catch (e) {}
+        }
+        res.json({ empresa: dados || {} });
+    } catch (e) {
+        console.error('Erro ao buscar dados da empresa:', e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+app.put('/api/settings/orcamento-empresa', async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Apenas administradores podem editar os dados da empresa.' });
+    }
+    try {
+        const b = req.body || {};
+
+        // Preserva o que já estava salvo (ex.: a logo, que o cliente só reenvia se mudou).
+        let atual = {};
+        try {
+            const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'orcamento_empresa'");
+            if (rows && rows[0] && rows[0].value) atual = JSON.parse(rows[0].value) || {};
+        } catch (e) {}
+
+        const dados = {
+            razao_social: String(b.razao_social || '').trim(),
+            cnpj: String(b.cnpj || '').trim(),
+            endereco: String(b.endereco || '').trim(),
+            telefone: String(b.telefone || '').trim(),
+            email: String(b.email || '').trim(),
+            logo: atual.logo || ''
+        };
+
+        // logo: undefined = não mexeram; '' = remover; data URI = trocar.
+        if (b.logo !== undefined) {
+            const logo = String(b.logo || '');
+            if (logo === '') {
+                dados.logo = '';
+            } else if (/^data:image\/(png|jpeg|jpg|webp|svg\+xml);/i.test(logo)) {
+                if (logo.length > 700000) {
+                    return res.status(413).json({ error: 'Logo muito pesada. Envie uma imagem menor.' });
+                }
+                dados.logo = logo;
+            } else {
+                return res.status(400).json({ error: 'Formato de logo inválido.' });
+            }
+        }
+
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('orcamento_empresa', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(dados)]
+        );
+        res.json({ success: true, empresa: dados });
+    } catch (e) {
+        console.error('Erro ao salvar dados da empresa:', e);
+        res.status(500).json({ error: 'Erro interno.' });
     }
 });
 
@@ -2751,6 +2910,8 @@ app.post('/api/init-db', async (req, res) => {
         try { await queryD1('ALTER TABLE leads ADD COLUMN data_valor DATETIME'); } catch(e) {}
         // Proteção anti-bloqueio: lead que optou por não receber disparos de campanha/marketing
         try { await queryD1('ALTER TABLE leads ADD COLUMN campaign_opt_out INTEGER DEFAULT 0'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN cpf TEXT'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN endereco TEXT'); } catch(e) {}
         
         await queryD1(`
             CREATE TABLE IF NOT EXISTS crm_users (
@@ -3279,7 +3440,7 @@ app.post('/api/leads', async (req, res) => {
 // Atualizar dados de um lead (coluna e/ou notas)
 app.put('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
-    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled } = req.body;
+    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco } = req.body;
     try {
         const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [id]);
         const lead = leadRows && leadRows.length > 0 ? leadRows[0] : null;
@@ -3344,6 +3505,14 @@ app.put('/api/leads/:id', async (req, res) => {
         if (ai_enabled !== undefined) {
             updates.push('ai_enabled = ?');
             params.push(ai_enabled ? 1 : 0);
+        }
+        if (cpf !== undefined) {
+            updates.push('cpf = ?');
+            params.push((cpf || '').trim() || null);
+        }
+        if (endereco !== undefined) {
+            updates.push('endereco = ?');
+            params.push((endereco || '').trim() || null);
         }
 
         if (updates.length > 0) {
@@ -3794,6 +3963,54 @@ app.get('/api/leads/:id/agendamentos', async (req, res) => {
         res.json(rows || []);
     } catch (e) {
         console.error(e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+// Último atendente humano que respondeu esse lead pelo WhatsApp (pra ficha do lead).
+app.get('/api/leads/:id/ultimo-atendente', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const leadRows = await queryD1('SELECT telefone FROM leads WHERE id = ?', [id]);
+        const lead = leadRows && leadRows[0];
+        if (!lead || !lead.telefone) return res.json({ atendente: null });
+
+        const variants = phoneVariants(lead.telefone);
+        const placeholders = variants.map(() => '?').join(', ');
+        const rows = await queryD1(
+            `SELECT sent_by, timestamp, message FROM wa_messages
+             WHERE phone IN (${placeholders}) AND direction = 'out'
+             ORDER BY timestamp DESC LIMIT 25`,
+            variants
+        );
+
+        let username = null, quando = null, viaIa = false;
+        for (const r of (rows || [])) {
+            if (r.sent_by && r.sent_by !== 'ia') { username = r.sent_by; quando = r.timestamp; break; }
+            if (!quando) { quando = r.timestamp; viaIa = viaIa || r.sent_by === 'ia'; }
+            // Legado sem sent_by: tenta extrair a assinatura "_Nome – Clínica_" da última linha.
+            if (!username && (!r.sent_by || r.sent_by === null)) {
+                const m = String(r.message || '').match(/_([^_–-]+?)\s*[–-]\s*[^_]+_\s*$/);
+                if (m) { username = m[1].trim(); quando = r.timestamp; break; }
+            }
+        }
+
+        let displayName = username;
+        if (username) {
+            try {
+                const u = await queryD1('SELECT display_name FROM crm_users WHERE username = ?', [username]);
+                if (u && u[0] && u[0].display_name) displayName = u[0].display_name;
+            } catch (e) {}
+        }
+
+        res.json({
+            atendente: displayName,
+            username: username,
+            quando: quando || null,
+            via_ia: !username && viaIa
+        });
+    } catch (e) {
+        console.error('Erro ao buscar último atendente:', e);
         res.status(500).json({ error: 'Erro interno.' });
     }
 });
@@ -4916,6 +5133,373 @@ if (!process.env.VERCEL) {
         }
     }, 5 * 60 * 1000);
 }
+
+// ==========================================
+// MOTOR DE FLUXO DE ATENDIMENTO (nodes)
+// ==========================================
+// Um "fluxo" é um grafo de passos percorrido por lead quando chega uma mensagem
+// de WhatsApp. Roda ANTES do agente de IA (webhook -> flowDispatchInbound): se um
+// fluxo assume a conversa, a IA não responde aquele turno. Esperas e timeouts são
+// resolvidos pelo endpoint /api/flows/tick (agendado via Vercel Cron).
+
+const FLOW_MAX_STEPS = 40;
+
+function flowInterpolate(text, ctx) {
+    return String(text == null ? '' : text).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+        const v = ctx[k];
+        return (v === undefined || v === null) ? '' : String(v);
+    });
+}
+
+function flowDbTime(msFromNow = 0) {
+    return new Date(Date.now() + msFromNow).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+// Executa UM node. Retorna a instrução de transição:
+//   { go: 'n3' }                            -> vai pro node n3
+//   { wait: true, timeoutMin, timeoutGo }   -> pausa aguardando resposta do lead
+//   { sleep: minutos }                      -> pausa por tempo
+//   { end: true, handoffToAi }              -> encerra a run
+async function flowExecNode(node, run, ctx, opts) {
+    const cfg = node.config || {};
+    const sim = !!opts.simulate;
+    const logAcao = (extra) => { if (opts.log) opts.log.push(Object.assign({ node: node.id, tipo: node.type }, extra || {})); };
+
+    switch (node.type) {
+        case 'enviar_texto': {
+            const texto = flowInterpolate(cfg.texto, ctx);
+            logAcao({ texto });
+            if (!sim && texto.trim()) await sendWhatsappTextInternal(run.phone, texto);
+            return { go: node.next || null };
+        }
+        case 'aguardar_resposta': {
+            logAcao({ timeout_min: cfg.timeout_min || null });
+            return { wait: true, timeoutMin: Number(cfg.timeout_min) || null, timeoutGo: node.on_timeout || null };
+        }
+        case 'delay': {
+            const mins = Math.max(1, Number(cfg.minutos) || 1);
+            logAcao({ minutos: mins });
+            return { sleep: mins };
+        }
+        case 'condicao': {
+            const resp = String(ctx.ultima_resposta || '');
+            const alvo = String(cfg.valor || '');
+            const modo = cfg.modo || 'contem';
+            let hit = false;
+            if (modo === 'igual') hit = resp.trim().toLowerCase() === alvo.trim().toLowerCase();
+            else if (modo === 'comeca_com') hit = resp.trim().toLowerCase().startsWith(alvo.trim().toLowerCase());
+            else if (modo === 'regex') { try { hit = new RegExp(alvo, 'i').test(resp); } catch (e) { hit = false; } }
+            else hit = resp.toLowerCase().includes(alvo.toLowerCase());
+            logAcao({ modo, valor: alvo, resultado: hit });
+            return { go: (hit ? node.on_true : node.on_false) || null };
+        }
+        case 'mover_coluna': {
+            logAcao({ coluna: cfg.coluna });
+            if (!sim && cfg.coluna) await queryD1('UPDATE leads SET column_id = ? WHERE id = ?', [cfg.coluna, run.lead_id]);
+            return { go: node.next || null };
+        }
+        case 'adicionar_tag': {
+            logAcao({ tag: cfg.tag });
+            if (!sim && cfg.tag) {
+                const rows = await queryD1('SELECT tags FROM leads WHERE id = ?', [run.lead_id]);
+                const atual = (rows && rows[0] && rows[0].tags) ? String(rows[0].tags).split(',').map(s => s.trim()).filter(Boolean) : [];
+                if (!atual.includes(cfg.tag)) {
+                    atual.push(cfg.tag);
+                    await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [atual.join(','), run.lead_id]);
+                }
+            }
+            return { go: node.next || null };
+        }
+        case 'definir_ia': {
+            const on = cfg.ligada ? 1 : 0;
+            logAcao({ ia_ligada: on });
+            if (!sim) await queryD1('UPDATE leads SET ai_enabled = ? WHERE id = ?', [on, run.lead_id]);
+            return { go: node.next || null };
+        }
+        case 'entregar_ia': {
+            logAcao({});
+            if (!sim) await queryD1('UPDATE leads SET ai_enabled = 1 WHERE id = ?', [run.lead_id]);
+            return { end: true, handoffToAi: true };
+        }
+        case 'handoff': {
+            const motivo = flowInterpolate(cfg.motivo, ctx) || 'Lead pronto para atendimento humano';
+            logAcao({ motivo });
+            if (!sim) {
+                await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [run.lead_id]);
+                try {
+                    await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                        [`flow-${run.id}-${Date.now()}`, `🤝 Fluxo de atendimento: ${motivo} — ${ctx.nome || run.phone}`]);
+                } catch (e) {}
+            }
+            return { end: true };
+        }
+        case 'fim':
+        default: {
+            logAcao({});
+            return { end: true };
+        }
+    }
+}
+
+// Percorre a run a partir de _startNodeId (ou current_node_id) até parar/pausar.
+async function flowRun(run, graph, ctx, opts = {}) {
+    const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+    let nodeId = run._startNodeId != null ? run._startNodeId : run.current_node_id;
+    let steps = Number(run.steps_done) || 0;
+    const persist = !opts.simulate;
+
+    while (nodeId && steps < FLOW_MAX_STEPS) {
+        const node = nodes.find(n => n.id === nodeId);
+        if (!node) { nodeId = null; break; }
+
+        const r = await flowExecNode(node, run, ctx, opts);
+        steps++;
+        run._lastNode = node.id;
+
+        if (r.sleep) {
+            if (opts.simulate) { nodeId = node.next || null; continue; }
+            await queryD1(
+                'UPDATE crm_flow_runs SET status = ?, current_node_id = ?, context_json = ?, steps_done = ?, next_wake_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                ['sleeping', node.id, JSON.stringify(ctx), steps, flowDbTime(r.sleep * 60000), run.id]);
+            return { status: 'sleeping' };
+        }
+        if (r.wait) {
+            if (persist) {
+                await queryD1(
+                    'UPDATE crm_flow_runs SET status = ?, current_node_id = ?, context_json = ?, steps_done = ?, next_wake_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                    ['waiting_reply', node.id, JSON.stringify(ctx), steps, r.timeoutMin ? flowDbTime(r.timeoutMin * 60000) : null, run.id]);
+            }
+            return { status: 'waiting_reply' };
+        }
+        if (r.end) {
+            if (persist) {
+                await queryD1(
+                    'UPDATE crm_flow_runs SET status = ?, current_node_id = ?, context_json = ?, steps_done = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                    ['done', node.id, JSON.stringify(ctx), steps, run.id]);
+            }
+            return { status: 'done', handoffToAi: !!r.handoffToAi };
+        }
+        nodeId = r.go || null;
+    }
+
+    if (persist) {
+        await queryD1('UPDATE crm_flow_runs SET status = ?, steps_done = ?, context_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            ['done', steps, JSON.stringify(ctx), run.id]);
+    }
+    if (opts.log && steps >= FLOW_MAX_STEPS) opts.log.push({ aviso: 'limite de passos atingido — fluxo encerrado' });
+    return { status: 'done' };
+}
+
+async function flowFindTrigger(lead, phone, msgBody) {
+    const rows = await queryD1("SELECT * FROM crm_flows WHERE ativo = 1 ORDER BY prioridade DESC, updated_at DESC");
+    if (!rows || !rows.length) return null;
+    const variants = phoneVariants(phone);
+    const ph = variants.map(() => '?').join(', ');
+    let inboundCount = null;
+
+    for (const f of rows) {
+        let g;
+        try { g = JSON.parse(f.graph_json || '{}'); } catch (e) { continue; }
+        if (!Array.isArray(g.nodes) || !g.nodes.length) continue;
+        const t = g.trigger || {};
+        const cfg = t.config || {};
+
+        if (t.type === 'primeira_mensagem') {
+            if (inboundCount == null) {
+                const c = await queryD1(`SELECT COUNT(*) AS c FROM wa_messages WHERE direction = 'in' AND phone IN (${ph})`, variants);
+                inboundCount = (c && c[0]) ? Number(c[0].c) : 0;
+            }
+            if (inboundCount <= 1) return { flow: f, graph: g };
+        } else if (t.type === 'entrou_coluna') {
+            if (lead.column_id === cfg.coluna) return { flow: f, graph: g };
+        } else if (t.type === 'palavra_chave') {
+            const kws = String(cfg.palavras || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            if (kws.length && kws.some(k => String(msgBody || '').toLowerCase().includes(k))) return { flow: f, graph: g };
+        }
+    }
+    return null;
+}
+
+// Chamado pelo webhook. Retorna true se um fluxo assumiu a mensagem (a IA não responde).
+async function flowDispatchInbound(leadId, phone, msgBody) {
+    const variants = phoneVariants(phone);
+    const ph = variants.map(() => '?').join(', ');
+
+    const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [leadId]);
+    const lead = leadRows && leadRows[0];
+    if (!lead) return false;
+
+    // 1) Existe run aguardando resposta pra esse número?
+    const activeRows = await queryD1(
+        `SELECT * FROM crm_flow_runs WHERE status = 'waiting_reply' AND phone IN (${ph}) ORDER BY updated_at DESC LIMIT 1`, variants);
+    if (activeRows && activeRows[0]) {
+        const run = activeRows[0];
+        const fr = await queryD1('SELECT * FROM crm_flows WHERE id = ?', [run.flow_id]);
+        if (!fr || !fr[0]) { await queryD1("UPDATE crm_flow_runs SET status = 'failed' WHERE id = ?", [run.id]); return false; }
+        let graph; try { graph = JSON.parse(fr[0].graph_json || '{}'); } catch (e) { return false; }
+        let ctx = {}; try { ctx = JSON.parse(run.context_json || '{}'); } catch (e) {}
+        ctx.ultima_resposta = msgBody;
+        ctx.nome = lead.nome || '';
+        ctx.telefone = lead.telefone || '';
+        const waitNode = (graph.nodes || []).find(n => n.id === run.current_node_id);
+        run._startNodeId = waitNode ? (waitNode.next || null) : null;
+        run.lead_id = leadId;
+        run.phone = lead.telefone || phone;
+        await queryD1("UPDATE crm_flow_runs SET status = 'running' WHERE id = ?", [run.id]);
+        const res = await flowRun(run, graph, ctx, {});
+        return !res.handoffToAi;
+    }
+
+    // 2) Algum gatilho casa? (e esse fluxo ainda não rodou pra esse lead)
+    const trig = await flowFindTrigger(lead, phone, msgBody);
+    if (!trig) return false;
+    const prior = await queryD1("SELECT id FROM crm_flow_runs WHERE flow_id = ? AND lead_id = ? AND status != 'failed' LIMIT 1", [trig.flow.id, leadId]);
+    if (prior && prior[0]) return false;
+
+    const startNode = trig.graph.nodes[0];
+    const runId = 'fr-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const ctx = { nome: lead.nome || '', telefone: lead.telefone || '', ultima_resposta: msgBody, gatilho_msg: msgBody };
+    await queryD1(
+        'INSERT INTO crm_flow_runs (id, flow_id, flow_version, lead_id, phone, status, current_node_id, context_json, steps_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+        [runId, trig.flow.id, trig.flow.version || 1, leadId, lead.telefone || phone, 'running', startNode.id, JSON.stringify(ctx)]);
+    const run = { id: runId, flow_id: trig.flow.id, lead_id: leadId, phone: lead.telefone || phone, current_node_id: startNode.id, steps_done: 0, _startNodeId: startNode.id };
+    const res = await flowRun(run, trig.graph, ctx, {});
+    return !res.handoffToAi;
+}
+
+function flowRequireAdmin(req, res) {
+    if (!req.user || req.user.role !== 'admin') { res.status(403).json({ error: 'Apenas administradores editam fluxos.' }); return false; }
+    return true;
+}
+
+app.get('/api/flows', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT id, nome, ativo, prioridade, version, updated_at FROM crm_flows ORDER BY updated_at DESC');
+        res.json({ flows: rows || [] });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.get('/api/flows/:id', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT * FROM crm_flows WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).json({ error: 'Fluxo não encontrado.' });
+        res.json({ flow: rows[0] });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.post('/api/flows', async (req, res) => {
+    if (!flowRequireAdmin(req, res)) return;
+    try {
+        const id = 'flow-' + Date.now().toString(36);
+        const nome = (String(req.body.nome || '').trim().slice(0, 120)) || 'Novo fluxo';
+        const graph = JSON.stringify(req.body.graph || { trigger: { type: 'primeira_mensagem', config: {} }, nodes: [] });
+        await queryD1('INSERT INTO crm_flows (id, nome, ativo, prioridade, graph_json, version) VALUES (?, ?, 0, 0, ?, 1)', [id, nome, graph]);
+        res.status(201).json({ id });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/flows/:id', async (req, res) => {
+    if (!flowRequireAdmin(req, res)) return;
+    try {
+        const rows = await queryD1('SELECT * FROM crm_flows WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).json({ error: 'Fluxo não encontrado.' });
+        const cur = rows[0];
+        const nome = req.body.nome != null ? String(req.body.nome).trim().slice(0, 120) : cur.nome;
+        const ativo = req.body.ativo != null ? (req.body.ativo ? 1 : 0) : cur.ativo;
+        const prioridade = req.body.prioridade != null ? (parseInt(req.body.prioridade, 10) || 0) : cur.prioridade;
+        let graph_json = cur.graph_json;
+        let version = cur.version || 1;
+        if (req.body.graph !== undefined) {
+            graph_json = JSON.stringify(req.body.graph);
+            if (graph_json !== cur.graph_json) version += 1;
+        }
+        await queryD1('UPDATE crm_flows SET nome = ?, ativo = ?, prioridade = ?, graph_json = ?, version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nome, ativo, prioridade, graph_json, version, req.params.id]);
+        res.json({ success: true, version });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.delete('/api/flows/:id', async (req, res) => {
+    if (!flowRequireAdmin(req, res)) return;
+    try {
+        await queryD1('DELETE FROM crm_flows WHERE id = ?', [req.params.id]);
+        await queryD1("UPDATE crm_flow_runs SET status = 'failed' WHERE flow_id = ? AND status IN ('running','waiting_reply','sleeping')", [req.params.id]);
+        res.json({ success: true });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.get('/api/flows/:id/runs', async (req, res) => {
+    try {
+        const rows = await queryD1(
+            "SELECT r.id, r.lead_id, r.phone, r.status, r.current_node_id, r.updated_at, l.nome AS lead_nome FROM crm_flow_runs r LEFT JOIN leads l ON l.id = r.lead_id WHERE r.flow_id = ? ORDER BY r.updated_at DESC LIMIT 30",
+            [req.params.id]);
+        res.json({ runs: rows || [] });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// Simulação: roda o grafo em memória, sem gravar nada nem enviar WhatsApp.
+app.post('/api/flows/simulate', async (req, res) => {
+    try {
+        const graph = req.body.graph;
+        const messages = Array.isArray(req.body.messages) ? req.body.messages.map(String) : [];
+        if (!graph || !Array.isArray(graph.nodes) || !graph.nodes.length) return res.status(400).json({ error: 'Fluxo sem passos.' });
+        const log = [];
+        const ctx = { nome: req.body.nome || 'Paciente Teste', telefone: '5561999990000', ultima_resposta: messages[0] || '', gatilho_msg: messages[0] || '' };
+        const fakeRun = { id: 'sim', lead_id: 'sim', phone: 'sim', steps_done: 0 };
+        let startId = graph.nodes[0].id;
+        let msgIdx = 0;
+        let guard = 0;
+        while (startId && guard++ < 80) {
+            fakeRun._startNodeId = startId;
+            fakeRun.steps_done = 0;
+            const r = await flowRun(fakeRun, graph, ctx, { simulate: true, log });
+            if (r.status !== 'waiting_reply') break;
+            msgIdx++;
+            if (msgIdx >= messages.length) { log.push({ info: 'aguardando resposta do paciente (sem mais mensagens de teste)' }); break; }
+            ctx.ultima_resposta = messages[msgIdx];
+            log.push({ info: `paciente responde: "${messages[msgIdx]}"` });
+            const waitNode = graph.nodes.find(n => n.id === fakeRun._lastNode);
+            startId = waitNode ? (waitNode.next || null) : null;
+        }
+        res.json({ log });
+    } catch (e) { console.error(e); res.status(500).json({ error: 'Erro na simulação.' }); }
+});
+
+// Tick: resolve esperas/timeouts vencidos. Chamado pelo Vercel Cron (Authorization:
+// Bearer CRON_SECRET) ou por um usuário logado ("processar agora" na UI).
+// Fora do prefixo /api/flows/:id de propósito, pra não colidir com o route param.
+app.all('/api/flow-tick', async (req, res) => {
+    const authed = (() => {
+        try {
+            if (req.cookies && req.cookies.crm_token) { jwt.verify(req.cookies.crm_token, process.env.JWT_SECRET); return true; }
+        } catch (e) {}
+        const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+        if (process.env.CRON_SECRET && bearer && bearer === process.env.CRON_SECRET) return true;
+        if (process.env.FLOW_TICK_SECRET && req.query.key === process.env.FLOW_TICK_SECRET) return true;
+        return false;
+    })();
+    if (!authed) return res.status(401).json({ error: 'Não autorizado.' });
+
+    try {
+        const now = flowDbTime();
+        const due = await queryD1(
+            "SELECT * FROM crm_flow_runs WHERE status IN ('sleeping','waiting_reply') AND next_wake_at IS NOT NULL AND next_wake_at <= ? ORDER BY next_wake_at ASC LIMIT 25", [now]);
+        let processed = 0;
+        for (const run of (due || [])) {
+            const fr = await queryD1('SELECT * FROM crm_flows WHERE id = ?', [run.flow_id]);
+            if (!fr || !fr[0]) { await queryD1("UPDATE crm_flow_runs SET status = 'failed' WHERE id = ?", [run.id]); continue; }
+            let graph; try { graph = JSON.parse(fr[0].graph_json || '{}'); } catch (e) { continue; }
+            let ctx = {}; try { ctx = JSON.parse(run.context_json || '{}'); } catch (e) {}
+            const node = (graph.nodes || []).find(n => n.id === run.current_node_id);
+            if (!node) { await queryD1("UPDATE crm_flow_runs SET status = 'done' WHERE id = ?", [run.id]); continue; }
+            run._startNodeId = run.status === 'sleeping' ? (node.next || null) : (node.on_timeout || null);
+            await queryD1("UPDATE crm_flow_runs SET status = 'running' WHERE id = ?", [run.id]);
+            await flowRun(run, graph, ctx, {});
+            processed++;
+        }
+        res.json({ processed });
+    } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
 
 // Iniciar Servidor (Sempre roda localmente, exceto na Vercel)
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
