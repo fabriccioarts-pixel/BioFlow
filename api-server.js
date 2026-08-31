@@ -6155,11 +6155,10 @@ async function followupTick() {
         const cutoffDelay = flowDbTime(-firstDelay * 60000);
         const cutoffOld = flowDbTime(-30 * 86400000);
         const cand = await queryD1(
-            `SELECT id, nome, telefone, tags, column_id, ai_enabled, campaign_opt_out, last_msg_at
+            `SELECT id, nome, telefone, tags, column_id, ai_enabled, last_msg_at
              FROM leads
              WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
                AND last_msg_at <= ? AND last_msg_at >= ?
-               AND (campaign_opt_out IS NULL OR campaign_opt_out = 0)
              LIMIT 200`, [cutoffDelay, cutoffOld]);
         for (const lead of (cand || [])) {
             try {
