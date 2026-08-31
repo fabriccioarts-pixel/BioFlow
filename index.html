@@ -17,8 +17,8 @@
     <link rel="icon" type="image/svg+xml" href="Favicon.svg">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
-        .sb-logo-full { height: 26px; width: auto; max-width: 190px; object-fit: contain; display: block; flex-shrink: 0; }
-        .sb-logo-mark { height: 28px; width: 28px; object-fit: contain; display: none; flex-shrink: 0; }
+        .sb-logo-full { height: 42px; width: auto; max-width: 230px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-mark { height: 36px; width: 36px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
 
@@ -415,7 +415,7 @@
         <div class="auth-card-container">
             <div class="auth-brand">
                 <img src="bioflow%20logo.svg" alt="BioFlow" class="auth-logo-img"
-                    style="height: 30px; width: auto; max-width: 220px; object-fit: contain; display: block;"
+                    style="height: 54px; width: auto; max-width: 320px; object-fit: contain; display: block;"
                     onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'BioFlow'}))">
             </div>
 
@@ -676,9 +676,15 @@
     <!-- ABA 1: KANBAN -->
     <div class="view-section" id="view-kanban"
         style="display: none; flex-direction: column; min-height: 0; background: var(--bg-main);">
+        <!-- KANBAN OWNER TABS -->
+        <div class="kanban-owner-tabs" style="padding: 1rem 2rem 0; display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
+            <button id="ktab-all" onclick="switchKanbanOwnerTab('all')" class="kanban-tab-btn active">Todos os Leads</button>
+            <button id="ktab-me" onclick="switchKanbanOwnerTab('me')" class="kanban-tab-btn">Meus Leads</button>
+        </div>
+        
         <!-- KANBAN FILTERS (Fase 1.2) -->
         <div class="kanban-filters"
-            style="padding: 1rem 2rem; border-bottom: 1px solid var(--border-color); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+            style="padding: 1rem 2rem; border-bottom: 1px solid var(--border-color); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; background: var(--bg-main);">
             <div style="font-weight: 600; color: var(--text-muted); font-size: 0.9rem;"><i
                     class="fa-solid fa-filter"></i> Filtros:</div>
 
@@ -2363,6 +2369,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
 
             <div class="midx-grid" id="midx-grid"
+                oncontextmenu="midxOnGridCtx(event)"
                 ondragover="event.preventDefault(); this.classList.add('is-drop');"
                 ondragleave="this.classList.remove('is-drop');" ondrop="midxDrop(event)"></div>
         </div>

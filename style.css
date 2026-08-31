@@ -536,7 +536,7 @@ header {
 .sb-logo {
     display: flex;
     align-items: center;
-    height: 34px;
+    height: 48px;
     margin-bottom: 20px;
     padding-left: 2px;
     flex-shrink: 0;
@@ -7673,3 +7673,25 @@ h1, h2,
 #midx-send-leads .midx-lead-row:last-child { border-bottom: 0; }
 #midx-send-leads .midx-lead-row:hover { background: color-mix(in srgb, var(--text-main) 6%, transparent); }
 #midx-send-leads .midx-lead-row small { color: var(--text-muted); }
+
+/* --- Kanban Owner Tabs --- */
+.kanban-tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.6rem 1.2rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+}
+.kanban-tab-btn:hover {
+    color: var(--text-main);
+}
+.kanban-tab-btn.active {
+    color: var(--text-main);
+    border-bottom: 2px solid var(--accent-primary);
+    font-weight: 600;
+}

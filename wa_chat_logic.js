@@ -1150,6 +1150,7 @@ function isFavoriteChat(phone) { return getChatSetting(phone, 'is_favorite'); }
 function isPinnedChat(phone) { return getChatSetting(phone, 'is_pinned'); }
 function isArchivedChat(phone) { return getChatSetting(phone, 'is_archived'); }
 function isMarkedUnreadChat(phone) { return getChatSetting(phone, 'marked_unread'); }
+function isBlockedChat(phone) { return getChatSetting(phone, 'is_blocked'); }
 
 async function setChatSetting(phone, field, value) {
     const key = canonicalPhoneBR(phone);
@@ -1186,6 +1187,12 @@ function toggleMarkedUnreadChat(phone) {
     setChatSetting(phone, 'marked_unread', !isMarkedUnreadChat(phone));
 }
 
+function toggleBlockedChat(phone) {
+    const isBlocked = isBlockedChat(phone);
+    setChatSetting(phone, 'is_blocked', !isBlocked);
+    setTimeout(() => renderChatList(allChatsList), 50); // Refresh visual
+}
+
 // ==========================================
 // MENU DE CONTEXTO (botão direito numa conversa)
 // ==========================================
@@ -1198,6 +1205,7 @@ function showChatContextMenu(event, phone, displayName) {
     const fav = isFavoriteChat(phone);
     const pinned = isPinnedChat(phone);
     const archived = isArchivedChat(phone);
+    const blocked = isBlockedChat(phone);
 
     const item = (icon, label, onclick, danger = false) => `
         <div onclick="${onclick}" style="padding: 0.6rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: ${danger ? 'var(--accent-danger)' : 'var(--text-main)'}; transition: 0.15s;"
@@ -1211,6 +1219,7 @@ function showChatContextMenu(event, phone, displayName) {
         item('fa-solid fa-thumbtack', pinned ? 'Desafixar conversa' : 'Fixar conversa', `hideChatContextMenu(); togglePinnedChat('${phone}')`),
         '<div style="height: 1px; background: var(--border-color); margin: 0.3rem 0;"></div>',
         item(archived ? 'fa-solid fa-box-open' : 'fa-solid fa-box-archive', archived ? 'Desarquivar conversa' : 'Arquivar conversa', `hideChatContextMenu(); toggleArchivedChat('${phone}')`),
+        item('fa-solid fa-ban', blocked ? 'Desbloquear contato' : 'Bloquear contato', `hideChatContextMenu(); toggleBlockedChat('${phone}')`, true),
         item('fa-solid fa-trash-can', 'Apagar conversa', `hideChatContextMenu(); deleteConversation('${phone}', ${JSON.stringify(displayName)})`, true)
     ].join('');
 
@@ -1607,8 +1616,14 @@ function renderContactsList(chats) {
             const isAutoWaiting = lastMsgDirection === 'in' && lastMsgTs && (Date.now() - lastMsgTs) > 5 * 60 * 1000;
             const displayTagIds = (isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds;
 
-            if (displayTagIds.length > 0) {
+            const isBlockedTag = isBlockedChat(chat.phone);
+            const blockedTagBadge = isBlockedTag
+                ? `<span style="background: var(--accent-danger, #ef4444); color: white; padding: 0.15rem 0.5rem; font-size: 0.65rem; border-radius: 999px; font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;"><i class="fa-solid fa-ban"></i> Bloqueado (CRM)</span>`
+                : '';
+
+            if (displayTagIds.length > 0 || isBlockedTag) {
                 leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
+                    blockedTagBadge + 
                     displayTagIds.map(tId => getTagBadgeHTML(tId, true)).join('') +
                     `</div>`;
             }
@@ -1650,6 +1665,11 @@ function renderContactsList(chats) {
         const isFav = isFavoriteChat(chat.phone);
         const favStarHTML = isFav
             ? `<i class="fa-solid fa-star" title="Favorito" style="font-size: 0.68rem; color: var(--accent-warning); flex-shrink: 0;"></i>`
+            : '';
+            
+        const isBlocked = isBlockedChat(chat.phone);
+        const blockedHTML = isBlocked
+            ? `<i class="fa-solid fa-ban" title="Bloqueado pelo CRM" style="font-size: 0.75rem; color: var(--accent-danger); flex-shrink: 0;"></i>`
             : '';
         // Botão único (seta pra baixo) que aparece no hover e abre o menu de opções — estilo WhatsApp
         const menuBtnHTML = !chatSelectMode
@@ -2071,14 +2091,17 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     }
 
     let responsavelHTML = '';
-    if (lead && lead.owner_id) {
-        const ownerName = typeof resolveDisplayName === 'function' ? resolveDisplayName(lead.owner_id) : lead.owner_id;
-        const ownerAvatarUrl = (typeof avatarMap !== 'undefined' && avatarMap[lead.owner_id]) || null;
-        const ownerAvatarHTML = typeof renderAvatarHTML === 'function' ? renderAvatarHTML(ownerName, ownerAvatarUrl, null, 24) : '';
+    if (lead) {
+        const hasOwner = !!lead.owner_id;
+        const ownerName = hasOwner ? (typeof resolveDisplayName === 'function' ? resolveDisplayName(lead.owner_id) : lead.owner_id) : 'Nenhum responsável';
+        const ownerAvatarUrl = (hasOwner && typeof avatarMap !== 'undefined' && avatarMap[lead.owner_id]) ? avatarMap[lead.owner_id] : null;
+        const ownerAvatarHTML = hasOwner && typeof renderAvatarHTML === 'function' ? renderAvatarHTML(ownerName, ownerAvatarUrl, null, 24) : '';
         const currentUserForPanel = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
-        const isMineToTransfer = currentUserForPanel && lead.owner_id === currentUserForPanel;
+        const isAdminUser = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+        const isMineToTransfer = hasOwner && currentUserForPanel && lead.owner_id === currentUserForPanel;
+        const canTransfer = isMineToTransfer || isAdminUser;
 
-        const transferHTML = isMineToTransfer ? `
+        const transferHTML = canTransfer ? `
             <div style="position: relative;">
                 <button class="lead-panel-btn" style="width: auto; height: 27px; padding: 0 0.55rem; font-size: 0.76rem; gap: 0.35rem;" onclick="toggleTransferMenu(event, '${lead.id}')" title="Passar essa conversa pra outro atendente">
                     <i class="fa-solid fa-right-left" style="font-size: 0.72rem;"></i> Transferir

@@ -242,6 +242,14 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
         ) {
             let message_obj = body.entry[0].changes[0].value.messages[0];
             let from = message_obj.from;
+            
+            // VERIFICAÇÃO DE BLOQUEIO (BLACKLIST NATIVA DO CRM)
+            const blockedRows = await queryD1('SELECT is_blocked FROM crm_chat_settings WHERE phone = ?', [from]);
+            if (blockedRows && blockedRows.length > 0 && blockedRows[0].is_blocked) {
+                console.log(`Mensagem DESCARTADA: O número ${from} está bloqueado no CRM.`);
+                return res.sendStatus(200); // Retorna 200 para a Meta não reenviar
+            }
+
             let msg_id = message_obj.id;
 
             // Usa o horário real do envio (vem no próprio payload da Meta) em vez
@@ -875,6 +883,34 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
     return resultJson;
 }
 
+// Envia um áudio (buffer OGG/Opus) como mensagem de voz nativa. O media_id da
+// Meta expira, então quem chama passa o buffer pronto (ex.: crm_voice_library).
+async function sendWhatsappAudioInternal(to, buffer, fileName = 'audio.ogg', sentBy = 'fluxo') {
+    const phone_id = process.env.META_WA_PHONE_ID;
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
+
+    const mediaId = await uploadMediaToMeta(buffer, 'audio/ogg', fileName);
+    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'audio', audio: { id: mediaId, voice: true } })
+    });
+    const resultJson = await response.json();
+    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+
+    const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
+    await queryD1(
+        'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [msg_id, to, 'out', `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'sent', sentBy]
+    );
+    try {
+        const v = phoneVariants(to);
+        await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+    } catch (e) {}
+    return resultJson;
+}
+
 // Prompt fixo com a identidade e as regras da Natuclinic. Nunca revela ser IA
 // e nunca fala de preço — perguntar valor é justamente um dos gatilhos pra
 // considerar o lead qualificado e silenciar (token QUALIFICADO_SILENCIO).
@@ -1283,7 +1319,7 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_chat_settings (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
 
-const CHAT_SETTINGS_FIELDS = ['is_favorite', 'is_pinned', 'is_archived', 'marked_unread'];
+const CHAT_SETTINGS_FIELDS = ['is_favorite', 'is_pinned', 'is_archived', 'marked_unread', 'is_blocked'];
 
 app.get('/api/chat-settings', async (req, res) => {
     try {
@@ -1665,6 +1701,7 @@ queryD1("ALTER TABLE crm_notifications ADD COLUMN avatar_url TEXT").catch(() => 
 // Quem disparou a notificação (ex.: login) — usado pra não notificar a própria
 // pessoa de uma ação que ela mesma fez (ex.: "você entrou no sistema").
 queryD1("ALTER TABLE crm_notifications ADD COLUMN actor_username TEXT").catch(() => {});
+queryD1("ALTER TABLE crm_chat_settings ADD COLUMN is_blocked INTEGER DEFAULT 0").catch(() => {});
 
 // Presença em conversa: quem está com a conversa de um lead ABERTA agora (só
 // visual — mostra o avatar do atendente no card do chat). Independente da trava
@@ -4335,10 +4372,18 @@ app.post('/api/leads/:id/transfer', async (req, res) => {
             return res.status(404).json({ error: 'Esse usuário não existe.' });
         }
 
-        await queryD1(
-            `UPDATE leads SET owner_id = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_id = ?`,
-            [to, id, username]
-        );
+        const isAdmin = req.user.role === 'admin' || req.user.username === 'admin';
+        if (isAdmin) {
+            await queryD1(
+                `UPDATE leads SET owner_id = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?`,
+                [to, id]
+            );
+        } else {
+            await queryD1(
+                `UPDATE leads SET owner_id = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_id = ?`,
+                [to, id, username]
+            );
+        }
 
         const rows = await queryD1('SELECT id, owner_id, assigned_at FROM leads WHERE id = ?', [id]);
         const lead = rows && rows[0];
@@ -5732,6 +5777,18 @@ async function flowExecNode(node, run, ctx, opts) {
             const texto = flowInterpolate(cfg.texto, ctx);
             logAcao({ texto });
             if (!sim && texto.trim()) await sendWhatsappTextInternal(run.phone, texto, 'fluxo');
+            return { go: node.next || null };
+        }
+        case 'enviar_audio': {
+            logAcao({ voice_id: cfg.voice_id || null });
+            if (!sim && cfg.voice_id) {
+                try {
+                    const rows = await queryD1('SELECT nome, audio_base64 FROM crm_voice_library WHERE id = ?', [cfg.voice_id]);
+                    if (rows && rows[0] && rows[0].audio_base64) {
+                        await sendWhatsappAudioInternal(run.phone, Buffer.from(rows[0].audio_base64, 'base64'), (rows[0].nome || 'audio') + '.ogg', 'fluxo');
+                    }
+                } catch (e) { console.error('Fluxo enviar_audio falhou:', e.message); }
+            }
             return { go: node.next || null };
         }
         case 'aguardar_resposta': {

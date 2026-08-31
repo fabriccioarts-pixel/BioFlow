@@ -8,6 +8,7 @@
 
 const FLOW_NODE_DEFS = {
     enviar_texto:      { label: 'Enviar mensagem',            icon: 'fa-comment',           ports: [{ slot: 'next', label: '', cls: '' }] },
+    enviar_audio:      { label: 'Enviar áudio',               icon: 'fa-microphone',        ports: [{ slot: 'next', label: '', cls: '' }] },
     aguardar_resposta: { label: 'Aguardar resposta',          icon: 'fa-clock',             ports: [{ slot: 'next', label: 'resposta', cls: '' }, { slot: 'on_timeout', label: 'expira', cls: 'amber' }] },
     condicao:          { label: 'Condição (SE/SENÃO)',        icon: 'fa-code-branch',       ports: [{ slot: 'on_true', label: 'SIM', cls: 'green' }, { slot: 'on_false', label: 'NÃO', cls: 'red' }] },
     delay:             { label: 'Esperar um tempo',           icon: 'fa-hourglass-half',    ports: [{ slot: 'next', label: '', cls: '' }] },
@@ -22,6 +23,7 @@ const FLOW_TRANS_LABEL = { next: 'Próximo passo', on_timeout: 'Se expirar', on_
 const FLOW_SLOTS = ['next', 'on_true', 'on_false', 'on_timeout'];
 
 let flowList = [];
+let flowVoiceLib = [];         // biblioteca de áudios (crm_voice_library) p/ o passo "Enviar áudio"
 let flowDraft = null;          // { id, nome, ativo, prioridade, version, graph:{trigger, nodes, start} }
 let flowNodeSeq = 0;
 let fxView = { panX: 240, panY: 30, zoom: 1 };
@@ -54,6 +56,8 @@ function flowNodeTargetOptions(sel, excludeId) {
 async function loadFlows() {
     try { const r = await fetch('/api/flows').then(x => x.json()); flowList = r.flows || []; }
     catch (e) { flowList = []; }
+    try { const rv = await fetch('/api/voice-library').then(x => x.json()); flowVoiceLib = rv.items || []; }
+    catch (e) { flowVoiceLib = []; }
     renderFlowList();
 }
 function renderFlowList() {
@@ -222,6 +226,7 @@ function flowNodePreview(n) {
     const cut = (s, len) => { s = String(s || ''); return s.length > len ? s.slice(0, len) + '…' : s; };
     switch (n.type) {
         case 'enviar_texto': return cut(c.texto, 46) || 'sem texto';
+        case 'enviar_audio': { const a = flowVoiceLib.find(x => x.id === c.voice_id); return a ? `🎙 ${cut(a.nome, 30)}` : 'escolher áudio'; }
         case 'aguardar_resposta': return c.timeout_min ? `expira em ${c.timeout_min} min` : 'sem limite de tempo';
         case 'delay': return `esperar ${c.minutos || 5} min`;
         case 'condicao': return `${({ contem: 'contém', igual: 'igual a', comeca_com: 'começa com', regex: 'regex' })[c.modo || 'contem']} "${cut(c.valor, 20)}"`;
@@ -499,6 +504,15 @@ function flowNodeFields(n) {
         case 'enviar_texto':
             return `<label>Texto <span class="fx-mini">variáveis: {{nome}}, {{telefone}}</span>
                 <textarea rows="3" oninput="flowSetNode('${n.id}', 'config.texto', this.value)">${v(c.texto)}</textarea></label>`;
+        case 'enviar_audio':
+            return flowVoiceLib.length
+                ? `<label>Áudio da biblioteca
+                    <select onchange="flowSetNode('${n.id}', 'config.voice_id', this.value)">
+                        <option value="">—</option>
+                        ${flowVoiceLib.map(a => `<option value="${a.id}" ${c.voice_id === a.id ? 'selected' : ''}>${escapeHtml(a.nome)}</option>`).join('')}
+                    </select></label>
+                    <div class="fx-mini">Enviado como mensagem de voz. Grave/gerencie os áudios na Biblioteca de Áudios do chat.</div>`
+                : `<div class="fx-mini">Nenhum áudio na biblioteca ainda. Grave um pelo chat (menu de anexo &rarr; áudio salvo) e ele aparece aqui.</div>`;
         case 'aguardar_resposta':
             return `<label>Expira em (minutos) <span class="fx-mini">vazio = sem limite</span>
                 <input type="number" min="1" value="${v(c.timeout_min)}" oninput="flowSetNode('${n.id}', 'config.timeout_min', this.value)"></label>`;

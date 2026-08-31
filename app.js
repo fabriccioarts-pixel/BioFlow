@@ -44,6 +44,73 @@ initTheme();
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
 
+// === SESSÃO EXPIRADA — interceptação global de 401 ===
+// O cookie de sessão (JWT) vale 12h, mas o "estou logado" do front vem do
+// localStorage, que não expira. Quando o cookie some, todo /api passa a
+// responder 401 e os loaders engoliam o erro em silêncio — a interface ficava
+// "logada" e sem dados, e só deslogar/logar resolvia. Aqui a gente detecta
+// qualquer 401 vindo de uma rota /api e reabre a tela de login.
+(function () {
+    const _origFetch = window.fetch.bind(window);
+
+    function reqUrl(input) {
+        try {
+            const raw = typeof input === 'string' ? input : (input && input.url) || '';
+            if (!raw) return null;
+            return new URL(raw, window.location.origin);
+        } catch (e) { return null; }
+    }
+    function isApiUrl(input) {
+        const u = reqUrl(input);
+        return !!u && u.origin === window.location.origin && u.pathname.startsWith('/api/');
+    }
+    function isAuthEndpoint(input) {
+        const u = reqUrl(input);
+        return !!u && /^\/api\/(login|logout)\b/.test(u.pathname);
+    }
+
+    window.handleSessionExpired = function () {
+        if (window.__authExpiredShown) return;
+        window.__authExpiredShown = true;
+
+        // Para todo polling de fundo pra não martelar o servidor com 401 em loop.
+        ['kanbanSyncInterval', 'heartbeatInterval', 'dashPollingInterval',
+         'chatPollingInterval', 'globalChatCheckInterval', 'notifPollInterval'
+        ].forEach(k => { if (window[k]) { clearInterval(window[k]); window[k] = null; } });
+        if (window._kanbanSSE) { try { window._kanbanSSE.close(); } catch (e) {} window._kanbanSSE = null; }
+
+        localStorage.removeItem('crm_user');
+        try { loggedUser = null; } catch (e) {}
+
+        const overlay = document.getElementById('login-overlay');
+        if (!overlay) {
+            // Páginas auxiliares (agenda.html etc.) não têm o overlay: volta pro index.
+            const p = window.location.pathname;
+            if (!p.endsWith('index.html') && p !== '/' && p !== '') window.location.href = 'index.html';
+            return;
+        }
+        overlay.classList.add('active');
+        const fields = document.getElementById('login-fields');
+        const force = document.getElementById('force-change-fields');
+        if (fields) fields.style.display = 'flex';
+        if (force) force.style.display = 'none';
+        const badge = document.getElementById('login-error-badge');
+        const badgeText = document.getElementById('login-error-text');
+        if (badge && badgeText) {
+            badgeText.textContent = 'Sua sessão expirou. Entre novamente.';
+            badge.style.display = 'flex';
+        }
+    };
+
+    window.fetch = async function (input, init) {
+        const res = await _origFetch(input, init);
+        if (res.status === 401 && isApiUrl(input) && !isAuthEndpoint(input)) {
+            window.handleSessionExpired();
+        }
+        return res;
+    };
+})();
+
 // === DADOS DO KANBAN (LOCAL) ===
 let leads = [];
 let loggedUser = JSON.parse(localStorage.getItem('crm_user'));
@@ -785,6 +852,33 @@ const cmp = {
 return list.slice().sort(cmp[key] || byCreatedAsc);
 }
 
+function switchKanbanOwnerTab(tabType) {
+    const tabAll = document.getElementById('ktab-all');
+    const tabMe = document.getElementById('ktab-me');
+    const filterOwner = document.getElementById('filter-owner');
+    
+    if (tabAll) tabAll.classList.remove('active');
+    if (tabMe) tabMe.classList.remove('active');
+    
+    if (tabType === 'me') {
+        if (tabMe) tabMe.classList.add('active');
+        if (filterOwner && loggedUser && loggedUser.username) {
+            filterOwner.value = loggedUser.username;
+        }
+    } else {
+        if (tabAll) tabAll.classList.add('active');
+        if (filterOwner) {
+            filterOwner.value = '';
+        }
+    }
+    
+    localStorage.setItem('kanban_active_tab', tabType);
+    renderBoard();
+}
+
+// Para evitar conflito caso a aba "Meus Leads" seja clicada antes das options renderizarem.
+let _kanbanTabInitialized = false;
+
 function renderBoard() {
 updateKanbanEntradaBadge();
 document.querySelectorAll('.card-list').forEach(col => col.innerHTML = '');
@@ -809,6 +903,35 @@ if (ownerSelect.innerHTML !== optionsHTML) {
 ownerSelect.innerHTML = optionsHTML;
 ownerSelect.value = currentOwnerVal; // Restore selection if it existed
 }
+}
+
+// Inicializa a aba na primeira vez que o renderBoard roda
+if (!_kanbanTabInitialized && typeof loggedUser !== 'undefined' && loggedUser) {
+    _kanbanTabInitialized = true;
+    const savedTab = localStorage.getItem('kanban_active_tab') || 'all';
+    if (savedTab === 'me') {
+        const tabMe = document.getElementById('ktab-me');
+        const tabAll = document.getElementById('ktab-all');
+        if (tabMe) tabMe.classList.add('active');
+        if (tabAll) tabAll.classList.remove('active');
+        if (ownerSelect) ownerSelect.value = loggedUser.username;
+    }
+}
+
+// Sincroniza a visualização da aba ativa de acordo com o select (se o usuário mudar no dropdown manualmente)
+if (ownerSelect) {
+    const tabAll = document.getElementById('ktab-all');
+    const tabMe = document.getElementById('ktab-me');
+    if (ownerSelect.value === '') {
+        if (tabAll) tabAll.classList.add('active');
+        if (tabMe) tabMe.classList.remove('active');
+    } else if (typeof loggedUser !== 'undefined' && loggedUser && ownerSelect.value === loggedUser.username) {
+        if (tabMe) tabMe.classList.add('active');
+        if (tabAll) tabAll.classList.remove('active');
+    } else {
+        if (tabAll) tabAll.classList.remove('active');
+        if (tabMe) tabMe.classList.remove('active');
+    }
 }
 
 // Aplicar Filtros (Fase 1.2)
@@ -899,8 +1022,26 @@ metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: #
 if (lead.agendamento) {
 metadataIconsHTML += `<i class="fa-regular fa-calendar-check" style="color: #2dd4bf; margin-right: 4px;" title="Agendamento Marcado: ${lead.agendamento.data} às ${lead.agendamento.hora}"></i> `;
 }
+        let unreadBadge = '';
+        if (typeof allChatsList !== 'undefined' && lead.telefone) {
+            const chat = allChatsList.find(c => {
+                if (typeof isSamePhone === 'function') {
+                    return isSamePhone(c.phone, lead.telefone);
+                }
+                return c.phone === lead.telefone;
+            });
+            const count = chat ? Number(chat.unread_count || 0) : 0;
+            if (count > 0) {
+                unreadBadge = `<div style="position: relative; display: inline-flex; align-items: center; justify-content: center; margin-right: 6px; cursor: pointer;" onclick="openChatForLead('${lead.telefone}', '${lead.id}')" title="${count} mensagem(ns) não lida(s)">
+                    <i class="fa-brands fa-whatsapp" style="color: #25D366; font-size: 1.05rem;"></i>
+                    <span style="position: absolute; top: -5px; right: -6px; background: #ef4444; color: white; font-size: 0.6rem; font-weight: 700; width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--bg-card);">${count > 99 ? '99+' : count}</span>
+                </div>`;
+            }
+        }
+        
+        metadataIconsHTML = unreadBadge + metadataIconsHTML;
 
-let tagsBadges = '';
+        let tagsBadges = '';
 if (lead.tags && typeof parseLeadTags === 'function') {
 const leadTags = parseLeadTags(lead.tags);
 tagsBadges = leadTags.map(tagId => getTagBadgeHTML(tagId)).join(' ');
@@ -2710,18 +2851,24 @@ function closePatientDetailsModal() {
 }
 
 function openEditAgendamentoModal() {
-    if (!window.currentEditingAttendance) return;
-    
+    // Guardamos antes: resetAgendamentoForm() abaixo zera estes globais, e o
+    // fluxo de edição precisa deles (senão att fica null e o PUT vira POST/duplicata).
+    const att = window.currentEditingAttendance;
+    const attId = window.currentEditingAttendanceId;
+    if (!att) return;
+
     if (typeof loggedUser === 'undefined' || !loggedUser || loggedUser.role !== 'admin') {
         customAlert("Apenas administradores podem editar o histórico de agendamento.");
         return;
     }
-    
+
     closePatientDetailsModal();
     resetAgendamentoForm();
-    
-    const att = window.currentEditingAttendance;
-    
+
+    // Restaura o alvo da edição que o reset acabou de limpar.
+    window.currentEditingAttendance = att;
+    window.currentEditingAttendanceId = attId;
+
     draggedLead = null;
     document.getElementById('ag-lead-id').value = '';
     document.getElementById('directScheduleFields').style.display = 'block';
@@ -4539,6 +4686,7 @@ let pendingLoginPassword = null; // guardado só em memória, o tempo de complet
 function finishLogin(user) {
     loggedUser = user;
     localStorage.setItem('crm_user', JSON.stringify(loggedUser));
+    window.__authExpiredShown = false; // sessão nova: volta a armar o detector de 401
     document.getElementById('login-overlay').classList.remove('active');
 
     const flyoutGestao = document.getElementById('flyout-gestao-acessos');
@@ -5030,7 +5178,8 @@ function startNotificationPolling() {
         fetchNotifications(false);
     }
     
-    setInterval(() => {
+    if (window.notifPollInterval) clearInterval(window.notifPollInterval);
+    window.notifPollInterval = setInterval(() => {
         fetchNotifications(false);
     }, 10000);
 }
@@ -8537,6 +8686,7 @@ function renderMidias() {
     const folderHtml = folders.map(function (f) {
         const nmeta = JSON.stringify(String(f.nome)).replace(/"/g, '&quot;');
         return '<div class="midx-tile midx-tile--folder" ondblclick="loadMidias(\'' + f.id + '\')"' +
+            ' oncontextmenu="midxOnFolderCtx(event, \'' + f.id + '\', ' + nmeta + ')"' +
             ' ondragover="event.preventDefault(); this.classList.add(\'is-dragover\');"' +
             ' ondragleave="this.classList.remove(\'is-dragover\');"' +
             ' ondrop="this.classList.remove(\'is-dragover\'); midxMoveDropped(event, \'' + f.id + '\')">' +
@@ -8556,6 +8706,7 @@ function renderMidias() {
             : '<i class="fa-solid ' + (i.tipo === 'video' ? 'fa-film' : i.tipo === 'audio' ? 'fa-music' : 'fa-file-lines') + ' midx-tile-ic"></i>';
         return '<div class="midx-tile" draggable="true"' +
             ' ondragstart="event.dataTransfer.setData(\'text/midx\',\'' + i.id + '\')"' +
+            ' oncontextmenu="midxOnItemCtx(event, \'' + i.id + '\')"' +
             ' ondblclick="midxPreview(\'' + i.id + '\')">' +
             '<div class="midx-tile-actions">' +
             '<button title="Renomear" onclick="event.stopPropagation(); midxRename(\'item\',\'' + i.id + '\', ' + nmeta + ')"><i class="fa-solid fa-pen"></i></button>' +
@@ -8598,6 +8749,98 @@ async function midxDelete(kind, id) {
     const url = kind === 'folder' ? ('/api/media/folders/' + id) : ('/api/media/' + id);
     try { await fetch(url, { method: 'DELETE' }); loadMidias(); }
     catch (e) { showToast('Erro ao excluir.', 'danger'); }
+}
+
+// ---- menu de contexto (botão direito) — reaproveita as classes .card-ctx (tokens de tema) ----
+function midxCtxEl() {
+    let el = document.getElementById('midx-ctx-menu');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'midx-ctx-menu';
+    el.className = 'card-ctx';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    document.addEventListener('click', midxCloseCtx);
+    document.addEventListener('contextmenu', function (e) {
+        if (!e.target.closest('#midx-grid') && !e.target.closest('#midx-ctx-menu')) midxCloseCtx();
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') midxCloseCtx(); });
+    window.addEventListener('resize', midxCloseCtx);
+    window.addEventListener('scroll', midxCloseCtx, true);
+    return el;
+}
+function midxCloseCtx() {
+    const el = document.getElementById('midx-ctx-menu');
+    if (el) el.style.display = 'none';
+}
+function midxShowCtx(items, x, y) {
+    const el = midxCtxEl();
+    const main = document.createElement('div');
+    main.className = 'card-ctx-main';
+    items.forEach(function (it) {
+        if (it.sep) {
+            const s = document.createElement('div');
+            s.className = 'card-ctx-sep';
+            main.appendChild(s);
+            return;
+        }
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'card-ctx-item' + (it.danger ? ' card-ctx-item--danger' : '');
+        if (it.disabled) b.disabled = true;
+        b.innerHTML = '<i class="' + it.icon + '"></i> <span>' + escapeHtml(it.label) + '</span>';
+        b.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            midxCloseCtx();
+            if (typeof it.fn === 'function') it.fn();
+        });
+        main.appendChild(b);
+    });
+    el.innerHTML = '';
+    el.appendChild(main);
+    el.style.display = 'block';
+    const r = el.getBoundingClientRect();
+    let left = x, top = y;
+    if (left + r.width > window.innerWidth - 8) left = window.innerWidth - r.width - 8;
+    if (top + r.height > window.innerHeight - 8) top = window.innerHeight - r.height - 8;
+    el.style.left = Math.max(8, left) + 'px';
+    el.style.top = Math.max(8, top) + 'px';
+}
+function midxOnFolderCtx(event, id, name) {
+    event.preventDefault();
+    event.stopPropagation();
+    midxShowCtx([
+        { icon: 'fa-solid fa-folder-open', label: 'Abrir', fn: function () { loadMidias(id); } },
+        { icon: 'fa-solid fa-pen', label: 'Renomear', fn: function () { midxRename('folder', id, name); } },
+        { sep: true },
+        { icon: 'fa-solid fa-trash', label: 'Excluir pasta', danger: true, fn: function () { midxDelete('folder', id); } }
+    ], event.clientX, event.clientY);
+}
+function midxOnItemCtx(event, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    const it = (midxData.items || []).find(function (x) { return x.id === id; });
+    const name = it ? it.nome : '';
+    midxShowCtx([
+        { icon: 'fa-brands fa-whatsapp', label: 'Enviar para lead', fn: function () { midxOpenSend(id); } },
+        { icon: 'fa-solid fa-eye', label: 'Pré-visualizar', fn: function () { midxPreview(id); } },
+        { icon: 'fa-solid fa-pen', label: 'Renomear', fn: function () { midxRename('item', id, name); } },
+        { sep: true },
+        { icon: 'fa-solid fa-trash', label: 'Excluir', danger: true, fn: function () { midxDelete('item', id); } }
+    ], event.clientX, event.clientY);
+}
+function midxOnGridCtx(event) {
+    if (event.target.closest('.midx-tile')) return; // tile tem o seu próprio menu
+    event.preventDefault();
+    midxShowCtx([
+        { icon: 'fa-solid fa-folder-plus', label: 'Nova pasta', fn: midxNewFolder },
+        { icon: 'fa-solid fa-arrow-up-from-bracket', label: 'Enviar arquivo', fn: function () {
+            const i = document.getElementById('midx-file-input');
+            if (i) i.click();
+        } },
+        { sep: true },
+        { icon: 'fa-solid fa-rotate', label: 'Atualizar', fn: function () { loadMidias(); } }
+    ], event.clientX, event.clientY);
 }
 
 // ---- upload ----
