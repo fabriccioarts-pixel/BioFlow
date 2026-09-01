@@ -4836,6 +4836,77 @@ async function deleteQuickReply(shortcut) {
     }
 }
 
+// ==========================================
+// COPILOT DE IA — assistente interno do atendente. Só sugere: nunca envia nada
+// sozinho e não mexe no agente automático do WhatsApp.
+// ==========================================
+async function copilotSummarize() {
+    if (!window.currentActiveChat || !window.currentActiveChat.phone) {
+        if (typeof showToast === 'function') showToast('Abra uma conversa primeiro.', 'danger');
+        return;
+    }
+    const btn = document.getElementById('btn-copilot-summary');
+    const modal = document.getElementById('modal-copilot-summary');
+    const body = document.getElementById('copilot-summary-body');
+    if (body) body.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Gerando resumo...';
+    if (modal) modal.style.display = 'flex';
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/copilot/summarize', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: window.currentActiveChat.phone })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Falha ao resumir.');
+        if (body) body.textContent = data.summary || 'Sem resumo.';
+    } catch (e) {
+        if (body) body.textContent = 'Não foi possível gerar o resumo: ' + e.message;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function copilotDraftReply() {
+    if (!window.currentActiveChat || !window.currentActiveChat.phone) {
+        if (typeof showToast === 'function') showToast('Abra uma conversa primeiro.', 'danger');
+        return;
+    }
+    let instruction = '';
+    if (typeof customPrompt === 'function') {
+        instruction = await customPrompt('O que você quer dizer ao paciente?', '', 'Escrever resposta com IA');
+    } else {
+        instruction = window.prompt('O que você quer dizer ao paciente?') || '';
+    }
+    if (instruction == null || !String(instruction).trim()) return;
+
+    const input = document.getElementById('chat-input-text');
+    const btn = document.getElementById('btn-copilot-draft');
+    const prevPlaceholder = input ? input.placeholder : '';
+    if (input) { input.disabled = true; input.placeholder = 'Gerando resposta...'; }
+    if (btn) { btn.disabled = true; btn.classList.add('is-loading'); }
+    try {
+        const res = await fetch('/api/copilot/draft-reply', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: window.currentActiveChat.phone, instruction: String(instruction).trim() })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Falha ao gerar.');
+        if (input && data.text) {
+            input.value = data.text;
+            if (typeof autoExpandChatInput === 'function') autoExpandChatInput(input);
+            if (typeof saveChatDraftFromInput === 'function') saveChatDraftFromInput();
+            input.focus();
+        } else if (typeof showToast === 'function') {
+            showToast('A IA não retornou texto.', 'danger');
+        }
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('Erro: ' + e.message, 'danger');
+    } finally {
+        if (input) { input.disabled = false; input.placeholder = prevPlaceholder; }
+        if (btn) { btn.disabled = false; btn.classList.remove('is-loading'); }
+    }
+}
+
 // Inicializa no carregamento
 window.addEventListener('DOMContentLoaded', () => {
     fetchQuickReplies();

@@ -1050,6 +1050,101 @@ async function callGeminiForWhatsappReply(phone) {
     return text;
 }
 
+// ============================================================================
+// COPILOT DE IA — assistente interno pros atendentes (Gemini). É PASSIVO: só lê
+// o histórico da conversa e devolve texto pro painel do atendente. NUNCA envia
+// mensagem sozinho e não encosta no fluxo do agente automático (webhook).
+// ============================================================================
+const COPILOT_MODEL = 'gemini-3.6-flash';
+const copilotLastCall = new Map(); // username -> timestamp (anti-spam simples)
+
+function copilotRedact(text) {
+    return String(text || '')
+        .replace(/\[FILE:[^\]]*\]\S*/g, '(mídia)')
+        .replace(/\d[\d\s().-]{7,}\d/g, '[número]');
+}
+
+async function copilotTranscript(phone, limit = 20) {
+    const rows = await queryD1(
+        'SELECT direction, message FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC LIMIT ?',
+        [phone, limit]
+    );
+    return (rows || []).reverse()
+        .map(r => `${r.direction === 'in' ? 'Paciente' : 'Atendimento'}: ${copilotRedact(r.message)}`)
+        .join('\n');
+}
+
+async function callGeminiCopilot(systemPrompt, userText) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no servidor.');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${COPILOT_MODEL}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+        body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: userText }] }],
+            generationConfig: { temperature: 0.6, maxOutputTokens: 600 }
+        })
+    });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error ? json.error.message : 'Erro na API do Gemini');
+    return (json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '').trim();
+}
+
+// true = pode seguir; false = já respondeu 429.
+function copilotThrottle(req, res) {
+    const user = (req.user && req.user.username) || 'anon';
+    const now = Date.now();
+    if (now - (copilotLastCall.get(user) || 0) < 2500) {
+        res.status(429).json({ error: 'Aguarde um instante antes de pedir de novo.' });
+        return false;
+    }
+    copilotLastCall.set(user, now);
+    return true;
+}
+
+app.post('/api/copilot/summarize', async (req, res) => {
+    try {
+        const phone = String(req.body.phone || '').replace(/\D/g, '');
+        if (!phone) return res.status(400).json({ error: 'Telefone não informado.' });
+        if (!copilotThrottle(req, res)) return;
+        const transcript = await copilotTranscript(phone, 24);
+        if (!transcript) return res.json({ summary: 'Ainda não há mensagens nessa conversa.' });
+        const contexto = await getWhatsappAiContext();
+        const sys = `${contexto}
+
+Você é um assistente interno de CRM de uma clínica. NÃO fala com o paciente — só ajuda o atendente humano. A partir do histórico abaixo, escreva um briefing curto (no máximo 3 linhas, em português) dizendo: o que o paciente quer, em que ponto a conversa está, e qual a pendência / próximo passo do atendente. Sem saudação, sem despedida, direto ao ponto.`;
+        const summary = await callGeminiCopilot(sys, `Histórico:\n${transcript}`);
+        res.json({ summary: summary || 'Não consegui resumir.' });
+    } catch (e) {
+        console.error('copilot/summarize:', e.message);
+        res.status(502).json({ error: e.message || 'Falha ao gerar o resumo.' });
+    }
+});
+
+app.post('/api/copilot/draft-reply', async (req, res) => {
+    try {
+        const phone = String(req.body.phone || '').replace(/\D/g, '');
+        const instruction = String(req.body.instruction || '').trim();
+        if (!phone) return res.status(400).json({ error: 'Telefone não informado.' });
+        if (!instruction) return res.status(400).json({ error: 'Diga o que você quer responder.' });
+        if (!copilotThrottle(req, res)) return;
+        const transcript = await copilotTranscript(phone, 16);
+        const contexto = await getWhatsappAiContext();
+        const sys = `${contexto}
+
+Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano de uma clínica enviar ao paciente. Escreva UMA mensagem pronta, em português, tom acolhedor e profissional, curta e natural (como no WhatsApp). NÃO invente preço, horário ou informação que não esteja no pedido do atendente ou no histórico. Não repita saudação se a conversa já está em andamento. Responda só com o texto da mensagem, nada mais.`;
+        const text = await callGeminiCopilot(
+            sys,
+            `Conversa até aqui:\n${transcript || '(sem histórico)'}\n\nO atendente quer dizer: "${instruction}"\n\nEscreva a mensagem:`
+        );
+        res.json({ text: text || '' });
+    } catch (e) {
+        console.error('copilot/draft-reply:', e.message);
+        res.status(502).json({ error: e.message || 'Falha ao gerar a resposta.' });
+    }
+});
+
 // Chamado (sem await, "fire-and-forget") pelo webhook quando uma mensagem de
 // texto chega de um lead elegível (IA ligada, coluna inicial do funil).
 // Mesmas etiquetas padrão do frontend (wa_chat_logic.js DEFAULT_TAGS) — usadas

@@ -3359,10 +3359,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </p>
                     </div>
                 </div>
-                <button type="button" class="chat-mobile-ficha" title="Ficha do lead" aria-label="Ver ficha do lead"
-                    onclick="document.getElementById('view-chat').classList.toggle('lead-open')">
-                    <i class="fa-solid fa-address-card"></i>
-                </button>
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                    <button type="button" id="btn-copilot-summary" onclick="copilotSummarize()" class="copilot-btn"
+                        title="Resumir esta conversa com IA">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> <span class="copilot-btn-label">Resumir</span>
+                    </button>
+                    <button type="button" class="chat-mobile-ficha" title="Ficha do lead" aria-label="Ver ficha do lead"
+                        onclick="document.getElementById('view-chat').classList.toggle('lead-open')">
+                        <i class="fa-solid fa-address-card"></i>
+                    </button>
+                </div>
             </div>
 
             <!-- Banner de Trava de Atendimento (conversa em atendimento por outro atendente) -->
@@ -3484,6 +3490,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <!-- Botões Redondos de Ação à Direita -->
                 <div style="display: flex; gap: 0.5rem; flex-shrink: 0; align-items: center;">
 
+                    <button id="btn-copilot-draft" title="Escrever resposta com IA" onclick="copilotDraftReply()" class="chat-input-icon-btn copilot-icon-btn">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    </button>
                     <button id="btn-chat-mic" title="Gravar Áudio" onclick="toggleVoiceRecording()" class="chat-input-icon-btn">
                         <i class="fa-solid fa-microphone"></i>
                     </button>
@@ -3534,6 +3543,30 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="padding: 0.55rem 1.2rem; background: var(--accent-success); border: none; color: #fff; display: flex; align-items: center; gap: 0.5rem; font-weight: 600; cursor: pointer; border-radius: 8px;"><i
                                 class="fa-solid fa-paper-plane"></i> Enviar Imagem</button>
                     </div>
+                </div>
+            </div>
+
+            <!-- MODAL RESUMO DO COPILOT (dentro da área do chat, sem backdrop blur) -->
+            <div id="modal-copilot-summary"
+                style="display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.55); z-index: 1001; align-items: center; justify-content: center;">
+                <div
+                    style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; width: 90%; max-width: 470px; padding: 1.4rem; display: flex; flex-direction: column; gap: 1rem; box-shadow: none;">
+                    <div
+                        style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.7rem;">
+                        <h3
+                            style="font-size: 1rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fa-solid fa-wand-magic-sparkles" style="color: var(--accent-primary);"></i> Resumo da
+                            conversa
+                        </h3>
+                        <button type="button" onclick="document.getElementById('modal-copilot-summary').style.display='none'"
+                            style="background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;"><i
+                                class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div id="copilot-summary-body"
+                        style="font-size: 0.92rem; line-height: 1.55; color: var(--text-main); white-space: pre-wrap; min-height: 60px;">
+                    </div>
+                    <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">Gerado por IA a partir das últimas
+                        mensagens. Confira antes de agir.</p>
                 </div>
             </div>
         </div>
