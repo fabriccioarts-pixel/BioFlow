@@ -4919,14 +4919,19 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Polling global em segundo plano a cada 6s para som de notificação e bolinha verde
+// Polling global em segundo plano para som de notificação e bolinha verde.
+// loadChats faz GROUP BY na wa_messages inteira (query mais cara do sistema) —
+// vai a 20s. A conversa ABERTA (openChat refresh) filtra por telefone, é barata,
+// e roda a cada tick (6s).
 if (!window.globalChatCheckInterval) {
+    let globalChatTick = 0;
     window.globalChatCheckInterval = setInterval(() => {
-        if (typeof loadChats === 'function') loadChats(true);
+        globalChatTick++;
         if (typeof refreshChatPresence === 'function') refreshChatPresence();
         if (window.currentActiveChat && document.getElementById('view-chat') && document.getElementById('view-chat').style.display !== 'none') {
             if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         }
+        if (globalChatTick % 3 === 1 && typeof loadChats === 'function') loadChats(true);
     }, 6000);
 }
 

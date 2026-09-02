@@ -3238,6 +3238,7 @@ function switchTab(tabId) {
         loadDashboardResponseMetrics().then(renderDashboard);
         renderDashboard(); // Render charts and metrics
         // Inicia auto-refresh a cada 30s enquanto o dashboard estiver aberto
+        // (era 10s — puxava a lista de leads + métricas de resposta, ambas scans).
         if (!window.dashPollingInterval) {
             window.dashPollingInterval = setInterval(async () => {
                 if (document.getElementById('view-dashboard')?.style.display !== 'none') {
@@ -3245,7 +3246,7 @@ function switchTab(tabId) {
                     await loadDashboardResponseMetrics();
                     renderDashboard();
                 }
-            }, 10000);
+            }, 30000);
         }
     } else if (tabId === 'campanhas') {
         const view = document.getElementById('view-campanhas');
@@ -3277,16 +3278,22 @@ function switchTab(tabId) {
         if (view) {
             view.style.display = 'flex';
             loadChats();
-            // Inicia polling se ainda não estiver rodando
+            // Inicia polling se ainda não estiver rodando. A lista de conversas
+            // (loadChats) faz GROUP BY na wa_messages inteira — cara — então vai
+            // a 20s; a conversa ABERTA (openChat refresh) é barata (filtra por
+            // telefone) e segue rápida, a cada 6s.
             if (!window.chatPollingInterval) {
+                let chatTick = 0;
                 window.chatPollingInterval = setInterval(() => {
-                    if(document.getElementById('view-chat').style.display !== 'none') {
-                        loadChats(true);
-                        if(window.currentActiveChat) {
-                            openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
-                        }
+                    if (document.getElementById('view-chat').style.display === 'none') return;
+                    chatTick++;
+                    if (window.currentActiveChat) {
+                        openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                     }
-                }, 5000);
+                    if (chatTick % 3 === 1) {
+                        loadChats(true);
+                    }
+                }, 6000);
             }
         }
     } else if (tabId === 'fluxos') {
@@ -5171,17 +5178,19 @@ let unreadNotifications = 0;
 let isFirstLoad = true;
 
 function startNotificationPolling() {
-    // Busca inicial rápida, depois a cada 10s
+    // Busca inicial rápida, depois a cada 60s. Antes era 10s: sozinho respondia
+    // por ~47% da cota diária de rows_read do D1 (avisos de login/lembrete não
+    // precisam de latência baixa).
     if (isFirstLoad) {
-        fetchNotifications(true); 
+        fetchNotifications(true);
     } else {
         fetchNotifications(false);
     }
-    
+
     if (window.notifPollInterval) clearInterval(window.notifPollInterval);
     window.notifPollInterval = setInterval(() => {
         fetchNotifications(false);
-    }, 10000);
+    }, 60000);
 }
 
 async function logout() {
@@ -7763,10 +7772,12 @@ function showToast(message, type = 'success', duration = 3500) {
 }
 
 // Pause all polling when the tab is backgrounded; resume when foregrounded.
+// Sem isso, abas em segundo plano continuavam batendo no D1 a cada poucos
+// segundos — cota de rows_read queimada por aba esquecida aberta.
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         ['kanbanSyncInterval', 'dashPollingInterval', 'chatPollingInterval',
-         'globalChatCheckInterval', 'heartbeatInterval'].forEach(key => {
+         'globalChatCheckInterval', 'heartbeatInterval', 'notifPollInterval'].forEach(key => {
             clearInterval(window[key]);
             window[key] = null;
         });
@@ -7774,7 +7785,7 @@ document.addEventListener('visibilitychange', () => {
         if (loggedUser && !window.kanbanSyncInterval) {
             window.kanbanSyncInterval = setInterval(() => {
                 if (loggedUser) fetchLeadsFromServer(true);
-            }, 5000);
+            }, 30000);
         }
         if (!window.globalChatCheckInterval) {
             window.globalChatCheckInterval = setInterval(() => {
@@ -7782,7 +7793,10 @@ document.addEventListener('visibilitychange', () => {
                 if (window.currentActiveChat && document.getElementById('view-chat')?.style.display !== 'none') {
                     if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                 }
-            }, 6000);
+            }, 20000);
+        }
+        if (loggedUser && !window.notifPollInterval && typeof startNotificationPolling === 'function') {
+            startNotificationPolling();
         }
         startHeartbeat();
     }

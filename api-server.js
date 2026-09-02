@@ -1902,6 +1902,24 @@ queryD1(`CREATE TABLE IF NOT EXISTS lead_audiences (
 )`).catch(() => {});
 
 // ==========================================
+// ÍNDICES — sem eles, as rotas de polling (notificações a cada 60s, lista de
+// chats, kanban) faziam full table scan a cada chamada e torravam a cota diária
+// de rows_read do D1 (plano free = 5M/dia). Cada CREATE INDEX varre a tabela uma
+// vez na primeira execução; depois é só manutenção incremental.
+// crm_notifications: ORDER BY created_at DESC LIMIT 50 -> scan reverso do índice.
+queryD1("CREATE INDEX IF NOT EXISTS idx_notif_created ON crm_notifications(created_at)").catch(() => {});
+// wa_messages: GROUP BY phone + MAX(timestamp) da lista de conversas.
+queryD1("CREATE INDEX IF NOT EXISTS idx_wa_msg_phone_ts ON wa_messages(phone, timestamp)").catch(() => {});
+// wa_messages: UPDATE ... SET status='read' WHERE phone IN (...) AND direction='in'
+// e a contagem de não lidas.
+queryD1("CREATE INDEX IF NOT EXISTS idx_wa_msg_phone_status ON wa_messages(phone, direction, status)").catch(() => {});
+// leads: SELECT * FROM leads ORDER BY created_at ASC (lista do kanban).
+queryD1("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at)").catch(() => {});
+queryD1("CREATE INDEX IF NOT EXISTS idx_leads_owner_created ON leads(owner_id, created_at)").catch(() => {});
+// crm_chat_presence: limpeza por last_ping_at vencido.
+queryD1("CREATE INDEX IF NOT EXISTS idx_presence_ping ON crm_chat_presence(last_ping_at)").catch(() => {});
+
+// ==========================================
 // DINHEIRO — sempre inteiro em centavos internamente
 // ==========================================
 // Aceita "R$ 1.234,56", "1.234,56", "1234.56", "1234", número ou vazio.
@@ -3905,6 +3923,12 @@ app.delete('/api/users/:username', async (req, res) => {
 // ==== ROTAS DE NOTIFICAÇÕES ====
 app.get('/api/notifications', async (req, res) => {
     try {
+        // Poda oportunista: a tabela só era limpa manualmente (/api/clear-notif) e
+        // crescia sem limite, então cada poll relia centenas de linhas pra devolver
+        // 50. Aqui, ~1 em cada 20 chamadas, remove o que passou de 30 dias.
+        if (Math.random() < 0.05) {
+            queryD1("DELETE FROM crm_notifications WHERE created_at < datetime('now', '-30 days')").catch(() => {});
+        }
         // Não mostra pra própria pessoa a notificação de uma ação que ela mesma
         // disparou (ex.: "Você entrou no sistema" ao fazer login).
         const rows = await queryD1(
