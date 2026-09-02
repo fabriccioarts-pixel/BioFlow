@@ -4172,7 +4172,7 @@ app.get('/api/capi-selftest', async (req, res) => {
         token_source: process.env.META_CAPI_TOKEN ? 'META_CAPI_TOKEN'
             : (process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN (fallback)' : null),
         graph_version: META_GRAPH,
-        test_event_code_presente: !!process.env.META_CAPI_TEST_EVENT_CODE
+        test_event_code: process.env.META_CAPI_TEST_EVENT_CODE || null
     };
     if (req.query.send !== '1') {
         return res.json({ cfg, dica: 'Adicione ?send=1 pra disparar um evento Lead de teste e ver a resposta do Meta.' });
