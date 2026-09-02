@@ -339,6 +339,15 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                 }
 
+                // Click-to-WhatsApp: id do clique do anúncio (atribuição da CAPI) + cópia enxuta do referral.
+                const ctwaClid = message_obj.referral?.ctwa_clid || null;
+                const adRefJson = message_obj.referral ? JSON.stringify({
+                    ctwa_clid:   ctwaClid,
+                    source_id:   message_obj.referral.source_id   || null,
+                    source_type: message_obj.referral.source_type || null,
+                    headline:    message_obj.referral.headline    || null
+                }) : null;
+
                 const quoted_id = message_obj.context ? message_obj.context.id : null;
 
                 // 1. Salva a mensagem no histórico do chat (incluindo o campo referral e quoted_id)
@@ -365,10 +374,15 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
 
                     await queryD1(
-                        'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        [newLeadId, profileName, normalizePhoneBR(from), origemLead, '', '', 'col-entrada', '', '', notasAdicionais]
+                        'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, ctwa_clid, ad_referral) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        [newLeadId, profileName, normalizePhoneBR(from), origemLead, '', '', 'col-entrada', '', '', notasAdicionais, ctwaClid, adRefJson]
                     );
                     console.log(`Novo lead criado a partir do WhatsApp: ${profileName} (${from}) - Origem: ${origemLead}`);
+
+                    // Veio de anúncio (Click-to-WhatsApp)? Dispara o Lead agora — clique fresco, match forte.
+                    if (ctwaClid) {
+                        await fireCapiForLead(newLeadId, 'Lead').catch(e => console.error('CAPI Lead:', e.message));
+                    }
 
                     // Notifica a equipe que um novo lead entrou no funil.
                     try {
@@ -3569,7 +3583,14 @@ app.post('/api/init-db', async (req, res) => {
         try { await queryD1('ALTER TABLE leads ADD COLUMN campaign_opt_out INTEGER DEFAULT 0'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN cpf TEXT'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN endereco TEXT'); } catch(e) {}
-        
+        // Click-to-WhatsApp: id do clique do anúncio (vem no referral do webhook) + cópia
+        // do referral. As flags capi_*_sent garantem que cada evento sai UMA vez por lead.
+        try { await queryD1('ALTER TABLE leads ADD COLUMN ctwa_clid TEXT'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN ad_referral TEXT'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN capi_lead_sent INTEGER DEFAULT 0'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN capi_schedule_sent INTEGER DEFAULT 0'); } catch(e) {}
+        try { await queryD1('ALTER TABLE leads ADD COLUMN capi_purchase_sent INTEGER DEFAULT 0'); } catch(e) {}
+
         await queryD1(`
             CREATE TABLE IF NOT EXISTS crm_users (
                 username TEXT PRIMARY KEY,
@@ -4019,55 +4040,113 @@ app.get('/api/leads', async (req, res) => {
 });
 
 // ==========================================
-// FUNÇÃO DE ENVIO PARA META CAPI
+// META CAPI — feedback de conversão pro Meta Ads
+// Para leads de Click-to-WhatsApp o segredo é: action_source 'business_messaging'
+// + messaging_channel 'whatsapp' + o ctwa_clid CRU (nunca hasheado).
 // ==========================================
-async function sendMetaCapiEvent(eventName, userData) {
-    const { META_PIXEL_ID, META_ACCESS_TOKEN } = process.env;
-    if (!META_PIXEL_ID || !META_ACCESS_TOKEN) return;
+const META_GRAPH = process.env.META_GRAPH_VERSION || 'v21.0';
 
-    try {
-        const hashData = (data) => {
-            if (!data) return undefined;
-            const clean = data.trim().toLowerCase();
-            return crypto.createHash('sha256').update(clean).digest('hex');
-        };
+// Valor de compra do lead em BRL (reais) pro custom_data.value do Purchase.
+function leadPurchaseValueBRL(lead) {
+    const rec = brlToCents(lead && lead.valor_recebido);
+    if (rec && rec > 0) return rec / 100;
+    const soma = parseOrcamentoArray(lead && lead.orcamento)
+        .reduce((s, it) => s + (brlToCents(it.valor) || 0), 0);
+    return soma > 0 ? soma / 100 : null;
+}
 
-        const phoneHash = hashData(userData.telefone ? userData.telefone.replace(/\D/g, '') : '');
-        const emailHash = hashData(userData.email);
+// Envia UM evento pro Conversions API. Retorna { ok, ... } e nunca lança.
+async function sendMetaCapiEvent(eventName, {
+    telefone, email, ctwa_clid, eventId, eventTimeSec, value, currency = 'BRL'
+} = {}) {
+    const datasetId = process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID;
+    const token     = process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN;
+    if (!datasetId || !token) return { ok: false, skipped: true };
 
-        const payload = {
-            data: [{
-                event_name: eventName,
-                event_time: Math.floor(Date.now() / 1000),
-                action_source: 'system_generated',
-                user_data: {
-                    ph: phoneHash ? [phoneHash] : undefined,
-                    em: emailHash ? [emailHash] : undefined,
-                    fbc: userData.fb_click_id ? `fb.1.${Date.now()}.${userData.fb_click_id}` : undefined,
-                    client_user_agent: 'Sistema_Clinica_CRM/1.0'
-                }
-            }]
-        };
+    const sha = (v) => v
+        ? crypto.createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex')
+        : undefined;
 
-        const url = `https://graph.facebook.com/v19.0/${META_PIXEL_ID}/events`;
+    const phone = (telefone || '').replace(/\D/g, '');   // 5561999999999
+    const isMsg = !!ctwa_clid;
 
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${META_ACCESS_TOKEN}`
-            },
-            body: JSON.stringify(payload)
-        });
+    // event_time: nunca no futuro, nunca > ~7 dias atrás (janela do CTWA).
+    const now = Math.floor(Date.now() / 1000);
+    const t = Math.min(now, Math.max(eventTimeSec || now, now - 6 * 86400));
 
-        const result = await res.json();
-        if (!res.ok) {
-            console.error(`Erro ao enviar evento ${eventName} para a Meta:`, result);
-        } else {
-            console.log(`Evento ${eventName} enviado para a Meta com sucesso!`);
+    const evt = {
+        event_name: eventName,                       // Lead | Schedule | Purchase
+        event_time: t,
+        event_id: eventId || `${eventName}:${phone}`,   // dedup
+        action_source: isMsg ? 'business_messaging' : 'system_generated',
+        messaging_channel: isMsg ? 'whatsapp' : undefined,
+        user_data: {
+            ph: phone ? [sha(phone)] : undefined,
+            em: email ? [sha(email)] : undefined,
+            ctwa_clid: ctwa_clid || undefined          // CRU, sem hash
         }
-    } catch (err) {
-        console.error("Exceção ao disparar Meta CAPI:", err);
+    };
+    if (eventName === 'Purchase' && value != null) {
+        evt.custom_data = { value: Number(value), currency };
+    }
+
+    const body = { data: [evt] };
+    if (process.env.META_CAPI_TEST_EVENT_CODE) {
+        body.test_event_code = process.env.META_CAPI_TEST_EVENT_CODE;
+    }
+
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), 4000);
+    try {
+        const r = await fetch(`https://graph.facebook.com/${META_GRAPH}/${datasetId}/events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...body, access_token: token }),
+            signal: ac.signal
+        });
+        const j = await r.json();
+        if (!r.ok) {
+            console.error(`CAPI ${eventName} falhou:`, j.error?.message, 'fbtrace:', j.error?.fbtrace_id);
+            return { ok: false, error: j.error };
+        }
+        console.log(`CAPI ${eventName} ok (events_received: ${j.events_received})`);
+        return { ok: true, result: j };
+    } catch (e) {
+        console.error(`CAPI ${eventName} exceção:`, e.message);
+        return { ok: false, error: e };
+    } finally {
+        clearTimeout(to);
+    }
+}
+
+// Dispara um evento CAPI pra um lead UMA vez só (flag capi_<evento>_sent na tabela).
+async function fireCapiForLead(leadId, eventName, extra = {}) {
+    if (!leadId) return;
+    const col = `capi_${eventName.toLowerCase()}_sent`;
+    let lead;
+    try {
+        const rows = await queryD1(
+            `SELECT telefone, email, ctwa_clid, valor_recebido, orcamento, ${col} AS sent FROM leads WHERE id = ?`,
+            [leadId]
+        );
+        lead = rows && rows[0];
+    } catch (e) { return; }
+    if (!lead || lead.sent) return;
+
+    if (eventName === 'Purchase' && extra.value == null) {
+        const v = leadPurchaseValueBRL(lead);
+        if (v != null) extra = { ...extra, value: v };
+    }
+
+    const res = await sendMetaCapiEvent(eventName, {
+        telefone: lead.telefone,
+        email: lead.email,
+        ctwa_clid: lead.ctwa_clid,
+        eventId: `${eventName}:${leadId}`,
+        ...extra
+    });
+    if (res.ok) {
+        try { await queryD1(`UPDATE leads SET ${col} = 1 WHERE id = ?`, [leadId]); } catch (e) {}
     }
 }
 
@@ -4204,8 +4283,15 @@ app.put('/api/leads/:id', async (req, res) => {
             }
         }
 
-        if (column_id === 'col-atendimento' && lead) {
-            sendMetaCapiEvent('Lead', lead);
+        // Feedback de conversão pro Meta Ads nas transições reais de funil.
+        // fireCapiForLead lê o lead já atualizado, calcula o valor e trava por flag.
+        if (column_id && lead && column_id !== lead.column_id) {
+            if (column_id === 'col-agendado') {
+                await fireCapiForLead(id, 'Schedule').catch(e => console.error('CAPI Schedule:', e.message));
+            }
+            if (column_id === 'col-ganho') {
+                await fireCapiForLead(id, 'Purchase').catch(e => console.error('CAPI Purchase:', e.message));
+            }
         }
 
         // Mantém o espelho do valor do card na tela Financeiro.
@@ -4676,12 +4762,17 @@ app.post('/api/agendar', async (req, res) => {
         }
         
         // --- ENVIO META CAPI (AGENDAMENTO) ---
+        // Agendamento novo com lead vinculado: dispara Schedule pelo mesmo wrapper,
+        // aproveitando o ctwa_clid gravado no lead. Sem lead_id, cai no envio direto.
         if (!payload.attendance_id) {
-            sendMetaCapiEvent('Schedule', {
-                telefone: payload.patient_phone,
-                email: payload.patient_email,
-                fb_click_id: payload.fb_click_id
-            });
+            if (payload.lead_id) {
+                await fireCapiForLead(payload.lead_id, 'Schedule').catch(e => console.error('CAPI Schedule:', e.message));
+            } else {
+                sendMetaCapiEvent('Schedule', {
+                    telefone: payload.patient_phone,
+                    email: payload.patient_email
+                });
+            }
         }
         
         res.status(200).json({ 
