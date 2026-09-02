@@ -4059,8 +4059,10 @@ function leadPurchaseValueBRL(lead) {
 async function sendMetaCapiEvent(eventName, {
     telefone, email, ctwa_clid, eventId, eventTimeSec, value, currency = 'BRL'
 } = {}) {
-    const datasetId = process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID;
-    const token     = process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN;
+    // .trim() defensivo: colar env var na Vercel costuma deixar \n / espaço no fim.
+    const datasetId = (process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || '').trim();
+    const token     = (process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN || '').trim();
+    const testCode  = (process.env.META_CAPI_TEST_EVENT_CODE || '').trim();
     if (!datasetId || !token) {
         console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'META_CAPI_DATASET_ID/META_PIXEL_ID' : 'META_CAPI_TOKEN/META_ACCESS_TOKEN'} no ambiente`);
         return { ok: false, skipped: true };
@@ -4095,9 +4097,7 @@ async function sendMetaCapiEvent(eventName, {
     }
 
     const body = { data: [evt] };
-    if (process.env.META_CAPI_TEST_EVENT_CODE) {
-        body.test_event_code = process.env.META_CAPI_TEST_EVENT_CODE;
-    }
+    if (testCode) body.test_event_code = testCode;
 
     const ac = new AbortController();
     const to = setTimeout(() => ac.abort(), 4000);
@@ -4172,7 +4172,8 @@ app.get('/api/capi-selftest', async (req, res) => {
         token_source: process.env.META_CAPI_TOKEN ? 'META_CAPI_TOKEN'
             : (process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN (fallback)' : null),
         graph_version: META_GRAPH,
-        test_event_code: process.env.META_CAPI_TEST_EVENT_CODE || null
+        test_event_code: (process.env.META_CAPI_TEST_EVENT_CODE || '').trim() || null,
+        test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length
     };
     if (req.query.send !== '1') {
         return res.json({ cfg, dica: 'Adicione ?send=1 pra disparar um evento Lead de teste e ver a resposta do Meta.' });
