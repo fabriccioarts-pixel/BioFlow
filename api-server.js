@@ -1083,12 +1083,26 @@ async function callGeminiCopilot(systemPrompt, userText) {
         body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ role: 'user', parts: [{ text: userText }] }],
-            generationConfig: { temperature: 0.6, maxOutputTokens: 600 }
+            // gemini-3.6-flash é modelo "thinking": com o thinking ligado ele
+            // consumia parte do maxOutputTokens raciocinando e o texto visível
+            // saía cortado no meio da frase (finishReason MAX_TOKENS). Resumo e
+            // rascunho de resposta não precisam de raciocínio interno — desligar
+            // deixa a saída completa, mais rápida e mais barata.
+            generationConfig: {
+                temperature: 0.6,
+                maxOutputTokens: 800,
+                thinkingConfig: { thinkingBudget: 0 }
+            }
         })
     });
     const json = await response.json();
     if (!response.ok) throw new Error(json.error ? json.error.message : 'Erro na API do Gemini');
-    return (json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '').trim();
+    const candidate = json.candidates?.[0];
+    const text = (candidate?.content?.parts?.map(p => p.text).join('') || '').trim();
+    if (!text && candidate?.finishReason && candidate.finishReason !== 'STOP') {
+        throw new Error(`Gemini interrompeu a resposta (${candidate.finishReason})`);
+    }
+    return text;
 }
 
 // true = pode seguir; false = já respondeu 429.
