@@ -4175,14 +4175,32 @@ app.get('/api/capi-selftest', async (req, res) => {
         test_event_code: (process.env.META_CAPI_TEST_EVENT_CODE || '').trim() || null,
         test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length
     };
+    // Checa se as colunas novas existem na tabela leads (o caminho do arrasto depende delas).
+    let colunas_leads;
+    try {
+        await queryD1('SELECT ctwa_clid, capi_lead_sent, capi_schedule_sent, capi_purchase_sent FROM leads LIMIT 1', []);
+        colunas_leads = 'ok — ctwa_clid / capi_lead_sent / capi_schedule_sent / capi_purchase_sent existem';
+    } catch (e) {
+        colunas_leads = 'FALTAM: ' + e.message + ' — o ALTER TABLE do boot não rodou nesse deploy';
+    }
+
+    // ?fire=<leadId>&event=Schedule|Purchase|Lead — roda o caminho EXATO do arrasto num lead real.
+    if (req.query.fire) {
+        const ev = ['Schedule', 'Purchase', 'Lead'].includes(req.query.event) ? req.query.event : 'Schedule';
+        const before = await queryD1(`SELECT id, column_id, ctwa_clid, capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
+        await fireCapiForLead(String(req.query.fire), ev);
+        const after = await queryD1(`SELECT capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
+        return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0] } });
+    }
+
     if (req.query.send !== '1') {
-        return res.json({ cfg, dica: 'Adicione ?send=1 pra disparar um evento Lead de teste e ver a resposta do Meta.' });
+        return res.json({ cfg, colunas_leads, dica: '?send=1 dispara um Lead de teste. ?fire=<leadId>&event=Schedule roda o caminho do arrasto num lead real.' });
     }
     const r = await sendMetaCapiEvent('Lead', {
         telefone: '5561999990000',
         eventId: `selftest:${Date.now()}`
     });
-    res.json({ cfg, envio: r });
+    res.json({ cfg, colunas_leads, envio: r });
 });
 
 // Criar um novo lead
