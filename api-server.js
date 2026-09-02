@@ -4158,6 +4158,32 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
     }
 }
 
+// Autodiagnóstico da CAPI — abra /api/capi-selftest logado como admin.
+// ?send=1 dispara um evento Lead de teste de verdade e devolve a resposta do Meta.
+app.get('/api/capi-selftest', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    const cfg = {
+        dataset_id: process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || null,
+        dataset_source: process.env.META_CAPI_DATASET_ID ? 'META_CAPI_DATASET_ID'
+            : (process.env.META_PIXEL_ID ? 'META_PIXEL_ID (fallback)' : null),
+        token_configurado: !!(process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN),
+        token_source: process.env.META_CAPI_TOKEN ? 'META_CAPI_TOKEN'
+            : (process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN (fallback)' : null),
+        graph_version: META_GRAPH,
+        test_event_code_presente: !!process.env.META_CAPI_TEST_EVENT_CODE
+    };
+    if (req.query.send !== '1') {
+        return res.json({ cfg, dica: 'Adicione ?send=1 pra disparar um evento Lead de teste e ver a resposta do Meta.' });
+    }
+    const r = await sendMetaCapiEvent('Lead', {
+        telefone: '5561999990000',
+        eventId: `selftest:${Date.now()}`
+    });
+    res.json({ cfg, envio: r });
+});
+
 // Criar um novo lead
 app.post('/api/leads', async (req, res) => {
     const { id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, tags, valor_recebido, orcamento } = req.body;
