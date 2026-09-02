@@ -4061,7 +4061,11 @@ async function sendMetaCapiEvent(eventName, {
 } = {}) {
     const datasetId = process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID;
     const token     = process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN;
-    if (!datasetId || !token) return { ok: false, skipped: true };
+    if (!datasetId || !token) {
+        console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'META_CAPI_DATASET_ID/META_PIXEL_ID' : 'META_CAPI_TOKEN/META_ACCESS_TOKEN'} no ambiente`);
+        return { ok: false, skipped: true };
+    }
+    console.log(`CAPI ${eventName}: enviando pro dataset ${datasetId} (${META_GRAPH})${ctwa_clid ? ' com ctwa_clid' : ''}`);
 
     const sha = (v) => v
         ? crypto.createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex')
@@ -4130,8 +4134,12 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
             [leadId]
         );
         lead = rows && rows[0];
-    } catch (e) { return; }
-    if (!lead || lead.sent) return;
+    } catch (e) {
+        console.error(`CAPI ${eventName}: SELECT do lead ${leadId} falhou (as colunas capi_*/ctwa_clid existem?):`, e.message);
+        return;
+    }
+    if (!lead) { console.warn(`CAPI ${eventName}: lead ${leadId} não encontrado`); return; }
+    if (lead.sent) { console.log(`CAPI ${eventName}: já enviado antes pro lead ${leadId}, pulando`); return; }
 
     if (eventName === 'Purchase' && extra.value == null) {
         const v = leadPurchaseValueBRL(lead);
