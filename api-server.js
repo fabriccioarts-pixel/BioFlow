@@ -373,6 +373,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         notasAdicionais = `[Lead de Anúncio Meta]\nTítulo do Anúncio: ${message_obj.referral.headline || ''}\nDescrição: ${message_obj.referral.body || ''}\nLink: ${message_obj.referral.source_url || ''}\n\n`;
                     }
 
+                    await ensureCapiColumns(); // garante ctwa_clid / ad_referral antes do INSERT
                     await queryD1(
                         'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, ctwa_clid, ad_referral) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         [newLeadId, profileName, normalizePhoneBR(from), origemLead, '', '', 'col-entrada', '', '', notasAdicionais, ctwaClid, adRefJson]
@@ -4046,6 +4047,25 @@ app.get('/api/leads', async (req, res) => {
 // ==========================================
 const META_GRAPH = process.env.META_GRAPH_VERSION || 'v21.0';
 
+// As colunas da CAPI ficam num ALTER TABLE lá no boot, que na Vercel serverless
+// nem sempre chega a rodar (a função é congelada antes). Aqui a gente garante
+// que existem, de forma preguiçosa, na primeira vez que qualquer caminho precisa
+// delas — webhook (INSERT de lead novo) e fireCapiForLead (SELECT).
+let _capiColsReady = false;
+async function ensureCapiColumns() {
+    if (_capiColsReady) return;
+    for (const sql of [
+        'ALTER TABLE leads ADD COLUMN ctwa_clid TEXT',
+        'ALTER TABLE leads ADD COLUMN ad_referral TEXT',
+        'ALTER TABLE leads ADD COLUMN capi_lead_sent INTEGER DEFAULT 0',
+        'ALTER TABLE leads ADD COLUMN capi_schedule_sent INTEGER DEFAULT 0',
+        'ALTER TABLE leads ADD COLUMN capi_purchase_sent INTEGER DEFAULT 0'
+    ]) {
+        try { await queryD1(sql, []); } catch (e) { /* já existe */ }
+    }
+    _capiColsReady = true;
+}
+
 // Valor de compra do lead em BRL (reais) pro custom_data.value do Purchase.
 function leadPurchaseValueBRL(lead) {
     const rec = brlToCents(lead && lead.valor_recebido);
@@ -4126,6 +4146,7 @@ async function sendMetaCapiEvent(eventName, {
 // Dispara um evento CAPI pra um lead UMA vez só (flag capi_<evento>_sent na tabela).
 async function fireCapiForLead(leadId, eventName, extra = {}) {
     if (!leadId) return;
+    await ensureCapiColumns();
     const col = `capi_${eventName.toLowerCase()}_sent`;
     let lead;
     try {
@@ -4176,6 +4197,7 @@ app.get('/api/capi-selftest', async (req, res) => {
         test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length
     };
     // Checa se as colunas novas existem na tabela leads (o caminho do arrasto depende delas).
+    await ensureCapiColumns(); // cria as colunas se faltarem — só de abrir esse endpoint já conserta
     let colunas_leads;
     try {
         await queryD1('SELECT ctwa_clid, capi_lead_sent, capi_schedule_sent, capi_purchase_sent FROM leads LIMIT 1', []);
