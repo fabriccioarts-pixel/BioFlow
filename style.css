@@ -1036,7 +1036,7 @@ nav.tabs-container.sb-nav {
     transition: width 0.18s ease;
 }
 
-/* Botão de recolher o painel de informações do lead (só desktop) */
+/* Botão de ocultar o painel de informações do lead (só desktop) */
 .chat-lead-collapse {
     display: inline-flex;
     align-items: center;
@@ -1050,30 +1050,19 @@ nav.tabs-container.sb-nav {
     color: var(--text-muted);
     cursor: pointer;
     font-size: 0.72rem;
-    transition: background 0.15s, color 0.15s, transform 0.18s;
+    transition: background 0.15s, color 0.15s;
 }
 .chat-lead-collapse:hover {
     background: var(--bg-hover, rgba(255, 255, 255, 0.06));
     color: var(--text-main);
 }
 
-#chat-lead-panel.lp-collapsed {
-    width: 46px !important;
-}
-#chat-lead-panel.lp-collapsed #chat-lead-panel-body {
-    display: none !important;
-}
-#chat-lead-panel.lp-collapsed .chat-lead-panel-head {
-    flex-direction: column;
-    padding: 0.7rem 0;
-    gap: 0.5rem;
-    justify-content: flex-start;
-}
-#chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 {
-    display: none !important;
-}
-#chat-lead-panel.lp-collapsed .chat-lead-collapse {
-    transform: rotate(180deg);
+/* Desktop: painel some por completo até o atendente pedir pra abrir
+   (botão "Ferramentas > Mostrar ficha" ou o chevron do próprio painel). */
+@media (min-width: 769px) {
+    #chat-lead-panel.lp-hidden {
+        display: none !important;
+    }
 }
 
 .lead-panel-label {
@@ -7402,12 +7391,8 @@ body:has(#login-overlay.active) header { display: none; }
     .chat-mobile-ficha,
     .chat-lead-close { display: inline-flex !important; }
 
-    /* No mobile a ficha é um drawer de tela cheia — recolher não faz sentido */
+    /* No mobile a ficha é um drawer de tela cheia — abre pelo botão "Ficha do lead" */
     .chat-lead-collapse { display: none !important; }
-    #chat-lead-panel.lp-collapsed { width: 100% !important; }
-    #chat-lead-panel.lp-collapsed #chat-lead-panel-body { display: flex !important; }
-    #chat-lead-panel.lp-collapsed .chat-lead-panel-head { flex-direction: row; padding: 1.1rem 1.25rem; }
-    #chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 { display: flex !important; }
 
     #chat-active-header { padding: 0.8rem 1rem !important; }
     #chat-active-input { padding: 0.7rem 0.9rem !important; }

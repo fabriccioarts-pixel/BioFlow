@@ -1426,11 +1426,13 @@ function filterChatContacts(query) {
                 return ta - tb;
             });
         } else if (activeChatFilter === 'awaiting') {
-            // Nós mandamos a última mensagem e o lead ainda não respondeu.
+            // O lead mandou a última mensagem e ninguém (atendente ou IA) respondeu
+            // ainda — é o lead que está esperando resposta nossa. Mesmo critério da
+            // etiqueta ⏳ "Aguardando Resposta" que aparece no card.
             filtered = filtered.filter(chat => {
                 if (isGroupChat(chat)) return false;
                 const dir = chat.last_direction || chat.direction;
-                return dir === 'out';
+                return dir === 'in';
             });
             // Quem está esperando resposta há mais tempo no topo.
             filtered = [...filtered].sort((a, b) => {
@@ -1581,7 +1583,7 @@ function renderContactsList(chats) {
     if (!chats || chats.length === 0) {
         const emptyMessages = {
             unread: 'Nenhuma conversa não lida.',
-            awaiting: 'Nenhuma conversa aguardando resposta do lead.',
+            awaiting: 'Nenhuma conversa aguardando resposta do atendente.',
             favorites: 'Nenhum favorito ainda. Passe o mouse numa conversa e clique na estrela pra favoritar.',
             contacts: 'Nenhum contato encontrado.',
             groups: 'Sem conversas em grupo. A API do WhatsApp Business usada aqui não suporta grupos.',
@@ -2078,21 +2080,24 @@ function toggleLeadNotesExpanded() {
 // some no meio da digitação assim que uma atualização silenciosa chega.
 let leadPanelNotesDirty = false;
 
+function isLeadPanelOpen() {
+    try { return localStorage.getItem('leadPanelOpen') === '1'; } catch (e) { return false; }
+}
+
+// Desktop: a ficha do lead fica oculta por padrão e só aparece quando o
+// atendente pede (Ferramentas > Mostrar ficha, ou o chevron do painel).
 function applyLeadPanelCollapsed() {
     const panel = document.getElementById('chat-lead-panel');
     if (!panel) return;
-    let collapsed = false;
-    try { collapsed = localStorage.getItem('leadPanelCollapsed') === '1'; } catch (e) {}
-    panel.classList.toggle('lp-collapsed', collapsed);
+    const open = isLeadPanelOpen();
+    panel.classList.toggle('lp-hidden', !open);
     const btn = panel.querySelector('.chat-lead-collapse');
-    if (btn) btn.title = collapsed ? 'Expandir painel' : 'Recolher painel';
+    if (btn) btn.title = 'Ocultar ficha do lead';
 }
 
 function toggleLeadPanelCollapse() {
-    const panel = document.getElementById('chat-lead-panel');
-    if (!panel) return;
-    const collapsed = !panel.classList.contains('lp-collapsed');
-    try { localStorage.setItem('leadPanelCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    const open = isLeadPanelOpen();
+    try { localStorage.setItem('leadPanelOpen', open ? '0' : '1'); } catch (e) {}
     applyLeadPanelCollapsed();
 }
 
@@ -2520,7 +2525,7 @@ function toggleChatToolsMenu(e) {
 
     const lead = (typeof findLeadFromActiveChat === 'function') ? findLeadFromActiveChat() : null;
     const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
-    const panelCollapsed = !!document.getElementById('chat-lead-panel')?.classList.contains('lp-collapsed');
+    const panelHidden = !isLeadPanelOpen();
     const aiOn = lead && Number(lead.ai_enabled) === 1;
 
     const item = (icon, label, handler, opts = {}) => `
@@ -2538,7 +2543,7 @@ function toggleChatToolsMenu(e) {
         html += item('fa-arrow-right-arrow-left', 'Transferir para a IA', 'to-ai', { accent: 'var(--accent-teal, #2dd4bf)' });
         html += sep;
     }
-    html += item(panelCollapsed ? 'fa-chevron-left' : 'fa-chevron-right', panelCollapsed ? 'Expandir ficha do lead' : 'Recolher ficha do lead', 'toggle-panel');
+    html += item(panelHidden ? 'fa-eye' : 'fa-eye-slash', panelHidden ? 'Mostrar ficha do lead' : 'Ocultar ficha do lead', 'toggle-panel');
     if (lead) {
         html += sep;
         html += item('fa-address-book', 'Ver no Kanban', 'kanban');
@@ -4233,7 +4238,8 @@ async function openChat(phone, name, silent = false) {
 
     const leadPanelEl = document.getElementById('chat-lead-panel');
     if (leadPanelEl) leadPanelEl.style.display = 'flex';
-    
+    if (typeof applyLeadPanelCollapsed === 'function') applyLeadPanelCollapsed();
+
     document.getElementById('chat-active-name').textContent = name;
     const phoneNumEl = document.getElementById('chat-active-phone-number');
     if (phoneNumEl) phoneNumEl.textContent = "+" + phone;
