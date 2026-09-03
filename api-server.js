@@ -1633,10 +1633,19 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
             const notifMsg = aiMode === 'vendas'
                 ? `🎯 ${nomeLead} — pronto pra fechar, assumir a conversa`
                 : `🎯 ${nomeLead} está qualificada — pronta pra atender`;
-            await queryD1(
-                'INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)',
-                [`ai-qual-${leadId}-${Date.now()}`, notifMsg, telLead]
-            );
+            const notifId = `ai-qual-${leadId}-${Date.now()}`;
+            try {
+                await queryD1(
+                    'INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)',
+                    [notifId, notifMsg, telLead]
+                );
+            } catch (e) {
+                // Coluna action_phone pode não existir ainda — grava sem ela.
+                await queryD1(
+                    'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                    [notifId, notifMsg]
+                ).catch(() => {});
+            }
             return;
         }
 
