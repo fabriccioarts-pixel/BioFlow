@@ -4314,6 +4314,27 @@ app.get('/api/capi-selftest', async (req, res) => {
         return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0] } });
     }
 
+    // ?fire_pendentes=lead|schedule|purchase — dispara o evento pra TODOS os leads
+    // pendentes (flag 0) dos últimos 7 dias que fazem sentido pro evento.
+    if (req.query.fire_pendentes) {
+        const ev = ['Lead', 'Schedule', 'Purchase'].find(e => e.toLowerCase() === String(req.query.fire_pendentes).toLowerCase());
+        if (!ev) return res.status(400).json({ error: 'fire_pendentes deve ser lead, schedule ou purchase' });
+        const flagCol = `capi_${ev.toLowerCase()}_sent`;
+        let where = `${flagCol} = 0 AND created_at > datetime('now', '-7 days')`;
+        if (ev === 'Lead')     where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != ''`;
+        if (ev === 'Schedule') where += ` AND column_id = 'col-agendado'`;
+        if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
+        const pend = await queryD1(`SELECT id FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
+        const ids = (pend || []).map(r => r.id);
+        let enviados = 0, falharam = 0;
+        for (const lid of ids) {
+            await fireCapiForLead(lid, ev);
+            const a = await queryD1(`SELECT ${flagCol} AS flag FROM leads WHERE id = ?`, [lid]).catch(() => null);
+            if (a && a[0] && a[0].flag) enviados++; else falharam++;
+        }
+        return res.json({ cfg, colunas_leads, fire_pendentes: { evento: ev, encontrados: ids.length, enviados, falharam } });
+    }
+
     if (req.query.send !== '1') {
         return res.json({ cfg, colunas_leads, dica: '?send=1 dispara um Lead de teste. ?fire=<leadId>&event=Schedule roda o caminho do arrasto num lead real.' });
     }
