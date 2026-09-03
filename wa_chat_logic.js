@@ -4089,10 +4089,12 @@ async function openChat(phone, name, silent = false) {
             if (!silent && (!currentLead.column || currentLead.column === 'col-entrada')) {
                 currentLead.column = 'col-contatado';
                 if (typeof renderBoard === 'function') renderBoard();
+                // no_auto_assign: abrir a conversa move pra "Contatado" mas NÃO torna
+                // o atendente dono do lead — atribuição só no envio da 1ª mensagem.
                 fetch(`/api/leads/${currentLead.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ column_id: 'col-contatado' })
+                    body: JSON.stringify({ column_id: 'col-contatado', no_auto_assign: true })
                 }).catch(console.error);
             }
 

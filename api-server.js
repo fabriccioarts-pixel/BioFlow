@@ -4257,7 +4257,7 @@ app.post('/api/leads', async (req, res) => {
 // Atualizar dados de um lead (coluna e/ou notas)
 app.put('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
-    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco, empresa_id } = req.body;
+    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco, empresa_id, no_auto_assign } = req.body;
     try {
         const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [id]);
         const lead = leadRows && leadRows.length > 0 ? leadRows[0] : null;
@@ -4267,8 +4267,10 @@ app.put('/api/leads/:id', async (req, res) => {
         const updates = [];
         const params = [];
 
-        // Auto-assign: se o lead não tem dono e um usuário logado está interagindo com ele (arrastando, editando, orçando)
-        if (!lead.owner_id && req.user && req.user.username) {
+        // Auto-assign: se o lead não tem dono e um usuário logado está trabalhando ele
+        // (arrastando, editando, orçando). Abrir a conversa manda no_auto_assign=true —
+        // só olhar a conversa não é atender, então não vira dono nem entra no ranking.
+        if (!lead.owner_id && req.user && req.user.username && !no_auto_assign) {
             updates.push('owner_id = ?');
             params.push(req.user.username);
             updates.push('assigned_at = CURRENT_TIMESTAMP');
