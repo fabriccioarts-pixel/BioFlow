@@ -1212,15 +1212,79 @@ async function getWhatsappAiMode() {
 
 // Busca o histórico recente da conversa (as duas direções) e monta o formato
 // "contents" que a API do Gemini espera, pra IA responder com contexto.
+// Agente "vê" imagem? (whatsapp_ai_vision, liga por padrão)
+async function getWhatsappAiVision() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_vision'");
+        return !(rows && rows[0] && rows[0].value === '0');
+    } catch (e) { return true; }
+}
+
+const AI_MAX_IMAGES = 2;                       // quantas imagens recentes o agente enxerga
+const AI_IMG_MAX_BYTES = 5 * 1024 * 1024;
+
+// Baixa uma mídia da Meta e devolve { mimeType, data(base64) } — ou null.
+async function fetchMetaMediaBase64(mediaId) {
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!token || !mediaId) return null;
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), 6000);
+    try {
+        const info = await fetch(`https://graph.facebook.com/v20.0/${mediaId}`, {
+            headers: { Authorization: `Bearer ${token}` }, signal: ac.signal
+        }).then(r => (r.ok ? r.json() : null));
+        if (!info || !info.url) return null;
+        if (info.file_size && info.file_size > AI_IMG_MAX_BYTES) return null;
+        const bin = await fetch(info.url, { headers: { Authorization: `Bearer ${token}` }, signal: ac.signal });
+        if (!bin.ok) return null;
+        const buf = Buffer.from(await bin.arrayBuffer());
+        if (buf.length > AI_IMG_MAX_BYTES) return null;
+        return { mimeType: info.mime_type || 'image/jpeg', data: buf.toString('base64') };
+    } catch (e) {
+        return null;
+    } finally {
+        clearTimeout(to);
+    }
+}
+
 async function getWhatsappAiHistory(phone, limit = 12) {
     const rows = await queryD1(
         'SELECT direction, message FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC LIMIT ?',
         [phone, limit]
     );
-    return (rows || []).reverse().map(r => ({
-        role: r.direction === 'in' ? 'user' : 'model',
-        parts: [{ text: (r.message || '').startsWith('[FILE:') ? '[mídia enviada]' : (r.message || '') }]
-    }));
+    const ordered = (rows || []).reverse();
+
+    // Imagens recebidas mais recentes que o agente vai "ver" (base64 inline na chamada).
+    const imgRe = /\/api\/whatsapp\/media\/(\d+)\.(jpe?g|png|webp)/i;
+    const imgCache = {};
+    if (await getWhatsappAiVision()) {
+        const idxs = [];
+        for (let i = ordered.length - 1; i >= 0 && idxs.length < AI_MAX_IMAGES; i--) {
+            const r = ordered[i];
+            if (r.direction === 'in' && typeof r.message === 'string' && imgRe.test(r.message)) idxs.push(i);
+        }
+        await Promise.all(idxs.map(async (i) => {
+            const m = ordered[i].message.match(imgRe);
+            if (m) imgCache[i] = await fetchMetaMediaBase64(m[1]);
+        }));
+    }
+
+    return ordered.map((r, i) => {
+        const role = r.direction === 'in' ? 'user' : 'model';
+        const raw = r.message || '';
+        if (raw.startsWith('[FILE:')) {
+            const cap = (raw.match(/\[CAPTION:(.*?)\]/s) || [])[1] || '';
+            const img = imgCache[i];
+            if (img) {
+                return { role, parts: [
+                    { inlineData: { mimeType: img.mimeType, data: img.data } },
+                    { text: cap ? `(imagem que o paciente enviou) ${cap}` : '(imagem que o paciente enviou)' }
+                ] };
+            }
+            return { role, parts: [{ text: cap ? `[mídia enviada] ${cap}` : '[mídia enviada]' }] };
+        }
+        return { role, parts: [{ text: raw }] };
+    });
 }
 
 async function callGeminiForWhatsappReply(phone) {
@@ -2708,7 +2772,7 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
         const timing = await getWhatsappAiTiming();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing });
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision() });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -2743,7 +2807,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                 [mode]
             );
         }
-        for (const k of ['human', 'typing']) {
+        for (const k of ['human', 'typing', 'vision']) {
             if (req.body?.[k] !== undefined) {
                 await queryD1(
                     `INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_${k}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -2752,7 +2816,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
             }
         }
         const timing = await getWhatsappAiTiming();
-        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing });
+        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision() });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
