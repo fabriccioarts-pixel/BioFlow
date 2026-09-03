@@ -2362,12 +2362,24 @@ async function toggleTransferMenu(e, leadId) {
         const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
         const others = (cachedTeamUsers || []).filter(u => u.username !== currentUser);
 
+        // Opção fixa no topo: devolver a conversa pra IA.
+        const aiOptionHTML = `
+            <div onclick="transferLeadToAi('${leadId}')"
+                style="padding: 0.55rem 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
+                onmouseover="this.style.background='rgba(255,255,255,0.08)'"
+                onmouseout="this.style.background='transparent'">
+                <span style="width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(45,212,191,0.15); color: var(--accent-teal, #2dd4bf); flex-shrink: 0;"><i class="fa-solid fa-robot" style="font-size: 0.8rem;"></i></span>
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Inteligência Artificial</span>
+            </div>
+            <div style="height: 1px; background: var(--border-color); margin: 0.3rem 0;"></div>
+        `;
+
         if (others.length === 0) {
-            popup.innerHTML = `<div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;">Não há outro atendente cadastrado.</div>`;
+            popup.innerHTML = aiOptionHTML + `<div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;">Não há outro atendente cadastrado.</div>`;
             return;
         }
 
-        popup.innerHTML = others.map(u => {
+        popup.innerHTML = aiOptionHTML + others.map(u => {
             const name = typeof resolveDisplayName === 'function' ? resolveDisplayName(u.username) : u.username;
             const avatarUrl = (typeof avatarMap !== 'undefined' && avatarMap[u.username]) || null;
             const avatarHTML = typeof renderAvatarHTML === 'function' ? renderAvatarHTML(name, avatarUrl, null, 24) : '';
@@ -2424,6 +2436,48 @@ async function transferLeadTo(leadId, toUsername) {
     } catch (err) {
         console.error('Erro ao transferir conversa:', err);
         alert('Erro de conexão ao transferir a conversa.');
+    }
+}
+
+async function transferLeadToAi(leadId) {
+    const popup = document.getElementById('transfer-menu-popup');
+    if (popup) popup.style.display = 'none';
+
+    try {
+        const res = await fetch(`/api/leads/${leadId}/handoff-ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok || !json.success) {
+            alert(json.error || 'Não foi possível devolver a conversa para a IA.');
+            return;
+        }
+
+        // A conversa deixou de ser de alguém: destrava a UI e volta pro estado livre.
+        stopLeadLockRenewal();
+        window.chatLockState = { leadId, locked: false, ownerId: null };
+        applyChatLockUI(false, null);
+
+        if (typeof leads !== 'undefined') {
+            const lead = leads.find(l => l.id === leadId);
+            if (lead) {
+                lead.owner_id = null;
+                lead.ai_enabled = 1;
+                if (json.column_id) lead.column_id = json.column_id;
+                if (typeof lead.tags === 'string') lead.tags = lead.tags.split(',').map(s => s.trim()).filter(t => t && t !== 'ia-qualificado').join(',');
+                if (typeof renderBoard === 'function') renderBoard();
+            }
+        }
+        if (window.currentActiveChat) {
+            renderLeadInfoPanel(leads.find(l => l.id === leadId), window.currentActiveChat.phone);
+        }
+        if (typeof showToast === 'function') {
+            showToast(json.warning || 'Conversa devolvida para a IA.', json.warning ? 'warning' : 'success');
+        } else if (json.warning) {
+            alert(json.warning);
+        }
+    } catch (err) {
+        console.error('Erro ao devolver conversa para a IA:', err);
+        alert('Erro de conexão ao devolver a conversa para a IA.');
     }
 }
 

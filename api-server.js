@@ -5122,6 +5122,58 @@ app.post('/api/leads/:id/transfer', async (req, res) => {
     }
 });
 
+// Devolver a conversa para a IA: tira o responsável humano, religa a IA do lead,
+// encerra qualquer fluxo que esteja "segurando" a conversa e, se o lead estiver
+// fora das colunas que a IA atende, traz de volta pra "col-contatado".
+app.post('/api/leads/:id/handoff-ai', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const rows = await queryD1('SELECT id, column_id, tags, telefone FROM leads WHERE id = ?', [id]);
+        const lead = rows && rows[0];
+        if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+
+        const AI_COLS = ['col-entrada', 'col-contatado'];
+        const LOCKED_COLS = ['col-ganho', 'col-perdido'];
+        let warning = null;
+        let targetCol = lead.column_id;
+        if (!AI_COLS.includes(lead.column_id)) {
+            if (LOCKED_COLS.includes(lead.column_id)) {
+                warning = 'Lead está em "' + lead.column_id + '". A IA não atende nessa coluna — mova pro funil se quiser que ela responda.';
+            } else {
+                targetCol = 'col-contatado';
+            }
+        }
+
+        // tira a tag de handoff pra não ficar preso em "Qualificados aguardando"
+        const curTags = lead.tags ? String(lead.tags).split(',').map(s => s.trim()).filter(Boolean) : [];
+        const newTags = curTags.filter(t => t !== 'ia-qualificado').join(',');
+
+        await queryD1(
+            'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, column_id = ?, tags = ? WHERE id = ?',
+            [targetCol, newTags, id]
+        );
+
+        // encerra fluxos ativos desse número (senão flowDispatchInbound continua
+        // interceptando e a IA nunca responde)
+        try {
+            const variants = phoneVariants(lead.telefone || '');
+            if (variants.length) {
+                const ph = variants.map(() => '?').join(', ');
+                await queryD1(
+                    `UPDATE crm_flow_runs SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE phone IN (${ph}) AND status IN ('running','waiting_reply','sleeping')`,
+                    variants
+                );
+            }
+        } catch (e) { console.error('handoff-ai: encerrar fluxos falhou:', e.message); }
+
+        broadcastLeadsUpdate('updated', id);
+        res.json({ success: true, column_id: targetCol, warning });
+    } catch (e) {
+        console.error('handoff-ai erro:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Espelho da Rota Serverless da Vercel para uso Local
 app.post('/api/agendar', async (req, res) => {
     // Editar um agendamento já existente é restrito a administradores (mesma regra que a
