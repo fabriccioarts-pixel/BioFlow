@@ -2442,6 +2442,7 @@ async function transferLeadTo(leadId, toUsername) {
 async function transferLeadToAi(leadId) {
     const popup = document.getElementById('transfer-menu-popup');
     if (popup) popup.style.display = 'none';
+    if (typeof showToast === 'function') showToast('Passando a conversa pra IA…', 'info');
 
     try {
         const res = await fetch(`/api/leads/${leadId}/handoff-ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
@@ -2471,7 +2472,10 @@ async function transferLeadToAi(leadId) {
             renderLeadInfoPanel(leads.find(l => l.id === leadId), window.currentActiveChat.phone);
         }
         if (typeof showToast === 'function') {
-            showToast(json.warning || 'Conversa devolvida para a IA.', json.warning ? 'warning' : 'success');
+            const okMsg = json.responded_now
+                ? 'IA assumiu e já respondeu o lead.'
+                : 'Conversa devolvida para a IA. Ela responde na próxima mensagem do lead.';
+            showToast(json.warning || okMsg, json.warning ? 'warning' : 'success');
         } else if (json.warning) {
             alert(json.warning);
         }

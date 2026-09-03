@@ -5166,8 +5166,30 @@ app.post('/api/leads/:id/handoff-ai', async (req, res) => {
             }
         } catch (e) { console.error('handoff-ai: encerrar fluxos falhou:', e.message); }
 
+        // Se o lead mandou a última mensagem (está esperando resposta), a IA assume
+        // agora — responde a pendência lendo o histórico. Se a última foi nossa,
+        // só religa e aguarda a próxima mensagem dele.
+        let respondeuAgora = false;
+        if (!warning) {
+            try {
+                const variants = phoneVariants(lead.telefone || '');
+                if (variants.length) {
+                    const vp = variants.map(() => '?').join(', ');
+                    const lastMsg = await queryD1(
+                        `SELECT id, direction FROM wa_messages WHERE phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`,
+                        variants
+                    );
+                    if (lastMsg && lastMsg[0] && lastMsg[0].direction === 'in') {
+                        // await obrigatório: na Vercel a função congela após a resposta HTTP.
+                        await handleWhatsappAiAutoReply(id, lead.telefone, lastMsg[0].id).catch(e => console.error('handoff-ai: IA falhou:', e));
+                        respondeuAgora = true;
+                    }
+                }
+            } catch (e) { console.error('handoff-ai: disparo da IA falhou:', e.message); }
+        }
+
         broadcastLeadsUpdate('updated', id);
-        res.json({ success: true, column_id: targetCol, warning });
+        res.json({ success: true, column_id: targetCol, warning, responded_now: respondeuAgora });
     } catch (e) {
         console.error('handoff-ai erro:', e);
         res.status(500).json({ error: 'Erro interno do servidor.' });
