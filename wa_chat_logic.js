@@ -2504,6 +2504,91 @@ async function transferLeadToAi(leadId) {
     }
 }
 
+// ============================================
+// MENU "FERRAMENTAS" DO CABEÇALHO DO CHAT
+// ============================================
+function closeChatToolsMenu() {
+    const m = document.getElementById('chat-tools-menu');
+    if (m) m.style.display = 'none';
+}
+
+function toggleChatToolsMenu(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('chat-tools-menu');
+    if (!menu) return;
+    if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
+
+    const lead = (typeof findLeadFromActiveChat === 'function') ? findLeadFromActiveChat() : null;
+    const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+    const panelCollapsed = !!document.getElementById('chat-lead-panel')?.classList.contains('lp-collapsed');
+    const aiOn = lead && Number(lead.ai_enabled) === 1;
+
+    const item = (icon, label, handler, opts = {}) => `
+        <div role="button" tabindex="0" data-act="${handler}"
+            style="padding: 0.55rem 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 0.65rem; font-size: 0.84rem; color: ${opts.danger ? 'var(--accent-danger, #f87171)' : 'var(--text-main)'}; font-weight: 500; transition: background 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.07)'" onmouseout="this.style.background='transparent'">
+            <i class="fa-solid ${icon}" style="width: 16px; text-align: center; color: ${opts.accent || 'var(--text-muted)'};"></i>
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${label}</span>
+        </div>`;
+    const sep = `<div style="height: 1px; background: var(--border-color); margin: 0.3rem 0;"></div>`;
+
+    let html = '';
+    if (lead) {
+        html += item(aiOn ? 'fa-robot' : 'fa-robot', aiOn ? 'Desligar IA nesta conversa' : 'Ligar IA nesta conversa', aiOn ? 'ai-off' : 'ai-on', { accent: aiOn ? 'var(--accent-danger, #f87171)' : 'var(--accent-teal, #2dd4bf)' });
+        html += item('fa-arrow-right-arrow-left', 'Transferir para a IA', 'to-ai', { accent: 'var(--accent-teal, #2dd4bf)' });
+        html += sep;
+    }
+    html += item(panelCollapsed ? 'fa-chevron-left' : 'fa-chevron-right', panelCollapsed ? 'Expandir ficha do lead' : 'Recolher ficha do lead', 'toggle-panel');
+    if (lead) {
+        html += sep;
+        html += item('fa-address-book', 'Ver no Kanban', 'kanban');
+        html += item('fa-calendar-plus', 'Agendar consulta', 'agendar', { accent: 'var(--accent-primary)' });
+        html += item('fa-file-invoice-dollar', 'Montar orçamento', 'orcamento', { accent: 'var(--accent-primary)' });
+        if (isAdmin) {
+            html += sep;
+            html += item('fa-stethoscope', 'Diagnóstico da IA', 'diag');
+        }
+    }
+    if (!html) html = `<div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.8rem;">Abra uma conversa pra ver as ferramentas.</div>`;
+    menu.innerHTML = html;
+
+    menu.querySelectorAll('[data-act]').forEach(el => {
+        const run = () => {
+            closeChatToolsMenu();
+            const act = el.getAttribute('data-act');
+            if (act === 'ai-on' || act === 'ai-off') {
+                if (typeof toggleChatAiEnabled === 'function') toggleChatAiEnabled(act === 'ai-on');
+                const t = document.getElementById('chat-ai-toggle'); if (t) t.checked = (act === 'ai-on');
+                if (lead && typeof renderLeadInfoPanel === 'function' && window.currentActiveChat) renderLeadInfoPanel(lead, window.currentActiveChat.phone);
+            } else if (act === 'to-ai') {
+                if (lead && typeof transferLeadToAi === 'function') transferLeadToAi(lead.id);
+            } else if (act === 'toggle-panel') {
+                if (typeof toggleLeadPanelCollapse === 'function') toggleLeadPanelCollapse();
+            } else if (act === 'kanban') {
+                if (typeof manageLeadFromChat === 'function') manageLeadFromChat();
+            } else if (act === 'agendar') {
+                if (typeof scheduleLeadFromChat === 'function') scheduleLeadFromChat();
+            } else if (act === 'orcamento') {
+                if (typeof budgetLeadFromChat === 'function') budgetLeadFromChat();
+            } else if (act === 'diag') {
+                if (lead) window.open(`/api/ai-selftest?lead=${encodeURIComponent(lead.id)}`, '_blank');
+            }
+        };
+        el.addEventListener('click', run);
+        el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); run(); } });
+    });
+
+    menu.style.display = 'block';
+}
+
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('chat-tools-menu');
+    const btn = document.getElementById('btn-chat-tools');
+    if (menu && menu.style.display === 'block' && !menu.contains(e.target) && (!btn || !btn.contains(e.target))) {
+        menu.style.display = 'none';
+    }
+});
+
 function toggleTagsMenu(e) {
     if (e) e.stopPropagation();
     const popup = document.getElementById('tags-menu-popup');

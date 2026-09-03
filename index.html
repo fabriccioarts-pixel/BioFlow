@@ -3405,6 +3405,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         title="Resumir esta conversa com IA">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> <span class="copilot-btn-label">Resumir</span>
                     </button>
+                    <div style="position: relative;">
+                        <button type="button" id="btn-chat-tools" onclick="toggleChatToolsMenu(event)" class="copilot-btn"
+                            title="Ferramentas do atendimento">
+                            <i class="fa-solid fa-screwdriver-wrench"></i> <span class="copilot-btn-label">Ferramentas</span>
+                        </button>
+                        <div id="chat-tools-menu"
+                            style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 236px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; z-index: 1200; padding: 0.35rem 0; max-height: 70vh; overflow-y: auto;">
+                        </div>
+                    </div>
                     <button type="button" class="chat-mobile-ficha" title="Ficha do lead" aria-label="Ver ficha do lead"
                         onclick="document.getElementById('view-chat').classList.toggle('lead-open')">
                         <i class="fa-solid fa-address-card"></i>
