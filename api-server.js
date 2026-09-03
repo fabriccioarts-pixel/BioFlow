@@ -4497,10 +4497,19 @@ async function sendMetaCapiEvent(eventName, {
     const phone = (telefone || '').replace(/\D/g, '');   // 5561999999999
     const isMsg = !!ctwa_clid;
 
-    // Pra action_source 'business_messaging' o Meta usa um vocabulário próprio de
-    // event_name — 'Lead' cru é recusado (error_subcode 2804066). 'LeadSubmitted'
-    // é o equivalente. 'Schedule' e 'Purchase' valem nos dois.
+    // Pra action_source 'business_messaging' (Click-to-WhatsApp) o Meta só aceita
+    // um punhado de event_name. Testado: 'Lead', 'Schedule', 'CompleteRegistration',
+    // 'SubmitApplication' -> todos recusados (error_subcode 2804066). Válidos: só
+    // 'LeadSubmitted' e 'Purchase'. Então:
+    //   Lead     -> LeadSubmitted
+    //   Purchase -> Purchase
+    //   Schedule -> não tem equivalente CTWA; não envia (fica métrica só no CRM)
     const MSG_EVENT_MAP = { Lead: 'LeadSubmitted' };
+    const MSG_EVENT_UNSUPPORTED = new Set(['Schedule']);
+    if (isMsg && MSG_EVENT_UNSUPPORTED.has(eventName)) {
+        console.log(`CAPI ${eventName}: sem nome válido pra business_messaging (CTWA) — não enviado`);
+        return { ok: false, unsupportedForCtwa: true };
+    }
     const finalEventName = isMsg ? (MSG_EVENT_MAP[eventName] || eventName) : eventName;
 
     // event_time: nunca no futuro, nunca > ~7 dias atrás (janela do CTWA).
@@ -4581,7 +4590,10 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
         eventId: `${eventName}:${leadId}`,
         ...extra
     });
-    if (res.ok) {
+    // res.ok = enviado. res.unsupportedForCtwa = o Meta não tem esse evento pra
+    // CTWA — marca como "resolvido" mesmo assim, senão todo arrasto de coluna
+    // tenta reenviar pra sempre.
+    if (res.ok || res.unsupportedForCtwa) {
         try { await queryD1(`UPDATE leads SET ${col} = 1 WHERE id = ?`, [leadId]); } catch (e) {}
     }
     return res;
