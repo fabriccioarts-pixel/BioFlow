@@ -6942,6 +6942,7 @@ async function followupApplyFinal(cfg, lead) {
 async function followupTick() {
     const cfg = await followupGetConfig();
     let opened = 0, processed = 0;
+    const dbg = { ativo: !!cfg.ativo, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, mesma_ancora: 0, flow_esperando: 0 };
     // 'col-ganho' (lead fechado) sempre para; o resto é escolha do admin.
     const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho']);
 
@@ -6956,21 +6957,22 @@ async function followupTick() {
              WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
                AND last_msg_at <= ? AND last_msg_at >= ?
              LIMIT 200`, [cutoffDelay, cutoffOld]);
+        dbg.janela = (cand || []).length;
         for (const lead of (cand || [])) {
             try {
-                if (termCols.includes(lead.column_id)) continue;
-                if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) continue;
-                if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) continue;
+                if (termCols.includes(lead.column_id)) { dbg.ja_terminado++; continue; }
+                if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) { dbg.fora_das_colunas++; continue; }
+                if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) { dbg.humano_desligado++; continue; }
 
                 const open = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND status IN ('agendado','enviando') LIMIT 1", [lead.id]);
-                if (open && open[0]) continue;
+                if (open && open[0]) { dbg.ja_tem_run++; continue; }
                 const sameAnchor = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND anchor_out_ts = ? LIMIT 1", [lead.id, lead.last_msg_at]);
-                if (sameAnchor && sameAnchor[0]) continue;
+                if (sameAnchor && sameAnchor[0]) { dbg.mesma_ancora++; continue; }
 
                 const vph = phoneVariants(lead.telefone || '');
                 const vp = vph.map(() => '?').join(', ');
                 const flowWaiting = await queryD1(`SELECT id FROM crm_flow_runs WHERE status = 'waiting_reply' AND phone IN (${vp}) LIMIT 1`, vph);
-                if (flowWaiting && flowWaiting[0]) continue;
+                if (flowWaiting && flowWaiting[0]) { dbg.flow_esperando++; continue; }
                 const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
 
                 const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -7048,7 +7050,7 @@ async function followupTick() {
         } catch (e) { console.error('follow-up: run erro:', e.message); }
     }
 
-    return { opened, processed };
+    return { opened, processed, debug: dbg };
 }
 
 app.get('/api/followup/config', async (req, res) => {
