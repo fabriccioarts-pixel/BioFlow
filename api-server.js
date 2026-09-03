@@ -4487,10 +4487,16 @@ async function sendMetaCapiEvent(eventName, {
     const wabaId    = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
     // Eventos de Click-to-WhatsApp (com ctwa_clid) precisam ir pro dataset que
     // PERTENCE à conta do WhatsApp Business — não pro dataset do site (subcode 2804132).
+    // Esse dataset foi criado via POST /{WABA}/dataset, então quem tem acesso é o
+    // token do WhatsApp (system user da WABA), não o token do CAPI do site.
     const wabaDatasetId = (process.env.META_CAPI_WABA_DATASET_ID || '').trim();
-    const datasetId = ((!!ctwa_clid && wabaDatasetId) ? wabaDatasetId : siteDatasetId);
-    if (!datasetId || !token) {
-        console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'META_CAPI_DATASET_ID/META_PIXEL_ID' : 'META_CAPI_TOKEN/META_ACCESS_TOKEN'} no ambiente`);
+    const useWaba = (!!ctwa_clid && wabaDatasetId);
+    const datasetId = useWaba ? wabaDatasetId : siteDatasetId;
+    const sendToken = useWaba
+        ? ((process.env.META_CAPI_WABA_TOKEN || process.env.META_WA_ACCESS_TOKEN || token).trim())
+        : token;
+    if (!datasetId || !sendToken) {
+        console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'dataset id' : 'token'} no ambiente`);
         return { ok: false, skipped: true };
     }
     console.log(`CAPI ${eventName}: enviando pro dataset ${datasetId} (${META_GRAPH})${ctwa_clid ? ' com ctwa_clid' : ''}`);
@@ -4551,7 +4557,7 @@ async function sendMetaCapiEvent(eventName, {
         const r = await fetch(`https://graph.facebook.com/${META_GRAPH}/${datasetId}/events`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...body, access_token: token }),
+            body: JSON.stringify({ ...body, access_token: sendToken }),
             signal: ac.signal
         });
         const j = await r.json();
