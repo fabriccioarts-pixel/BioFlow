@@ -135,7 +135,9 @@ function escapeHtml(str) {
 function parseSqlDate(dateStr) {
     if (!dateStr) return null;
     let isoStr = dateStr.replace(' ', 'T');
-    if (!isoStr.endsWith('Z') && !isoStr.includes('+') && !isoStr.includes('-')) {
+    // Sem marcador de fuso? Trata como UTC. (O guard antigo checava !includes('-'),
+    // mas os hifens da própria data faziam ele nunca adicionar o Z.)
+    if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(isoStr)) {
         isoStr += 'Z';
     }
     const d = new Date(isoStr);
@@ -3411,7 +3413,11 @@ async function loadContatos(force = false) {
 
 function fmtContatoDate(raw) {
     if (!raw) return '—';
-    const d = new Date(String(raw).replace(' ', 'T'));
+    // O backend grava em UTC sem marcador de fuso (ISO da Meta / CURRENT_TIMESTAMP).
+    // Marca como UTC pra o toLocale* converter pro horário local do navegador.
+    let s = String(raw).trim().replace(' ', 'T');
+    if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+    const d = new Date(s);
     if (isNaN(d.getTime())) return '—';
     return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
