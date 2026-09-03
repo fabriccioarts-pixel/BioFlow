@@ -4258,8 +4258,8 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
         console.error(`CAPI ${eventName}: SELECT do lead ${leadId} falhou (as colunas capi_*/ctwa_clid existem?):`, e.message);
         return;
     }
-    if (!lead) { console.warn(`CAPI ${eventName}: lead ${leadId} não encontrado`); return; }
-    if (lead.sent) { console.log(`CAPI ${eventName}: já enviado antes pro lead ${leadId}, pulando`); return; }
+    if (!lead) { console.warn(`CAPI ${eventName}: lead ${leadId} não encontrado`); return { ok: false, reason: 'lead-nao-encontrado' }; }
+    if (lead.sent) { console.log(`CAPI ${eventName}: já enviado antes pro lead ${leadId}, pulando`); return { ok: false, reason: 'ja-enviado' }; }
 
     if (eventName === 'Purchase' && extra.value == null) {
         const v = leadPurchaseValueBRL(lead);
@@ -4276,6 +4276,7 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
     if (res.ok) {
         try { await queryD1(`UPDATE leads SET ${col} = 1 WHERE id = ?`, [leadId]); } catch (e) {}
     }
+    return res;
 }
 
 // Autodiagnóstico da CAPI — abra /api/capi-selftest logado como admin.
@@ -4309,9 +4310,9 @@ app.get('/api/capi-selftest', async (req, res) => {
     if (req.query.fire) {
         const ev = ['Schedule', 'Purchase', 'Lead'].includes(req.query.event) ? req.query.event : 'Schedule';
         const before = await queryD1(`SELECT id, column_id, ctwa_clid, capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
-        await fireCapiForLead(String(req.query.fire), ev);
+        const r = await fireCapiForLead(String(req.query.fire), ev);
         const after = await queryD1(`SELECT capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
-        return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0] } });
+        return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0], resposta_meta: r } });
     }
 
     // ?fire_pendentes=lead|schedule|purchase — dispara o evento pra TODOS os leads
@@ -4326,13 +4327,16 @@ app.get('/api/capi-selftest', async (req, res) => {
         if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
         const pend = await queryD1(`SELECT id FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
         const ids = (pend || []).map(r => r.id);
-        let enviados = 0, falharam = 0;
+        let enviados = 0, falharam = 0, primeiroErro = null;
         for (const lid of ids) {
-            await fireCapiForLead(lid, ev);
-            const a = await queryD1(`SELECT ${flagCol} AS flag FROM leads WHERE id = ?`, [lid]).catch(() => null);
-            if (a && a[0] && a[0].flag) enviados++; else falharam++;
+            const r = await fireCapiForLead(lid, ev);
+            if (r && r.ok) { enviados++; }
+            else {
+                falharam++;
+                if (!primeiroErro) primeiroErro = (r && (r.error?.message || r.error || r.reason)) || 'sem detalhe';
+            }
         }
-        return res.json({ cfg, colunas_leads, fire_pendentes: { evento: ev, encontrados: ids.length, enviados, falharam } });
+        return res.json({ cfg, colunas_leads, fire_pendentes: { evento: ev, encontrados: ids.length, enviados, falharam, primeiro_erro: primeiroErro } });
     }
 
     if (req.query.send !== '1') {
