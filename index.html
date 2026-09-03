@@ -1657,6 +1657,27 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
 
                 <div class="aix-block">
+                    <div class="aix-block-label">Ritmo humano</div>
+                    <p class="aix-block-help">A IA varia o tempo entre as mensagens conforme o tamanho do texto, com
+                        pequenas variações aleatórias, e mostra "digitando…" durante as pausas — em vez de um intervalo
+                        fixo. O "Tempo de resposta" acima vira o mínimo da pausa inicial.</p>
+                    <label class="aix-toggle-row">
+                        <span class="ui-switch">
+                            <input type="checkbox" id="whatsapp-ai-human">
+                            <span class="ui-switch-track"></span>
+                        </span>
+                        <span><span class="aix-toggle-text">Digitação com timing variável</span></span>
+                    </label>
+                    <label class="aix-toggle-row" style="margin-top: 0.5rem;">
+                        <span class="ui-switch">
+                            <input type="checkbox" id="whatsapp-ai-typing">
+                            <span class="ui-switch-track"></span>
+                        </span>
+                        <span><span class="aix-toggle-text">Mostrar "digitando…"</span></span>
+                    </label>
+                </div>
+
+                <div class="aix-block">
                     <div class="aix-block-label">Contexto da IA</div>
                     <p class="aix-block-help">O que a IA "sabe" sobre a clínica — identidade, unidades, horário, serviços e
                         tom de voz. Edite livremente.</p>

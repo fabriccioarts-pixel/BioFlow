@@ -502,7 +502,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         console.error('Erro no motor de fluxo:', e);
                     }
                     if (!handledByFlow) {
-                        await handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro no agente de IA:', e));
+                        await handleWhatsappAiAutoReply(resolvedLeadId, from, msg_id).catch(e => console.error('Erro no agente de IA:', e));
                     }
                 }
             } catch(e) {
@@ -1233,7 +1233,7 @@ async function callGeminiForWhatsappReply(phone) {
 // Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
 // quando quer mandar mensagens separadas. Sem isso, a string crua "[\"...\"]"
 // era enviada literalmente pro paciente. Converte pra texto com parágrafos
-// duplos — que o sendWhatsappAiReplyInChunks já quebra em mensagens.
+// duplos — que o sendWhatsappAiReplyHuman já quebra em mensagens.
 function normalizeAiReply(raw) {
     let s = String(raw || '').trim();
     const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -1410,20 +1410,118 @@ async function tagLeadAsQualified(leadId) {
     await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [currentTags.join(','), leadId]);
 }
 
-// Manda cada parágrafo (separado por linha em branco) como uma mensagem
-// separada, em vez de um único balão com quebras de linha internas — fica
-// mais parecido com alguém digitando várias mensagens seguidas no WhatsApp.
-async function sendWhatsappAiReplyInChunks(phone, replyText) {
-    const chunks = replyText.split(/\n\s*\n/).map(c => c.trim()).filter(Boolean);
-    for (let i = 0; i < chunks.length; i++) {
-        await sendWhatsappTextInternal(phone, chunks[i]);
-        if (i < chunks.length - 1) {
-            await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
+// ---- Ritmo humano do agente de IA -----------------------------------------
+// Defaults; cada chave pode ser sobrescrita em crm_settings (whatsapp_ai_<k>).
+const AI_TIMING_DEFAULTS = {
+    read_min: 2, read_max: 6,     // pausa de "leitura" antes da 1ª mensagem (s)
+    cps: 15,                      // caracteres por segundo "digitados"
+    type_min: 1.2, type_max: 7,   // piso / teto do tempo por mensagem (s)
+    jitter: 0.35,                // variação aleatória ± em cada espera
+    distracted_pct: 0.08,        // chance de uma pausa longa extra (3–8 s)
+    max_total: 11                // teto da soma das pausas (s) — anti-timeout
+};
+async function getWhatsappAiTiming() {
+    const keys = [...Object.keys(AI_TIMING_DEFAULTS).map(k => 'whatsapp_ai_' + k), 'whatsapp_ai_human', 'whatsapp_ai_typing'];
+    const map = {};
+    try {
+        const rows = await queryD1(`SELECT key, value FROM crm_settings WHERE key IN (${keys.map(() => '?').join(',')})`, keys);
+        (rows || []).forEach(r => { map[r.key] = r.value; });
+    } catch (e) {}
+    const num = (k) => {
+        const v = parseFloat(map['whatsapp_ai_' + k]);
+        return Number.isFinite(v) && v >= 0 ? v : AI_TIMING_DEFAULTS[k];
+    };
+    return {
+        human:  map.whatsapp_ai_human  !== '0',   // liga por padrão
+        typing: map.whatsapp_ai_typing !== '0',   // liga por padrão
+        readMinMs: num('read_min') * 1000,
+        readMaxMs: num('read_max') * 1000,
+        cps: Math.max(4, num('cps')),
+        typeMinMs: num('type_min') * 1000,
+        typeMaxMs: num('type_max') * 1000,
+        jitter: Math.min(0.9, num('jitter')),
+        distractedPct: Math.min(0.5, num('distracted_pct')),
+        maxTotalMs: num('max_total') * 1000
+    };
+}
+
+// "digitando…" (e marca a mensagem recebida como lida). Dura ~25 s ou até a
+// próxima mensagem — reenviar antes de cada pausa.
+async function sendTypingIndicator(incomingWamid) {
+    const phone_id = process.env.META_WA_PHONE_ID, token = process.env.META_WA_ACCESS_TOKEN;
+    if (!phone_id || !token || !incomingWamid) return;
+    try {
+        await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                messaging_product: 'whatsapp', status: 'read',
+                message_id: incomingWamid, typing_indicator: { type: 'text' }
+            })
+        });
+    } catch (e) {}
+}
+
+// IA ainda ligada nesse lead? (atendente pode ter assumido no meio do ritmo)
+async function aiStillOnForPhone(phone) {
+    try {
+        const v = phoneVariants(phone);
+        const rows = await queryD1(`SELECT ai_enabled FROM leads WHERE telefone IN (${v.map(() => '?').join(',')}) LIMIT 1`, v);
+        return !!(rows && rows[0] && Number(rows[0].ai_enabled) === 1);
+    } catch (e) { return true; } // na dúvida, não corta
+}
+
+// Envia a resposta da IA. Cada parágrafo (linha em branco) vira uma mensagem.
+// Com ritmo humano ligado: pausa de leitura variável, tempo de digitação
+// proporcional ao tamanho, jitter, distração ocasional e "digitando…".
+async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0) {
+    const parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+
+    const cfg = await getWhatsappAiTiming();
+
+    // Ritmo humano desligado: comportamento antigo (delay fixo + gap uniforme).
+    if (!cfg.human) {
+        if (floorSec > 0) {
+            await new Promise(r => setTimeout(r, floorSec * 1000));
+            if (!(await aiStillOnForPhone(phone))) return;
         }
+        for (let i = 0; i < parts.length; i++) {
+            if (!(await aiStillOnForPhone(phone))) return;
+            await sendWhatsappTextInternal(phone, parts[i]);
+            if (i < parts.length - 1) await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
+        }
+        return;
+    }
+
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const jit  = (ms) => Math.round(ms * (1 + (Math.random() * 2 - 1) * cfg.jitter));
+    let budget = Math.max(cfg.maxTotalMs, floorSec * 1000);
+    const sleep = (ms) => {
+        ms = Math.max(0, Math.min(Math.round(ms), budget));
+        budget -= ms;
+        return new Promise(r => setTimeout(r, ms));
+    };
+
+    // pausa de leitura — nunca abaixo do "Tempo de resposta" configurado
+    let readMs = Math.max(jit(rand(cfg.readMinMs, cfg.readMaxMs)), floorSec * 1000);
+    if (cfg.typing) await sendTypingIndicator(incomingWamid);
+    await sleep(readMs);
+    if (!(await aiStillOnForPhone(phone))) return;
+
+    for (let i = 0; i < parts.length; i++) {
+        if (!(await aiStillOnForPhone(phone))) return;
+
+        let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
+        if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
+
+        if (cfg.typing) await sendTypingIndicator(incomingWamid);
+        await sleep(wait);
+        await sendWhatsappTextInternal(phone, parts[i]);
     }
 }
 
-async function handleWhatsappAiAutoReply(leadId, phone) {
+async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
     try {
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const globalEnabled = globalSetting && globalSetting[0] ? globalSetting[0].value === '1' : true;
@@ -1458,17 +1556,12 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
             return;
         }
 
-        // Atraso configurável antes de responder (deixa mais humano / dá janela
-        // pro atendente assumir). Não se aplica ao handoff de qualificação acima.
+        // Ritmo humano: pausa de leitura variável, tempo de digitação proporcional
+        // ao texto, jitter, "digitando…". O "Tempo de resposta" (whatsapp_ai_reply_delay)
+        // vira o mínimo da pausa inicial. Aborta se a IA do lead for desligada no meio.
+        // Não se aplica ao handoff de qualificação acima.
         const replyDelay = await getWhatsappAiReplyDelay();
-        if (replyDelay > 0) {
-            await new Promise(r => setTimeout(r, replyDelay * 1000));
-            // Se um atendente desligou a IA desse lead durante a espera, aborta.
-            const stillOn = await queryD1('SELECT ai_enabled FROM leads WHERE id = ?', [leadId]);
-            if (!stillOn || !stillOn[0] || Number(stillOn[0].ai_enabled) !== 1) return;
-        }
-
-        await sendWhatsappAiReplyInChunks(phone, replyText);
+        await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay);
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
     }
@@ -2597,7 +2690,8 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const enabled = rows && rows[0] ? rows[0].value === '1' : true; // liga por padrão
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY });
+        const timing = await getWhatsappAiTiming();
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -2632,7 +2726,16 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                 [mode]
             );
         }
-        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode });
+        for (const k of ['human', 'typing']) {
+            if (req.body?.[k] !== undefined) {
+                await queryD1(
+                    `INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_${k}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+                    [req.body[k] ? '1' : '0']
+                );
+            }
+        }
+        const timing = await getWhatsappAiTiming();
+        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
