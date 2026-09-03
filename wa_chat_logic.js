@@ -1425,6 +1425,19 @@ function filterChatContacts(query) {
                 const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
                 return ta - tb;
             });
+        } else if (activeChatFilter === 'awaiting') {
+            // Nós mandamos a última mensagem e o lead ainda não respondeu.
+            filtered = filtered.filter(chat => {
+                if (isGroupChat(chat)) return false;
+                const dir = chat.last_direction || chat.direction;
+                return dir === 'out';
+            });
+            // Quem está esperando resposta há mais tempo no topo.
+            filtered = [...filtered].sort((a, b) => {
+                const ta = parseD1TimestampMs(a.last_timestamp || a.timestamp || a.last_interaction) || 0;
+                const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
+                return ta - tb;
+            });
         } else if (activeChatFilter === 'favorites') {
             filtered = filtered.filter(chat => isFavoriteChat(chat.phone));
         } else if (activeChatFilter === 'contacts') {
@@ -1568,6 +1581,7 @@ function renderContactsList(chats) {
     if (!chats || chats.length === 0) {
         const emptyMessages = {
             unread: 'Nenhuma conversa não lida.',
+            awaiting: 'Nenhuma conversa aguardando resposta do lead.',
             favorites: 'Nenhum favorito ainda. Passe o mouse numa conversa e clique na estrela pra favoritar.',
             contacts: 'Nenhum contato encontrado.',
             groups: 'Sem conversas em grupo. A API do WhatsApp Business usada aqui não suporta grupos.',

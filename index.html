@@ -709,8 +709,8 @@
 
             <select id="kanban-sort" title="Ordenar cards" onchange="localStorage.setItem('kanban-sort', this.value); renderBoard();"
                 style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: auto;">
-                <option value="created_asc">↑ Mais antigos primeiro</option>
                 <option value="created_desc">↓ Mais recentes primeiro</option>
+                <option value="created_asc">↑ Mais antigos primeiro</option>
                 <option value="value_desc">💰 Maior valor</option>
                 <option value="name_asc">🔤 Nome (A–Z)</option>
                 <option value="activity_desc">🕗 Última atividade</option>
@@ -3327,6 +3327,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             </div>
                             <div class="chat-filter-menu-item" data-filter="qualified" onclick="setChatFilter('qualified')">
                                 <i class="fa-solid fa-bullseye"></i> Qualificados aguardando
+                            </div>
+                            <div class="chat-filter-menu-item" data-filter="awaiting" onclick="setChatFilter('awaiting')">
+                                <i class="fa-solid fa-hourglass-half"></i> Aguardando resposta
                             </div>
                             <div class="chat-filter-menu-item" data-filter="favorites" onclick="setChatFilter('favorites')">
                                 <i class="fa-regular fa-star"></i> Favoritos
