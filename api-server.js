@@ -4657,6 +4657,31 @@ app.get('/api/capi-selftest', async (req, res) => {
         colunas_leads = 'FALTAM: ' + e.message + ' — o ALTER TABLE do boot não rodou nesse deploy';
     }
 
+    // ?waba_check=1 — confere se o número da Cloud API (META_WA_PHONE_ID) está
+    // mesmo dentro da WABA (META_WABA_ID) usada no CAPI.
+    if (req.query.waba_check) {
+        const wabaId   = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
+        const phoneId  = (process.env.META_WA_PHONE_ID || '').trim();
+        const waTok    = (process.env.META_WA_ACCESS_TOKEN || process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN || '').trim();
+        if (!wabaId || !phoneId || !waTok) {
+            return res.json({ cfg, colunas_leads, waba_check: { erro: 'falta META_WABA_ID, META_WA_PHONE_ID ou token' } });
+        }
+        try {
+            const nums = await fetch(`https://graph.facebook.com/${META_GRAPH}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating&access_token=${encodeURIComponent(waTok)}`).then(r => r.json()).catch(() => ({}));
+            const lista = (nums && nums.data) || [];
+            const bate = lista.some(n => String(n.id) === phoneId);
+            return res.json({ cfg, colunas_leads, waba_check: {
+                waba_id: wabaId,
+                meta_wa_phone_id: phoneId,
+                numero_esta_na_waba: bate,
+                numeros_da_waba: lista,
+                erro_api: nums && nums.error || null
+            } });
+        } catch (e) {
+            return res.json({ cfg, colunas_leads, waba_check: { erro: e.message } });
+        }
+    }
+
     // ?waba_dataset=1 — cria/recupera o dataset que PERTENCE à conta do WhatsApp
     // Business (obrigatório pra eventos de Click-to-WhatsApp, subcode 2804132).
     // Devolve o id do dataset — é ele que deve ir na env META_CAPI_WABA_DATASET_ID.
