@@ -144,6 +144,67 @@ function phoneVariants(raw) {
     return Array.from(variants).filter(Boolean);
 }
 
+// Alterna o 9º dígito de um celular BR (com <-> sem). Usado pra retry no erro
+// 131026 da Meta: o wa_id que vem no webhook nem sempre é a forma que a Cloud
+// API aceita pra ENVIO (inconsistência histórica do nono dígito no Brasil).
+// Retorna null se não for um número BR reconhecível.
+function toggleBR9(raw) {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (!d.startsWith('55')) return null;
+    const rest = d.slice(2);
+    // com 9: 55 + DDD(2) + 9 + 8 dígitos (13 no total) -> remove o 9
+    if (rest.length === 11 && rest[2] === '9') return '55' + rest.slice(0, 2) + rest.slice(3);
+    // sem 9: 55 + DDD(2) + 8 dígitos (12 no total) -> adiciona o 9
+    if (rest.length === 10) return '55' + rest.slice(0, 2) + '9' + rest.slice(2);
+    return null;
+}
+
+// POST pro endpoint de mensagens da Meta, com retry no 131026 ("Message
+// undeliverable"): se o número é um celular BR, repete UMA vez alternando o 9º
+// dígito. Retorna { ok, resultJson, usedTo, switched } — usedTo é a forma que
+// efetivamente funcionou (pode diferir do 'to' pedido).
+async function postMetaMessage(phone_id, token, data) {
+    const url = `https://graph.facebook.com/v20.0/${phone_id}/messages`;
+    const doPost = async (payload) => {
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const j = await r.json().catch(() => ({}));
+        return { r, j };
+    };
+
+    const first = await doPost(data);
+    if (first.r.ok) return { ok: true, resultJson: first.j, usedTo: data.to, switched: false };
+
+    const err = first.j && first.j.error;
+    const undeliverable = (err && err.code === 131026) || /undeliverable/i.test((err && err.message) || '');
+    const alt = undeliverable ? toggleBR9(data.to) : null;
+    if (alt && alt !== data.to) {
+        console.warn(`Meta 131026 pra ${data.to} — retry com ${alt}`);
+        const retry = await doPost({ ...data, to: alt });
+        if (retry.r.ok) return { ok: true, resultJson: retry.j, usedTo: alt, switched: true };
+        return { ok: false, resultJson: retry.j, usedTo: alt, switched: false };
+    }
+    return { ok: false, resultJson: first.j, usedTo: data.to, switched: false };
+}
+
+// Quando a Meta aceitou o envio numa forma de número diferente da que estava
+// salva (retry do 9º dígito, ou wa_id canônico devolvido em contacts[0].wa_id),
+// migra o histórico do chat e o telefone do lead pra essa forma — assim os
+// próximos envios já vão direto, sem o erro + retry, e a conversa não racha em
+// dois threads.
+async function migrateChatPhone(oldTo, newTo) {
+    if (!newTo || newTo === oldTo) return;
+    try {
+        await queryD1('UPDATE wa_messages SET phone = ? WHERE phone = ?', [newTo, oldTo]);
+        const cv = phoneVariants(oldTo);
+        await queryD1(`UPDATE leads SET telefone = ? WHERE telefone IN (${cv.map(() => '?').join(', ')})`, [newTo, ...cv]);
+        console.log(`WhatsApp: número migrado de ${oldTo} para ${newTo} (forma aceita pela Meta).`);
+    } catch (e) { console.error('Falha ao migrar número do chat:', e.message); }
+}
+
 // ==========================================
 // AUTENTICAÇÃO (SESSÃO VIA COOKIE JWT)
 // ==========================================
@@ -813,21 +874,32 @@ app.post('/api/whatsapp/send', async (req, res) => {
             }
         }
 
-        const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(data),
-        });
-
-        const resultJson = await response.json();
-        if (!response.ok) {
+        const sendRes = await postMetaMessage(phone_id, token, data);
+        const resultJson = sendRes.resultJson;
+        if (!sendRes.ok) {
+            // 131026 nas duas formas do 9º dígito = o número não é uma conta de
+            // WhatsApp válida. Marca o lead pra alguém ir atrás do número certo.
+            if (resultJson.error && resultJson.error.code === 131026) {
+                try {
+                    const cv = phoneVariants(to);
+                    await queryD1(
+                        `UPDATE leads SET tags = TRIM(COALESCE(tags,'') || ',numero-invalido', ',')
+                         WHERE telefone IN (${cv.map(() => '?').join(', ')})
+                           AND (tags IS NULL OR tags NOT LIKE '%numero-invalido%')`,
+                        cv
+                    );
+                } catch (e) { console.error('Falha ao marcar lead com numero-invalido:', e.message); }
+            }
             throw new Error(resultJson.error ? resultJson.error.message : "Erro desconhecido na Meta API");
         }
 
         result = resultJson;
+
+        // Forma de número que a Meta realmente aceitou: o wa_id canônico que ela
+        // devolve, ou (se houve retry do 9º dígito) a variante que passou. Tudo
+        // daqui pra frente — INSERT no histórico, lookups de lead — usa essa.
+        const finalTo = (resultJson.contacts && resultJson.contacts[0] && resultJson.contacts[0].wa_id) || sendRes.usedTo || to;
+        if (finalTo !== to) await migrateChatPhone(to, finalTo);
 
         // Salvar no banco local wa_messages
         try {
@@ -835,7 +907,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
             const sentBy = (req.user && req.user.username) ? req.user.username : null;
             await queryD1(
                 'INSERT INTO wa_messages (id, phone, direction, message, status, quoted_id, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [msg_id, to, 'out', db_message_body, 'sent', quoted_id || null, sentBy]
+                [msg_id, finalTo, 'out', db_message_body, 'sent', quoted_id || null, sentBy]
             );
 
             // Essa rota só é chamada pelo atendente logado no CRM (a IA manda mensagem
@@ -843,7 +915,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
             // envio por aqui significa que um humano já entrou na conversa. Desliga o
             // agente de IA pra esse lead, pra ele não responder por cima do atendente.
             try {
-                const variants = phoneVariants(to);
+                const variants = phoneVariants(finalTo);
                 const placeholders = variants.map(() => '?').join(', ');
                 await queryD1(`UPDATE leads SET ai_enabled = 0, last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${placeholders})`, variants);
                 // Envio manual do atendente também interrompe follow-up automático em andamento.
@@ -857,7 +929,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
             if (isTemplate && templateName) {
                 await queryD1(
                     'INSERT INTO wa_template_sends (phone, template_name) VALUES (?, ?)',
-                    [to, templateName]
+                    [finalTo, templateName]
                 );
             }
         } catch(e) {
@@ -886,21 +958,19 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
     const token = process.env.META_WA_ACCESS_TOKEN;
     if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
 
-    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } })
-    });
-    const resultJson = await response.json();
-    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const sendRes = await postMetaMessage(phone_id, token, { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } });
+    const resultJson = sendRes.resultJson;
+    if (!sendRes.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const finalTo = (resultJson.contacts && resultJson.contacts[0] && resultJson.contacts[0].wa_id) || sendRes.usedTo || to;
+    if (finalTo !== to) await migrateChatPhone(to, finalTo);
 
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [msg_id, to, 'out', text, 'sent', sentBy]
+        [msg_id, finalTo, 'out', text, 'sent', sentBy]
     );
     try {
-        const v = phoneVariants(to);
+        const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
     } catch (e) {}
     return resultJson;
@@ -974,25 +1044,23 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
         data.template.components = [{ type: 'body', parameters: [param] }];
     }
 
-    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    const resultJson = await response.json();
-    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const sendRes = await postMetaMessage(phone_id, token, data);
+    const resultJson = sendRes.resultJson;
+    if (!sendRes.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const finalTo = (resultJson.contacts && resultJson.contacts[0] && resultJson.contacts[0].wa_id) || sendRes.usedTo || to;
+    if (finalTo !== to) await migrateChatPhone(to, finalTo);
 
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [msg_id, to, 'out', `📋 Template enviado: *${name}*`, 'sent', opts.sentBy || 'followup']
+        [msg_id, finalTo, 'out', `📋 Template enviado: *${name}*`, 'sent', opts.sentBy || 'followup']
     );
     try {
-        const v = phoneVariants(to);
+        const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
     } catch (e) {}
     try {
-        await queryD1('INSERT INTO wa_template_sends (phone, template_name) VALUES (?, ?)', [to, name]);
+        await queryD1('INSERT INTO wa_template_sends (phone, template_name) VALUES (?, ?)', [finalTo, name]);
     } catch (e) {}
     return resultJson;
 }
@@ -1005,21 +1073,19 @@ async function sendWhatsappAudioInternal(to, buffer, fileName = 'audio.ogg', sen
     if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
 
     const mediaId = await uploadMediaToMeta(buffer, 'audio/ogg', fileName);
-    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'audio', audio: { id: mediaId, voice: true } })
-    });
-    const resultJson = await response.json();
-    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const sendRes = await postMetaMessage(phone_id, token, { messaging_product: 'whatsapp', to, type: 'audio', audio: { id: mediaId, voice: true } });
+    const resultJson = sendRes.resultJson;
+    if (!sendRes.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const finalTo = (resultJson.contacts && resultJson.contacts[0] && resultJson.contacts[0].wa_id) || sendRes.usedTo || to;
+    if (finalTo !== to) await migrateChatPhone(to, finalTo);
 
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [msg_id, to, 'out', `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'sent', sentBy]
+        [msg_id, finalTo, 'out', `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'sent', sentBy]
     );
     try {
-        const v = phoneVariants(to);
+        const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
     } catch (e) {}
     return resultJson;

@@ -602,6 +602,7 @@ async function flowSimulate() {
    FOLLOW-UP AUTOMÁTICO (cadência global) — config na mesma tela de Fluxos
    ========================================================================== */
 let fuCfg = null;
+let fuTemplates = [];
 const FU_DOW = [['1', 'Seg'], ['2', 'Ter'], ['3', 'Qua'], ['4', 'Qui'], ['5', 'Sex'], ['6', 'Sáb'], ['0', 'Dom']];
 
 async function flowOpenFollowup() {
@@ -609,6 +610,11 @@ async function flowOpenFollowup() {
         const r = await fetch('/api/followup/config').then(x => x.json());
         fuCfg = r.config || {};
     } catch (e) { showToast('Erro ao carregar follow-up.', 'danger'); return; }
+    // Templates aprovados da Meta — usados quando o lembrete cai fora da janela de 24h.
+    try {
+        const tr = await fetch('/api/whatsapp/templates').then(x => x.json());
+        fuTemplates = (tr.data || []).filter(t => t.status === 'APPROVED');
+    } catch (e) { fuTemplates = []; }
     if (!Array.isArray(fuCfg.steps)) fuCfg.steps = [];
     if (!Array.isArray(fuCfg.aplicar_colunas)) fuCfg.aplicar_colunas = [];
     if (!Array.isArray(fuCfg.parar_em_colunas)) fuCfg.parar_em_colunas = ['col-ganho'];
@@ -674,6 +680,17 @@ function renderFollowupEditor() {
                     <input type="checkbox" style="width:auto;margin:0" ${s.so_horario_comercial ? 'checked' : ''} onchange="fuSetStep(${i}, 'so_horario_comercial', this.checked)">
                     Só enviar em horário comercial
                 </label>
+                <label>Fora da janela de 24h, enviar template <span class="fx-mini">a mensagem acima só vale dentro das 24h</span>
+                    <select oninput="fuSetStep(${i}, 'template_name', this.value)">
+                        <option value="">— pular o lembrete —</option>
+                        ${fuTemplates.map(t => {
+                            const body = (t.components || []).find(c => c.type === 'BODY');
+                            const vc = (((body && body.text) || '').match(/\{\{[^}]+\}\}/g) || []).length;
+                            return `<option value="${escapeHtml(t.name)}" ${s.template_name === t.name ? 'selected' : ''}>${escapeHtml(t.name)}${t.category ? ' · ' + escapeHtml(t.category) : ''}${vc > 1 ? ` (⚠ ${vc} variáveis — não suportado)` : ''}</option>`;
+                        }).join('')}
+                    </select>
+                </label>
+                ${s.template_name && !fuTemplates.some(t => t.name === s.template_name) ? `<div class="fx-mini" style="color:var(--accent-warning)">Template "${escapeHtml(s.template_name)}" não está entre os aprovados da Meta.</div>` : ''}
             </div>
         </div>`).join('') || '<div class="fx-mini">Nenhum lembrete. Adicione o primeiro.</div>';
 
@@ -695,7 +712,7 @@ function renderFollowupEditor() {
             <div class="fx-block-title"><i class="fa-solid fa-list-ol"></i> Lembretes (em cascata)</div>
             ${stepsHtml}
             <button class="fx-add-btn" onclick="fuAddStep()"><i class="fa-solid fa-plus"></i> Adicionar lembrete</button>
-            <div class="fx-mini" style="margin-top:0.6rem">O tempo conta a partir da <b>última mensagem que você enviou</b>. Fora da janela de 24h do WhatsApp o lembrete é pulado (envio por template fica pra próxima fase).</div>
+            <div class="fx-mini" style="margin-top:0.6rem">O tempo conta a partir da <b>última mensagem que você enviou</b>. Dentro da janela de 24h do WhatsApp vai a mensagem de texto; fora dela vai o template aprovado escolhido no lembrete (sem template escolhido, o lembrete é pulado). O nome do paciente preenche a variável do template, se houver uma.</div>
         </div>
 
         <div class="fx-block">

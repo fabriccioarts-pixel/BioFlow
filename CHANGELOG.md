@@ -1,5 +1,19 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-03 — Retry do 9º dígito no envio de WhatsApp (erro 131026)
+
+### Corrigido
+* **Mensagens "Message undeliverable" (131026) para números do Brasil:** o `wa_id` que a Meta manda no webhook nem sempre é a forma que a Cloud API aceita para **envio** (inconsistência histórica do nono dígito). Agora, ao receber `131026`, o servidor repete o envio **uma vez alternando o 9º dígito** (com ⇄ sem). Se a forma alternativa funcionar, o histórico do chat (`wa_messages.phone`) e o telefone do lead são migrados para ela — os próximos envios vão direto.
+* **`api-server.js`:** novas funções `toggleBR9()`, `postMetaMessage()` (POST + retry) e `migrateChatPhone()`. Aplicadas em `/api/whatsapp/send` e nos envios internos (`sendWhatsappTextInternal`, `sendWhatsappTemplateInternal`, `sendWhatsappAudioInternal`). Passou a usar `contacts[0].wa_id` da resposta como forma canônica do número.
+* **Lead com número inválido:** se o `131026` persiste nas duas formas do 9º dígito, o lead ganha a etiqueta `numero-invalido` para alguém buscar o número correto.
+
+## 2026-09-03 — Follow-up automático fora da janela de 24h (via template)
+
+### Alterado
+* **Follow-up automático (Fase 2):** quando um lembrete cai fora da janela de 24h do WhatsApp, em vez de ser pulado, agora envia um **template aprovado da Meta** configurado no próprio passo. Dentro das 24h continua indo o texto livre.
+* **`api-server.js`:** novas funções internas `getWhatsappTemplateMeta()` (busca + cache de 5 min do idioma/variáveis do template na Graph API) e `sendWhatsappTemplateInternal()` (envio de template pelo caminho interno, registra em `wa_messages` / `wa_template_sends` e atualiza `leads.last_msg_at`). `followupTick()` passa a chamá-la no lugar de descartar o passo. Suporta templates com 0 ou 1 variável de corpo (preenchida com o nome do paciente).
+* **`flows.js`:** o editor de follow-up carrega os templates aprovados e mostra um seletor "Fora da janela de 24h, enviar template" em cada lembrete. Avisa quando o template salvo não está mais entre os aprovados ou tem 2+ variáveis.
+
 ## 2026-08-22 — Correções e Melhorias no Fluxo de Mídia e Respostas do WhatsApp
 
 ### Alterado
