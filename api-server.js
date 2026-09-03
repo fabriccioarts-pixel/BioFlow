@@ -4657,6 +4657,25 @@ app.get('/api/capi-selftest', async (req, res) => {
         colunas_leads = 'FALTAM: ' + e.message + ' — o ALTER TABLE do boot não rodou nesse deploy';
     }
 
+    // ?waba_info=1 — de qual Business Manager são a WABA e o dataset de CTWA,
+    // e o que a API sabe do dataset (nome, contagem de eventos recentes).
+    if (req.query.waba_info) {
+        const wabaId  = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
+        const dsId    = (process.env.META_CAPI_WABA_DATASET_ID || '').trim();
+        const waTok   = (process.env.META_WA_ACCESS_TOKEN || process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN || '').trim();
+        if (!wabaId || !waTok) return res.json({ cfg, colunas_leads, waba_info: { erro: 'falta META_WABA_ID ou token' } });
+        const g = (url) => fetch(`https://graph.facebook.com/${META_GRAPH}/${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(waTok)}`).then(r => r.json()).catch(e => ({ error: { message: e.message } }));
+        const [waba, dataset, dsStats] = await Promise.all([
+            g(`${wabaId}?fields=id,name,owner_business_info,on_behalf_of_business_info`),
+            dsId ? g(`${dsId}?fields=id,name,owner_business`) : Promise.resolve({ skipped: 'sem META_CAPI_WABA_DATASET_ID' }),
+            dsId ? g(`${dsId}/stats?fields=count,event_name&start_time=${Math.floor(Date.now()/1000) - 3*86400}`) : Promise.resolve(null)
+        ]);
+        return res.json({ cfg, colunas_leads, waba_info: {
+            business_id_da_url: req.query.business_id || null,
+            waba, dataset, dataset_stats_3d: dsStats
+        } });
+    }
+
     // ?waba_check=1 — confere se o número da Cloud API (META_WA_PHONE_ID) está
     // mesmo dentro da WABA (META_WABA_ID) usada no CAPI.
     if (req.query.waba_check) {
