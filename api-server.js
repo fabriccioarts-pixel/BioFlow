@@ -4481,10 +4481,14 @@ async function sendMetaCapiEvent(eventName, {
     telefone, email, ctwa_clid, eventId, eventTimeSec, value, currency = 'BRL'
 } = {}) {
     // .trim() defensivo: colar env var na Vercel costuma deixar \n / espaço no fim.
-    const datasetId = (process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || '').trim();
+    const siteDatasetId = (process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || '').trim();
     const token     = (process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN || '').trim();
     const testCode  = (process.env.META_CAPI_TEST_EVENT_CODE || '').trim();
     const wabaId    = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
+    // Eventos de Click-to-WhatsApp (com ctwa_clid) precisam ir pro dataset que
+    // PERTENCE à conta do WhatsApp Business — não pro dataset do site (subcode 2804132).
+    const wabaDatasetId = (process.env.META_CAPI_WABA_DATASET_ID || '').trim();
+    const datasetId = ((!!ctwa_clid && wabaDatasetId) ? wabaDatasetId : siteDatasetId);
     if (!datasetId || !token) {
         console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'META_CAPI_DATASET_ID/META_PIXEL_ID' : 'META_CAPI_TOKEN/META_ACCESS_TOKEN'} no ambiente`);
         return { ok: false, skipped: true };
@@ -4623,7 +4627,8 @@ app.get('/api/capi-selftest', async (req, res) => {
         test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length,
         waba_id: (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim() || null,
         waba_id_source: process.env.META_CAPI_WABA_ID ? 'META_CAPI_WABA_ID'
-            : (process.env.META_WABA_ID ? 'META_WABA_ID' : null)
+            : (process.env.META_WABA_ID ? 'META_WABA_ID' : null),
+        waba_dataset_id: (process.env.META_CAPI_WABA_DATASET_ID || '').trim() || null
     };
     // Checa se as colunas novas existem na tabela leads (o caminho do arrasto depende delas).
     await ensureCapiColumns(); // cria as colunas se faltarem — só de abrir esse endpoint já conserta
@@ -4633,6 +4638,39 @@ app.get('/api/capi-selftest', async (req, res) => {
         colunas_leads = 'ok — ctwa_clid / capi_lead_sent / capi_schedule_sent / capi_purchase_sent existem';
     } catch (e) {
         colunas_leads = 'FALTAM: ' + e.message + ' — o ALTER TABLE do boot não rodou nesse deploy';
+    }
+
+    // ?waba_dataset=1 — cria/recupera o dataset que PERTENCE à conta do WhatsApp
+    // Business (obrigatório pra eventos de Click-to-WhatsApp, subcode 2804132).
+    // Devolve o id do dataset — é ele que deve ir na env META_CAPI_WABA_DATASET_ID.
+    if (req.query.waba_dataset) {
+        const wabaId = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
+        const waTok  = (process.env.META_WA_ACCESS_TOKEN || process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN || '').trim();
+        if (!wabaId || !waTok) {
+            return res.json({ cfg, colunas_leads, waba_dataset: { erro: 'falta META_WABA_ID ou META_WA_ACCESS_TOKEN no ambiente' } });
+        }
+        try {
+            // GET primeiro — se já existe, o Meta devolve o(s) dataset(s) da WABA.
+            const g = await fetch(`https://graph.facebook.com/${META_GRAPH}/${wabaId}/dataset?access_token=${encodeURIComponent(waTok)}`);
+            const gj = await g.json().catch(() => ({}));
+            let created = null;
+            if (!gj || !gj.data || !gj.data.length) {
+                const p = await fetch(`https://graph.facebook.com/${META_GRAPH}/${wabaId}/dataset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ access_token: waTok })
+                });
+                created = await p.json().catch(() => ({}));
+            }
+            return res.json({ cfg, colunas_leads, waba_dataset: {
+                waba_id: wabaId,
+                existentes: (gj && gj.data) || gj || null,
+                criado: created,
+                dica: 'Pegue o id retornado e ponha em META_CAPI_WABA_DATASET_ID no Vercel. Os eventos de CTWA passam a ir pra esse dataset.'
+            } });
+        } catch (e) {
+            return res.json({ cfg, colunas_leads, waba_dataset: { erro: e.message } });
+        }
     }
 
     // ?probe=<EventName>&lead=<id> — dispara UM evento com o nome cru fornecido
