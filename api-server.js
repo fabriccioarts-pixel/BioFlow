@@ -4614,6 +4614,21 @@ app.get('/api/capi-selftest', async (req, res) => {
         colunas_leads = 'FALTAM: ' + e.message + ' — o ALTER TABLE do boot não rodou nesse deploy';
     }
 
+    // ?probe=<EventName>&lead=<id> — dispara UM evento com o nome cru fornecido
+    // (usando o ctwa_clid do lead, então vai como business_messaging). Não grava
+    // flag nenhuma. Serve pra descobrir quais event_name o Meta aceita p/ CTWA.
+    if (req.query.probe) {
+        const nome = String(req.query.probe).slice(0, 40);
+        const lr = await queryD1('SELECT id, telefone, email, ctwa_clid FROM leads WHERE id = ?', [String(req.query.lead || '')]).catch(() => null);
+        const ld = lr && lr[0];
+        if (!ld) return res.json({ cfg, colunas_leads, probe: { erro: 'passe &lead=<id> de um lead que exista e tenha ctwa_clid' } });
+        const r = await sendMetaCapiEvent(nome, {
+            telefone: ld.telefone, email: ld.email, ctwa_clid: ld.ctwa_clid,
+            eventId: `probe:${nome}:${ld.id}:${Date.now()}`
+        });
+        return res.json({ cfg, colunas_leads, probe: { event_name: nome, tinha_ctwa_clid: !!ld.ctwa_clid, resposta_meta: r } });
+    }
+
     // ?fire=<leadId>&event=Schedule|Purchase|Lead — roda o caminho EXATO do arrasto num lead real.
     if (req.query.fire) {
         const ev = ['Schedule', 'Purchase', 'Lead'].includes(req.query.event) ? req.query.event : 'Schedule';
