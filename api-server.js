@@ -324,20 +324,37 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
             let msg_body = "";
             const msg_type = message_obj.type;
             
+            // Mídia de "visualização única": a Cloud API não entrega o arquivo
+            // (o id não vem). Mostra um aviso claro em vez de mídia quebrada.
+            const isViewOnce = (o) => o && (o.view_once === true || o.view_once === 'true' || !o.id);
+            const VIEW_ONCE_MSG = (icon, tipo) => `${icon} [${tipo} de visualização única — não disponível pela API. Peça pro paciente reenviar como ${tipo.toLowerCase()} normal.]`;
+
             if (msg_type === "text") {
                 msg_body = message_obj.text ? message_obj.text.body : "";
             } else if (msg_type === "image") {
-                const mediaId = message_obj.image.id;
-                const caption = message_obj.image.caption || "";
-                msg_body = `[FILE:Imagem.jpg]/api/whatsapp/media/${mediaId}.jpg${caption ? `[CAPTION:${caption}]` : ''}`;
+                if (isViewOnce(message_obj.image)) {
+                    msg_body = VIEW_ONCE_MSG('📷', 'Foto');
+                } else {
+                    const mediaId = message_obj.image.id;
+                    const caption = message_obj.image.caption || "";
+                    msg_body = `[FILE:Imagem.jpg]/api/whatsapp/media/${mediaId}.jpg${caption ? `[CAPTION:${caption}]` : ''}`;
+                }
             } else if (msg_type === "audio" || msg_type === "voice") {
                 const audioObj = message_obj.audio || message_obj.voice;
-                const mediaId = audioObj.id;
-                msg_body = `[FILE:Áudio.ogg]/api/whatsapp/media/${mediaId}.ogg`;
+                if (isViewOnce(audioObj)) {
+                    msg_body = VIEW_ONCE_MSG('🎧', 'Áudio');
+                } else {
+                    const mediaId = audioObj.id;
+                    msg_body = `[FILE:Áudio.ogg]/api/whatsapp/media/${mediaId}.ogg`;
+                }
             } else if (msg_type === "video") {
-                const mediaId = message_obj.video.id;
-                const caption = message_obj.video.caption || "";
-                msg_body = `[FILE:Vídeo.mp4]/api/whatsapp/media/${mediaId}.mp4${caption ? `[CAPTION:${caption}]` : ''}`;
+                if (isViewOnce(message_obj.video)) {
+                    msg_body = VIEW_ONCE_MSG('🎥', 'Vídeo');
+                } else {
+                    const mediaId = message_obj.video.id;
+                    const caption = message_obj.video.caption || "";
+                    msg_body = `[FILE:Vídeo.mp4]/api/whatsapp/media/${mediaId}.mp4${caption ? `[CAPTION:${caption}]` : ''}`;
+                }
             } else if (msg_type === "document") {
                 const mediaId = message_obj.document.id;
                 const fileName = message_obj.document.filename || "Documento";
