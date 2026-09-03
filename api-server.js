@@ -1227,7 +1227,31 @@ async function callGeminiForWhatsappReply(phone) {
     if (!response.ok) throw new Error(json.error ? json.error.message : 'Erro desconhecido na API do Gemini');
 
     const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('').trim() || '';
-    return text;
+    return normalizeAiReply(text);
+}
+
+// Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
+// quando quer mandar mensagens separadas. Sem isso, a string crua "[\"...\"]"
+// era enviada literalmente pro paciente. Converte pra texto com parágrafos
+// duplos — que o sendWhatsappAiReplyInChunks já quebra em mensagens.
+function normalizeAiReply(raw) {
+    let s = String(raw || '').trim();
+    const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fence) s = fence[1].trim();
+    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
+        try {
+            const v = JSON.parse(s);
+            if (Array.isArray(v)) {
+                return v.map(x => String(x).trim()).filter(Boolean).join('\n\n');
+            }
+            if (v && typeof v === 'object') {
+                const arr = v.messages || v.mensagens || v.reply || v.resposta;
+                if (Array.isArray(arr)) return arr.map(x => String(x).trim()).filter(Boolean).join('\n\n');
+                if (typeof arr === 'string') return arr.trim();
+            }
+        } catch (e) { /* não era JSON de verdade, segue com o texto cru */ }
+    }
+    return s;
 }
 
 // ============================================================================
@@ -1280,7 +1304,7 @@ async function callGeminiCopilot(systemPrompt, userText) {
     if (!text && candidate?.finishReason && candidate.finishReason !== 'STOP') {
         throw new Error(`Gemini interrompeu a resposta (${candidate.finishReason})`);
     }
-    return text;
+    return normalizeAiReply(text);
 }
 
 // true = pode seguir; false = já respondeu 429.
