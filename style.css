@@ -1033,6 +1033,47 @@ nav.tabs-container.sb-nav {
     --lp-surface: color-mix(in srgb, var(--text-main) 4%, transparent);
     --lp-raise: color-mix(in srgb, var(--text-main) 7%, transparent);
     --lp-accent: var(--accent-primary);
+    transition: width 0.18s ease;
+}
+
+/* Botão de recolher o painel de informações do lead (só desktop) */
+.chat-lead-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.72rem;
+    transition: background 0.15s, color 0.15s, transform 0.18s;
+}
+.chat-lead-collapse:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--text-main);
+}
+
+#chat-lead-panel.lp-collapsed {
+    width: 46px !important;
+}
+#chat-lead-panel.lp-collapsed #chat-lead-panel-body {
+    display: none !important;
+}
+#chat-lead-panel.lp-collapsed .chat-lead-panel-head {
+    flex-direction: column;
+    padding: 0.7rem 0;
+    gap: 0.5rem;
+    justify-content: flex-start;
+}
+#chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 {
+    display: none;
+}
+#chat-lead-panel.lp-collapsed .chat-lead-collapse {
+    transform: rotate(180deg);
 }
 
 .lead-panel-label {
@@ -7360,6 +7401,13 @@ body:has(#login-overlay.active) header { display: none; }
     .chat-mobile-back,
     .chat-mobile-ficha,
     .chat-lead-close { display: inline-flex !important; }
+
+    /* No mobile a ficha é um drawer de tela cheia — recolher não faz sentido */
+    .chat-lead-collapse { display: none !important; }
+    #chat-lead-panel.lp-collapsed { width: 100% !important; }
+    #chat-lead-panel.lp-collapsed #chat-lead-panel-body { display: flex !important; }
+    #chat-lead-panel.lp-collapsed .chat-lead-panel-head { flex-direction: row; padding: 1.1rem 1.25rem; }
+    #chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 { display: flex; }
 
     #chat-active-header { padding: 0.8rem 1rem !important; }
     #chat-active-input { padding: 0.7rem 0.9rem !important; }

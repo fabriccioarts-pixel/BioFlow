@@ -2078,7 +2078,26 @@ function toggleLeadNotesExpanded() {
 // some no meio da digitação assim que uma atualização silenciosa chega.
 let leadPanelNotesDirty = false;
 
+function applyLeadPanelCollapsed() {
+    const panel = document.getElementById('chat-lead-panel');
+    if (!panel) return;
+    let collapsed = false;
+    try { collapsed = localStorage.getItem('leadPanelCollapsed') === '1'; } catch (e) {}
+    panel.classList.toggle('lp-collapsed', collapsed);
+    const btn = panel.querySelector('.chat-lead-collapse');
+    if (btn) btn.title = collapsed ? 'Expandir painel' : 'Recolher painel';
+}
+
+function toggleLeadPanelCollapse() {
+    const panel = document.getElementById('chat-lead-panel');
+    if (!panel) return;
+    const collapsed = !panel.classList.contains('lp-collapsed');
+    try { localStorage.setItem('leadPanelCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    applyLeadPanelCollapsed();
+}
+
 function renderLeadInfoPanel(lead, phone, lastInteraction) {
+    applyLeadPanelCollapsed();
     const container = document.getElementById('chat-lead-info-content');
     if (!container) return;
 
