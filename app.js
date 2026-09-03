@@ -5253,10 +5253,21 @@ async function fetchNotifications() {
 
                     const item = document.createElement('div');
                     item.className = 'notif-item';
-                    item.innerHTML = `${iconHTML}<div class="notif-body"><span class="notif-time">${timeStr}</span><p class="notif-text">${escapeHtml(cleanMsg)}</p></div>`;
+                    const isHandoff = !!n.action_phone;
+                    if (isHandoff) {
+                        item.classList.add('notif-item--priority', 'notif-item--click');
+                        item.setAttribute('role', 'button');
+                        item.tabIndex = 0;
+                        const go = () => notifOpenChat(n.action_phone);
+                        item.addEventListener('click', go);
+                        item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+                    }
+                    item.innerHTML = `${iconHTML}<div class="notif-body"><span class="notif-time">${timeStr}</span><p class="notif-text">${escapeHtml(cleanMsg)}</p>${isHandoff ? '<span class="notif-cta">Abrir conversa →</span>' : ''}</div>`;
                     listContainer.prepend(item);
+
+                    if (!isFirstLoad && isHandoff) playQualifiedChime();
                 }
-                
+
                 if (!isFirstLoad) {
                     unreadNotifications++;
                     const badge = document.getElementById('nav-notification-badge');
@@ -5273,6 +5284,45 @@ async function fetchNotifications() {
         });
         isFirstLoad = false;
     } catch(e) {}
+}
+
+// Clique numa notificação de handoff → abre a conversa daquele lead.
+function notifOpenChat(phone) {
+    if (!phone) return;
+    try {
+        const menu = document.getElementById('notifications-dropdown');
+        if (menu) menu.style.display = 'none';
+        if (typeof switchTab === 'function') switchTab('chat');
+        let name = 'Lead';
+        try {
+            const c = (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList))
+                ? allChatsList.find(x => typeof isSamePhone === 'function' && isSamePhone(x.phone, phone))
+                : null;
+            if (c && c.nome) name = c.nome;
+        } catch (e) {}
+        if (typeof openChat === 'function') openChat(phone, name);
+    } catch (e) { console.error('notifOpenChat', e); }
+}
+
+// Toque distinto quando um lead é qualificado pela IA (só nesse tipo).
+function playQualifiedChime() {
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx = new AC();
+        const now = ctx.currentTime;
+        [880, 1174.66].forEach((f, i) => {
+            const o = ctx.createOscillator(), g = ctx.createGain();
+            o.type = 'sine'; o.frequency.value = f;
+            const t0 = now + i * 0.15;
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+            o.connect(g); g.connect(ctx.destination);
+            o.start(t0); o.stop(t0 + 0.36);
+        });
+        setTimeout(() => { try { ctx.close(); } catch (e) {} }, 900);
+    } catch (e) {}
 }
 
 function toggleNotificationsMenu(event) {

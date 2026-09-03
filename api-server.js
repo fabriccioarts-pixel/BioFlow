@@ -1627,12 +1627,15 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
                 : 'IA identificou lead qualificado';
             const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
             await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
+            const infoRows = await queryD1('SELECT nome, telefone FROM leads WHERE id = ?', [leadId]);
+            const nomeLead = (infoRows?.[0]?.nome || 'Lead').replace(' [MKT]', '');
+            const telLead = infoRows?.[0]?.telefone || phone || null;
             const notifMsg = aiMode === 'vendas'
-                ? '🤖 IA de vendas: lead pronto pra fechar — assumir conversa no WhatsApp.'
-                : '🤖 Lead qualificado pela IA — assumir conversa no WhatsApp.';
+                ? `🎯 ${nomeLead} — pronto pra fechar, assumir a conversa`
+                : `🎯 ${nomeLead} está qualificada — pronta pra atender`;
             await queryD1(
-                'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-                [`ai-qual-${leadId}-${Date.now()}`, notifMsg]
+                'INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)',
+                [`ai-qual-${leadId}-${Date.now()}`, notifMsg, telLead]
             );
             return;
         }
@@ -2186,6 +2189,8 @@ queryD1("ALTER TABLE crm_notifications ADD COLUMN avatar_url TEXT").catch(() => 
 // Quem disparou a notificação (ex.: login) — usado pra não notificar a própria
 // pessoa de uma ação que ela mesma fez (ex.: "você entrou no sistema").
 queryD1("ALTER TABLE crm_notifications ADD COLUMN actor_username TEXT").catch(() => {});
+// Telefone do lead pra clicar na notificação e abrir a conversa (handoff da IA).
+queryD1("ALTER TABLE crm_notifications ADD COLUMN action_phone TEXT").catch(() => {});
 queryD1("ALTER TABLE crm_chat_settings ADD COLUMN is_blocked INTEGER DEFAULT 0").catch(() => {});
 
 // Presença em conversa: quem está com a conversa de um lead ABERTA agora (só

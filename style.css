@@ -2858,6 +2858,24 @@ select.form-control option,
 .notif-item:hover {
     background: color-mix(in srgb, var(--text-main) 5%, transparent);
 }
+.notif-item--click {
+    cursor: pointer;
+}
+.notif-item--priority {
+    background: color-mix(in srgb, var(--accent-success) 9%, transparent);
+    border-left: 3px solid var(--accent-success);
+    padding-left: calc(0.55rem - 3px);
+}
+.notif-item--priority:hover {
+    background: color-mix(in srgb, var(--accent-success) 15%, transparent);
+}
+.notif-cta {
+    display: inline-block;
+    margin-top: 0.3rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent-success);
+}
 
 .notif-icon,
 .notif-avatar {

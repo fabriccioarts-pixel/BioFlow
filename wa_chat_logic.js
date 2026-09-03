@@ -1409,6 +1409,22 @@ function filterChatContacts(query) {
 
         if (activeChatFilter === 'unread') {
             filtered = filtered.filter(chat => Number(chat.unread_count || 0) > 0 || isMarkedUnreadChat(chat.phone));
+        } else if (activeChatFilter === 'qualified') {
+            // Lead qualificado pela IA e ainda sem resposta humana (última msg é do paciente).
+            filtered = filtered.filter(chat => {
+                if (typeof leads === 'undefined' || !Array.isArray(leads)) return false;
+                const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
+                if (!lead || !lead.tags) return false;
+                if (!parseLeadTags(lead.tags).includes('ia-qualificado')) return false;
+                const dir = chat.last_direction || chat.direction;
+                return dir !== 'out';
+            });
+            // Quem espera há mais tempo no topo.
+            filtered = [...filtered].sort((a, b) => {
+                const ta = parseD1TimestampMs(a.last_timestamp || a.timestamp || a.last_interaction) || 0;
+                const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
+                return ta - tb;
+            });
         } else if (activeChatFilter === 'favorites') {
             filtered = filtered.filter(chat => isFavoriteChat(chat.phone));
         } else if (activeChatFilter === 'contacts') {
