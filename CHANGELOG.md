@@ -1,5 +1,23 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-03 — Anti-duplicidade no envio, filtro "Aguardando resposta" e ordenação padrão
+
+### Adicionado
+* **Trava anti-duplicidade no envio manual:** não deixa mandar a mesma mensagem de texto 2x sem querer (Enter batido duas vezes, clique duplo, reenvio por lag).
+  * Front (`wa_chat_logic.js`): `chatSendInFlight` bloqueia envio concorrente; se a mesma mensagem foi enviada pro mesmo número há menos de 15s, pede confirmação antes de repetir.
+  * Back (`api-server.js`): `/api/whatsapp/send` responde `409` se já existe uma mensagem `out` idêntica pro mesmo número nos últimos 15s; o front oferece reenviar com `force: true`.
+
+### Alterado
+* **Filtro "Aguardando resposta" (chat):** estava invertido — mostrava as conversas em que *nós* mandamos a última mensagem. Agora mostra as conversas em que **o lead** mandou a última e ninguém (atendente ou IA) respondeu, igual à etiqueta ⏳ do card.
+* **Filtro "Qualificados aguardando" removido:** virou redundante — era só o "Aguardando resposta" restrito aos leads com a tag `ia-qualificado`. A tag e o mecanismo de handoff da IA continuam iguais.
+* **Modal "Enviar Template" agora lista os templates aprovados:** era um campo de texto onde a pessoa tinha que digitar o nome exato do template. Vira um `<select>` carregado ao vivo de `/api/whatsapp/templates` (só os `APPROVED`), com prévia do corpo. O idioma vai **exatamente o que a Meta registrou** pro template (o `<select>` de idioma causava `#132001`). Templates com cabeçalho de mídia, variável no cabeçalho, botão dinâmico ou 2+ variáveis no corpo aparecem como "(⚠ não suportado)" e são barrados com mensagem clara antes de gerar `#132000`. Corpo com 1 variável é preenchido com o nome do paciente.
+* **Balão de template no chat mostra a mensagem real:** antes aparecia só "📋 Template enviado: *nome*". Agora grava o texto do template (cabeçalho de texto + corpo com variáveis preenchidas + rodapé), então dá pra ler o que foi enviado. Cabeçalho de mídia aparece como `[image]`/`[video]`/`[document]`.
+
+### Corrigido
+* **Lista de conversas com `direction`/`message`/`status` errados:** `/api/whatsapp/chats` dependia do "bare column + MAX()" do SQLite, que o D1 não garante — a `direction` podia vir de qualquer mensagem da conversa, não da última. Isso jogava conversas com a última mensagem nossa dentro do filtro "Aguardando resposta". Agora usa subquery explícita pela última mensagem (timestamp, e rowid no empate).
+* **Ordenação padrão do Kanban:** de "Mais antigos primeiro" para **"Mais recentes primeiro"** (`created_desc`). Quem já escolheu uma ordenação mantém a dela.
+* **Filtro de origem do Kanban ("Meta Ads"):** era comparação exata, mas lead de anúncio é salvo como `"Meta Ads: <título do anúncio>"` — então o filtro não retornava nada. Agora casa por prefixo.
+
 ## 2026-09-03 — Retry do 9º dígito no envio de WhatsApp (erro 131026)
 
 ### Corrigido

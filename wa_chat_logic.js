@@ -1409,22 +1409,6 @@ function filterChatContacts(query) {
 
         if (activeChatFilter === 'unread') {
             filtered = filtered.filter(chat => Number(chat.unread_count || 0) > 0 || isMarkedUnreadChat(chat.phone));
-        } else if (activeChatFilter === 'qualified') {
-            // Lead qualificado pela IA e ainda sem resposta humana (última msg é do paciente).
-            filtered = filtered.filter(chat => {
-                if (typeof leads === 'undefined' || !Array.isArray(leads)) return false;
-                const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
-                if (!lead || !lead.tags) return false;
-                if (!parseLeadTags(lead.tags).includes('ia-qualificado')) return false;
-                const dir = chat.last_direction || chat.direction;
-                return dir !== 'out';
-            });
-            // Quem espera há mais tempo no topo.
-            filtered = [...filtered].sort((a, b) => {
-                const ta = parseD1TimestampMs(a.last_timestamp || a.timestamp || a.last_interaction) || 0;
-                const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
-                return ta - tb;
-            });
         } else if (activeChatFilter === 'awaiting') {
             // O lead mandou a última mensagem e ninguém (atendente ou IA) respondeu
             // ainda — é o lead que está esperando resposta nossa. Mesmo critério da
@@ -4572,22 +4556,103 @@ window.openAgendarFromChat = function() {
     }
 };
 
-function openTemplateModal() {
+// Templates aprovados da Meta, carregados ao abrir o modal de envio de template.
+let stTemplates = [];
+
+const stCountVars = (s) => (String(s || '').match(/\{\{[^}]+\}\}/g) || []).length;
+
+function stBodyVarCount(t) {
+    const body = (t.components || []).find(c => c.type === 'BODY');
+    return stCountVars(body && body.text);
+}
+
+// O envio de template pelo chat só monta o componente "body" com no máximo 1
+// variável. Cabeçalho de mídia, variável no cabeçalho e botão dinâmico exigem
+// parâmetros próprios que não temos como preencher aqui — melhor barrar com uma
+// mensagem clara do que deixar a Meta responder #132000 / #132001.
+function stAnalyzeTemplate(t) {
+    const comps = t.components || [];
+    const body = comps.find(c => c.type === 'BODY');
+    const header = comps.find(c => c.type === 'HEADER');
+    const buttons = comps.find(c => c.type === 'BUTTONS');
+    const bodyVars = stCountVars(body && body.text);
+    let block = null;
+    if (header) {
+        const fmt = String(header.format || 'TEXT').toUpperCase();
+        if (fmt !== 'TEXT') block = `tem cabeçalho de mídia (${fmt.toLowerCase()}), que precisaria ser enviado junto`;
+        else if (stCountVars(header.text) > 0) block = 'tem variável no cabeçalho';
+    }
+    if (!block && buttons) {
+        const dyn = (buttons.buttons || []).find(b =>
+            (b.type === 'URL' && stCountVars(b.url) > 0) || b.type === 'COPY_CODE' || b.type === 'OTP');
+        if (dyn) block = 'tem botão dinâmico (URL com variável ou código), que precisa de parâmetro próprio';
+    }
+    if (!block && bodyVars > 1) block = `tem ${bodyVars} variáveis no corpo (o envio pelo chat só suporta 0 ou 1)`;
+    return { bodyVars, block };
+}
+
+async function openTemplateModal() {
     if (!window.currentActiveChat) return;
     const modal = document.getElementById('modalSendTemplate');
     if (modal) modal.classList.add('active');
+
+    const sel = document.getElementById('st-template-select');
+    const hint = document.getElementById('st-template-hint');
+    if (sel) sel.innerHTML = '<option value="">Carregando templates…</option>';
+    if (hint) hint.textContent = '';
+
+    try {
+        const r = await fetch('/api/whatsapp/templates').then(x => x.json());
+        stTemplates = (r.data || []).filter(t => t.status === 'APPROVED');
+        if (!sel) return;
+        if (!stTemplates.length) {
+            sel.innerHTML = '<option value="">Nenhum template aprovado</option>';
+            if (hint) hint.textContent = 'Crie e aprove um template no Gerenciador da Meta — ele aparece aqui depois de aprovado.';
+            return;
+        }
+        sel.innerHTML = '<option value="">Selecione um template…</option>' + stTemplates.map(t => {
+            const { block } = stAnalyzeTemplate(t);
+            return `<option value="${escapeHtml(t.name)}" data-lang="${escapeHtml(t.language || 'pt_BR')}">${escapeHtml(t.name)}${t.category ? ' · ' + escapeHtml(t.category) : ''}${block ? ' (⚠ não suportado)' : ''}</option>`;
+        }).join('');
+    } catch (e) {
+        if (sel) sel.innerHTML = '<option value="">Erro ao carregar templates</option>';
+        if (hint) hint.textContent = 'Não foi possível carregar a lista da Meta.';
+    }
+}
+
+// Ao escolher um template: sincroniza o idioma e mostra uma prévia do corpo.
+function onTemplatePick() {
+    const sel = document.getElementById('st-template-select');
+    const langSel = document.getElementById('st-template-lang');
+    const hint = document.getElementById('st-template-hint');
+    if (!sel) return;
+    const opt = sel.options[sel.selectedIndex];
+    const lang = opt ? opt.getAttribute('data-lang') : '';
+    if (lang && langSel) {
+        if (![...langSel.options].some(o => o.value === lang)) langSel.add(new Option(lang, lang));
+        langSel.value = lang;
+    }
+    const t = stTemplates.find(x => x.name === sel.value);
+    const body = t && (t.components || []).find(c => c.type === 'BODY');
+    if (hint) {
+        const preview = (body && body.text) ? body.text : '';
+        const { block } = t ? stAnalyzeTemplate(t) : { block: null };
+        hint.textContent = block
+            ? `⚠ Este template ${block}. Não dá pra enviar pelo chat — use um template só de texto.`
+            : preview;
+        hint.style.color = block ? 'var(--accent-danger, #ef4444)' : 'var(--text-muted)';
+    }
 }
 
 async function sendTemplateMessage() {
     if (!window.currentActiveChat || !window.currentActiveChat.phone) return;
 
-    const nameInput = document.getElementById('st-template-name');
+    const sel = document.getElementById('st-template-select');
     const langSelect = document.getElementById('st-template-lang');
-    const templateName = nameInput ? nameInput.value.trim() : '';
-    const languageCode = langSelect ? langSelect.value : 'pt_BR';
+    const templateName = sel ? sel.value.trim() : '';
 
     if (!templateName) {
-        alert('Digite o nome do template aprovado.');
+        alert('Escolha um template aprovado.');
         return;
     }
 
@@ -4595,6 +4660,31 @@ async function sendTemplateMessage() {
         ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
         : null;
     if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
+
+    const tpl = stTemplates.find(x => x.name === templateName);
+    // O idioma TEM que ser exatamente o que a Meta registrou pro template — usar o
+    // valor do <select> causava o erro #132001 ("does not exist in the translation").
+    const languageCode = ((tpl && tpl.language) || (langSelect ? langSelect.value : '') || 'pt_BR').trim();
+
+    // Barra cabeçalho de mídia / variável no cabeçalho / botão dinâmico / 2+
+    // variáveis no corpo — tudo que exige parâmetro que não temos como montar aqui
+    // (era isso que gerava #132000 "number of parameters does not match").
+    const analysis = tpl ? stAnalyzeTemplate(tpl) : { bodyVars: 0, block: null };
+    if (analysis.block) {
+        alert(`Não dá pra enviar "${templateName}" pelo chat: ${analysis.block}.\n\nUse um template só de texto (corpo com no máximo uma variável), ou recrie esse sem cabeçalho de mídia / botão dinâmico.`);
+        return;
+    }
+
+    // Corpo com 1 variável -> preenche com o nome do paciente (mesma convenção do disparo em massa).
+    let templateParams;
+    if (analysis.bodyVars === 1) {
+        const body = (tpl.components || []).find(c => c.type === 'BODY');
+        const m = ((body && body.text) || '').match(/\{\{\s*([\w\d_]+)\s*\}\}/);
+        const varName = m ? m[1] : null;
+        const named = varName && !/^\d+$/.test(varName);
+        const nome = (activeLead && activeLead.nome) || window.currentActiveChat.name || 'Cliente';
+        templateParams = [{ text: nome, parameter_name: named ? varName : undefined }];
+    }
 
     const modal = document.getElementById('modalSendTemplate');
 
@@ -4607,6 +4697,7 @@ async function sendTemplateMessage() {
                 isTemplate: true,
                 templateName: templateName,
                 languageCode: languageCode,
+                templateParams: templateParams,
                 message: 'template' // Placeholder exigido pelo backend
             })
         });
@@ -4614,7 +4705,9 @@ async function sendTemplateMessage() {
 
         if (json.success) {
             if (modal) modal.classList.remove('active');
-            if (nameInput) nameInput.value = '';
+            if (sel) sel.value = '';
+            const hint = document.getElementById('st-template-hint');
+            if (hint) hint.textContent = '';
             openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         } else {
             alert('Erro ao enviar template: ' + (json.error || 'Desconhecido'));
@@ -4624,19 +4717,41 @@ async function sendTemplateMessage() {
     }
 }
 
+// Trava anti-duplicidade do envio manual: evita mandar a mesma mensagem 2x sem
+// querer (Enter batido duas vezes, clique duplo no botão, reenvio por lag).
+let chatSendInFlight = false;
+const lastManualSendByPhone = {}; // phone -> { text, ts }
+const DUP_SEND_WINDOW_MS = 15000;
+const normalizeForDup = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+async function confirmDuplicateSend(phone, rawText) {
+    const prev = lastManualSendByPhone[phone];
+    if (!prev || prev.text !== normalizeForDup(rawText)) return true;
+    if ((Date.now() - prev.ts) >= DUP_SEND_WINDOW_MS) return true;
+    const segs = Math.max(1, Math.round((Date.now() - prev.ts) / 1000));
+    const pergunta = `Você enviou essa mesma mensagem há ${segs}s. Enviar de novo?`;
+    return typeof customConfirm === 'function'
+        ? customConfirm(pergunta, 'Mensagem repetida')
+        : Promise.resolve(confirm(pergunta));
+}
+
 async function sendActiveChatMessage() {
     const input = document.getElementById('chat-input-text');
     const rawMsg = input.value.trim();
     if (!rawMsg || !window.currentActiveChat) return;
+    if (chatSendInFlight) return; // já tem um envio em andamento — ignora o clique/Enter extra
     if (window.chatLockState && window.chatLockState.locked) {
         alert('Esta conversa está em atendimento por outro atendente. Aguarde ela ficar disponível.');
         return;
     }
+    // Trava ANTES do await do confirm, senão um segundo Enter no meio do microtask escapa.
+    chatSendInFlight = true;
+    if (!(await confirmDuplicateSend(window.currentActiveChat.phone, rawMsg))) { chatSendInFlight = false; return; }
 
     const activeLead = typeof leads !== 'undefined'
         ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
         : null;
-    if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
+    if (activeLead && !(await claimLeadConversation(activeLead.id))) { chatSendInFlight = false; return; }
 
     // Adiciona assinatura automática do atendente — mensagem primeiro, assinatura no final
     let msg = rawMsg;
@@ -4713,27 +4828,38 @@ async function sendActiveChatMessage() {
         }
     }
 
+    const targetPhone = window.currentActiveChat.phone;
     try {
         const quotedId = window.pendingReplyTo ? window.pendingReplyTo.id : undefined;
         cancelReplyTo();
 
-        const res = await fetch('/api/whatsapp/send', {
+        const doSend = (force) => fetch('/api/whatsapp/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to: window.currentActiveChat.phone,
-                message: msg,
-                isTemplate: false,
-                quoted_id: quotedId
-            })
+            body: JSON.stringify({ to: targetPhone, message: msg, isTemplate: false, quoted_id: quotedId, force })
         });
+
+        let res = await doSend(false);
+        if (res.status === 409) {
+            // Backend barrou como duplicada — confirma com o atendente e reenvia.
+            const j = await res.json().catch(() => ({}));
+            const ok = typeof customConfirm === 'function'
+                ? await customConfirm(j.error || 'Mensagem idêntica enviada há poucos segundos. Enviar mesmo assim?', 'Mensagem repetida')
+                : confirm(j.error || 'Enviar a mesma mensagem de novo?');
+            if (!ok) { openChat(targetPhone, window.currentActiveChat.name, true); return; }
+            res = await doSend(true);
+        }
         const json = await res.json();
         if(!json.success) {
             alert("Erro ao enviar: " + (json.error || "Desconhecido"));
+        } else {
+            lastManualSendByPhone[targetPhone] = { text: normalizeForDup(rawMsg), ts: Date.now() };
         }
-        openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
+        openChat(targetPhone, window.currentActiveChat.name, true);
     } catch(e) {
         alert("Erro na requisição: " + e.message);
+    } finally {
+        chatSendInFlight = false;
     }
 }
 

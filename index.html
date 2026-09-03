@@ -3325,9 +3325,6 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <div class="chat-filter-menu-item" data-filter="unread" onclick="setChatFilter('unread')">
                                 <i class="fa-solid fa-comment-dots"></i> Não lidos
                             </div>
-                            <div class="chat-filter-menu-item" data-filter="qualified" onclick="setChatFilter('qualified')">
-                                <i class="fa-solid fa-bullseye"></i> Qualificados aguardando
-                            </div>
                             <div class="chat-filter-menu-item" data-filter="awaiting" onclick="setChatFilter('awaiting')">
                                 <i class="fa-solid fa-hourglass-half"></i> Aguardando resposta
                             </div>
@@ -3847,8 +3844,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <div class="form-grid">
                 <div class="form-group full">
-                    <label>Nome do Template Aprovado <span class="required">*</span></label>
-                    <input type="text" id="st-template-name" class="form-control" placeholder="ex: confirmacao_consulta">
+                    <label>Template Aprovado <span class="required">*</span></label>
+                    <select id="st-template-select" class="form-control" onchange="onTemplatePick()">
+                        <option value="">Carregando templates…</option>
+                    </select>
+                    <div id="st-template-hint" style="margin-top: 4px; font-size: 0.78rem; color: var(--text-muted); line-height: 1.4;"></div>
                 </div>
                 <div class="form-group full">
                     <label>Idioma do Template</label>

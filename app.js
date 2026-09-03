@@ -953,8 +953,12 @@ if (!nome.includes(searchVal) && !tel.includes(searchVal)) return false;
 }
 // Responsável
 if (ownerVal && lead.owner_id !== ownerVal) return false;
-// Origem
-if (origemVal && lead.origem !== origemVal) return false;
+// Origem — prefixo, não igualdade: lead de anúncio vem como "Meta Ads: <título do anúncio>",
+// então "Meta Ads" tem que casar com isso também. As demais origens são exatas e o startsWith cobre.
+if (origemVal) {
+    const o = (lead.origem || '').toLowerCase();
+    if (!o.startsWith(origemVal.toLowerCase())) return false;
+}
 // Apenas Agendados (checa se está na coluna Agendado ou tem agendamento)
 if (hasSchedule && lead.column !== 'col-agendado' && !lead.agendamento) return false;
 // Filtro de data (data de criação do lead)

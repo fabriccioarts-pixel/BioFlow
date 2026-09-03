@@ -710,9 +710,29 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
     const phone_id = process.env.META_WA_PHONE_ID;
     const token = process.env.META_WA_ACCESS_TOKEN;
-    
+
     if (!phone_id || !token) {
         return res.status(500).json({ error: "Credenciais do WhatsApp não configuradas no servidor." });
+    }
+
+    // Trava anti-duplicidade: a MESMA mensagem de texto pro mesmo número em poucos
+    // segundos é quase sempre clique/Enter duplicado ou reenvio por lag. Bloqueia
+    // com 409, a menos que o cliente reenvie de propósito com force:true.
+    if (!isReaction && !isTemplate && typeof message === 'string' && message.trim()
+        && !message.includes('[FILE:') && !message.includes('[MEDIALIB:') && !req.body.force) {
+        try {
+            const dv = phoneVariants(to);
+            const recent = await queryD1(
+                `SELECT id FROM wa_messages
+                 WHERE direction = 'out' AND message = ? AND phone IN (${dv.map(() => '?').join(', ')})
+                   AND timestamp >= datetime('now', '-15 seconds')
+                 LIMIT 1`,
+                [message, ...dv]
+            );
+            if (recent && recent[0]) {
+                return res.status(409).json({ error: 'Mensagem idêntica enviada há poucos segundos.', duplicate: true });
+            }
+        } catch (e) { /* se a checagem falhar, não bloqueia o envio */ }
     }
 
     try {
@@ -860,10 +880,16 @@ app.post('/api/whatsapp/send', async (req, res) => {
                         })
                     }];
                 }
-                // O front manda "message: 'template'" só como placeholder pra satisfazer o
-                // payload — sem isso, o balão do chat mostrava literalmente a palavra
-                // "template" em vez de dizer qual template foi enviado.
-                db_message_body = `📋 Template enviado: *${templateName || 'hello_world'}*`;
+                // O front manda "message: 'template'" só como placeholder. Pro balão
+                // do chat, monta o texto real do template (com as variáveis já
+                // preenchidas) em vez de só o nome. Se a busca do modelo falhar,
+                // cai no fallback com o nome.
+                try {
+                    const tMeta = await getWhatsappTemplateMeta(templateName || 'hello_world');
+                    db_message_body = renderTemplateForHistory(templateName || 'hello_world', tMeta, templateParams);
+                } catch (e) {
+                    db_message_body = `📋 Template enviado: *${templateName || 'hello_world'}*`;
+                }
             } else if (isMedia && mediaId) {
                 data.type = mediaType;
                 data[mediaType] = {
@@ -1021,6 +1047,8 @@ async function getWhatsappTemplateMeta(name) {
     if (row.status !== 'APPROVED') throw new Error(`Template "${key}" não está aprovado (status ${row.status}).`);
 
     const bodyComp = (row.components || []).find(c => c.type === 'BODY');
+    const headerComp = (row.components || []).find(c => c.type === 'HEADER');
+    const footerComp = (row.components || []).find(c => c.type === 'FOOTER');
     const varMatches = ((bodyComp && bodyComp.text) || '').match(/\{\{\s*[\w\d_]+\s*\}\}/g) || [];
     const bodyVarName = varMatches[0] ? varMatches[0].replace(/[{}\s]/g, '') : null;
     const meta = {
@@ -1029,9 +1057,35 @@ async function getWhatsappTemplateMeta(name) {
         bodyVarCount: varMatches.length,
         bodyVarName,
         isNamedParam: !!bodyVarName && !/^\d+$/.test(bodyVarName),
+        bodyText: (bodyComp && bodyComp.text) || '',
+        headerText: (headerComp && String(headerComp.format || 'TEXT').toUpperCase() === 'TEXT') ? (headerComp.text || '') : '',
+        headerFormat: headerComp ? String(headerComp.format || 'TEXT').toUpperCase() : null,
+        footerText: (footerComp && footerComp.text) || '',
     };
     _waTemplateMetaCache.set(key, { at: Date.now(), meta });
     return meta;
+}
+
+// Monta o texto legível de um template (com as variáveis preenchidas) pra salvar
+// no histórico do chat — assim o balão mostra a mensagem de verdade, não só o
+// nome do template.
+function renderTemplateForHistory(templateName, meta, templateParams) {
+    const params = Array.isArray(templateParams) ? templateParams : [];
+    const fill = (txt) => String(txt || '').replace(/\{\{\s*([\w\d_]+)\s*\}\}/g, (m, key) => {
+        // {{1}} -> posicional; {{nome}} -> casa pelo parameter_name, senão cai no 1º
+        let p;
+        if (/^\d+$/.test(key)) p = params[parseInt(key, 10) - 1];
+        else p = params.find(x => x && typeof x === 'object' && x.parameter_name === key) || params[0];
+        const val = p && typeof p === 'object' ? p.text : p;
+        return (val != null && val !== '') ? val : m;
+    });
+    const parts = [];
+    if (meta && meta.headerFormat && meta.headerFormat !== 'TEXT') parts.push(`[${meta.headerFormat.toLowerCase()}]`);
+    else if (meta && meta.headerText) parts.push(fill(meta.headerText));
+    if (meta && meta.bodyText) parts.push(fill(meta.bodyText));
+    if (meta && meta.footerText) parts.push(meta.footerText);
+    const corpo = parts.join('\n\n').trim();
+    return corpo ? `📋 _Template: ${templateName}_\n${corpo}` : `📋 Template enviado: *${templateName}*`;
 }
 
 // Envia um template aprovado da Meta por um caminho interno (follow-up, fluxos) —
@@ -1055,10 +1109,12 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
         type: 'template',
         template: { name, language: { code: meta.language || 'pt_BR' } },
     };
+    let bodyParams = null;
     if (meta.bodyVarCount === 1) {
         const param = { type: 'text', text: String(opts.nome || 'Cliente') };
         if (meta.isNamedParam) param.parameter_name = meta.bodyVarName;
-        data.template.components = [{ type: 'body', parameters: [param] }];
+        bodyParams = [param];
+        data.template.components = [{ type: 'body', parameters: bodyParams }];
     }
 
     const sendRes = await postMetaMessage(phone_id, token, data);
@@ -1070,7 +1126,7 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
     const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
     await queryD1(
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [msg_id, finalTo, 'out', `📋 Template enviado: *${name}*`, 'sent', opts.sentBy || 'followup']
+        [msg_id, finalTo, 'out', renderTemplateForHistory(name, meta, bodyParams), 'sent', opts.sentBy || 'followup']
     );
     try {
         const v = phoneVariants(finalTo);
@@ -1729,14 +1785,19 @@ app.post('/api/whatsapp/delete-message', async (req, res) => {
 // 4. Listar Chats Recentes (Contatos)
 app.get('/api/whatsapp/chats', async (req, res) => {
     try {
+        // message/direction/status precisam vir da ÚLTIMA mensagem da conversa.
+        // Não dá pra confiar no "bare column + MAX()" do SQLite aqui (o D1 não
+        // garante que a coluna solta venha da linha do MAX) — por isso subquery
+        // explícita ordenando por timestamp e, no empate de segundo, por rowid.
         const rows = await queryD1(`
-            SELECT phone,
-                   MAX(timestamp) as last_interaction,
-                   message,
-                   direction,
-                   SUM(CASE WHEN direction = 'in' AND (status IS NULL OR status != 'read') THEN 1 ELSE 0 END) as unread_count
-            FROM wa_messages
-            GROUP BY phone
+            SELECT m.phone,
+                   MAX(m.timestamp) as last_interaction,
+                   (SELECT x.message   FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as message,
+                   (SELECT x.direction FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as direction,
+                   (SELECT x.status    FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as status,
+                   SUM(CASE WHEN m.direction = 'in' AND (m.status IS NULL OR m.status != 'read') THEN 1 ELSE 0 END) as unread_count
+            FROM wa_messages m
+            GROUP BY m.phone
             ORDER BY last_interaction DESC
         `);
         res.json({ success: true, data: rows });
