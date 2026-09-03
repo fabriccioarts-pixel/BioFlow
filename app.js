@@ -7985,15 +7985,18 @@ async function openLeadProfile(leadId) {
     // Origem
     const origemEl = document.getElementById('lpp-origem');
     const isMeta = lead.origem && (lead.origem.toLowerCase().includes('meta') || lead.origem.toLowerCase().includes('facebook') || lead.origem.toLowerCase().includes('instagram'));
+    const ctwaId = lead.ctwa_clid && String(lead.ctwa_clid).trim();
     const hasFbId = lead.fb_click_id && lead.fb_click_id.trim();
+    const clickId = ctwaId || (hasFbId ? lead.fb_click_id : '');
+    const clickLabel = ctwaId ? 'ID do Clique Meta (WhatsApp Ads)' : 'ID do Anúncio';
     origemEl.innerHTML = `
         <span class="lpp-origem-badge ${isMeta ? 'lpp-origem-meta' : 'lpp-origem-organic'}">
             <i class="fa-${isMeta ? 'brands fa-meta' : 'solid fa-seedling'}"></i>
             ${lead.origem || 'Orgânico'}
         </span>
-        ${hasFbId ? `<div style="margin-top:0.5rem;">
-            <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:0.25rem;">ID do Anúncio</div>
-            <span class="lpp-ad-id">${lead.fb_click_id}</span>
+        ${clickId ? `<div style="margin-top:0.5rem;">
+            <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:0.25rem;">${clickLabel}</div>
+            <span class="lpp-ad-id">${escapeHtml(String(clickId))}</span>
         </div>` : ''}
     `;
 

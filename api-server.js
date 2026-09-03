@@ -358,9 +358,10 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
 
                 // 2. Verifica se o lead já existe no Kanban — casa qualquer forma equivalente
                 //    do número (com/sem 55, com/sem o 9º dígito), não só substring.
+                await ensureCapiColumns(); // ctwa_clid precisa existir pro SELECT/INSERT abaixo
                 const variants = phoneVariants(from);
                 const placeholders = variants.map(() => '?').join(', ');
-                const leadRows = await queryD1(`SELECT id, nome FROM leads WHERE telefone IN (${placeholders})`, variants);
+                const leadRows = await queryD1(`SELECT id, nome, ctwa_clid FROM leads WHERE telefone IN (${placeholders})`, variants);
 
                 // 3. Se não existe, cria um novo Lead no Kanban na coluna Novos (telefone sempre no formato canônico)
                 let resolvedLeadId = null;
@@ -398,10 +399,17 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                 } else {
                     resolvedLeadId = leadRows[0].id;
+                    const existingLead = leadRows[0];
+                    // Lead que volta clicando num anúncio: grava o ctwa_clid se ainda não tiver (first-touch).
+                    if (ctwaClid && !existingLead.ctwa_clid) {
+                        try {
+                            await queryD1('UPDATE leads SET ctwa_clid = ?, ad_referral = ? WHERE id = ?', [ctwaClid, adRefJson, existingLead.id]);
+                            console.log(`ctwa_clid gravado num lead existente (${from})`);
+                        } catch (e) { console.error('Falha ao gravar ctwa_clid em lead existente:', e.message); }
+                    }
                     if (profileName !== 'Lead WhatsApp') {
                         // O nome do perfil nem sempre vem na primeira mensagem (depende de privacidade/tipo de mensagem).
                         // Se o lead ainda está com o nome genérico e uma mensagem posterior trouxe o nome real, atualiza.
-                        const existingLead = leadRows[0];
                         if (!existingLead.nome || existingLead.nome === 'Lead WhatsApp') {
                             await queryD1('UPDATE leads SET nome = ? WHERE id = ?', [profileName, existingLead.id]);
                             console.log(`Nome do lead atualizado a partir do WhatsApp: ${profileName} (${from})`);
@@ -894,6 +902,97 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
     try {
         const v = phoneVariants(to);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+    } catch (e) {}
+    return resultJson;
+}
+
+// Cache curto dos metadados de template da Meta (nome -> idioma / nº de variáveis
+// no corpo). Evita bater na Graph API a cada tick do follow-up; TTL de 5 min é
+// suficiente porque template aprovado quase nunca muda.
+const _waTemplateMetaCache = new Map();
+async function getWhatsappTemplateMeta(name) {
+    const key = String(name || '').trim();
+    if (!key) throw new Error('Nome do template vazio.');
+    const cached = _waTemplateMetaCache.get(key);
+    if (cached && (Date.now() - cached.at) < 5 * 60 * 1000) return cached.meta;
+
+    const wabaId = process.env.META_WABA_ID;
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!wabaId || !token) throw new Error('META_WABA_ID / token do WhatsApp não configurados no servidor.');
+
+    const url = `https://graph.facebook.com/v20.0/${wabaId}/message_templates?name=${encodeURIComponent(key)}&fields=name,status,category,language,components&limit=20`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(json.error?.message || 'Erro ao buscar template na Meta.');
+
+    // O mesmo nome pode existir em vários idiomas — prioriza um aprovado em pt.
+    const rows = (json.data || []).filter(t => t.name === key);
+    const row = rows.find(t => t.status === 'APPROVED' && /^pt/i.test(t.language || ''))
+        || rows.find(t => t.status === 'APPROVED')
+        || rows[0];
+    if (!row) throw new Error(`Template "${key}" não encontrado na Meta.`);
+    if (row.status !== 'APPROVED') throw new Error(`Template "${key}" não está aprovado (status ${row.status}).`);
+
+    const bodyComp = (row.components || []).find(c => c.type === 'BODY');
+    const varMatches = ((bodyComp && bodyComp.text) || '').match(/\{\{\s*[\w\d_]+\s*\}\}/g) || [];
+    const bodyVarName = varMatches[0] ? varMatches[0].replace(/[{}\s]/g, '') : null;
+    const meta = {
+        language: row.language || 'pt_BR',
+        category: row.category || null,
+        bodyVarCount: varMatches.length,
+        bodyVarName,
+        isNamedParam: !!bodyVarName && !/^\d+$/.test(bodyVarName),
+    };
+    _waTemplateMetaCache.set(key, { at: Date.now(), meta });
+    return meta;
+}
+
+// Envia um template aprovado da Meta por um caminho interno (follow-up, fluxos) —
+// mesmo payload de /api/whatsapp/send, sem a parte de mídia/reação. Preenche no
+// máximo UMA variável de corpo, com opts.nome (mesma convenção do disparo em
+// massa). Template com 2+ variáveis não é suportado por aqui.
+async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
+    const phone_id = process.env.META_WA_PHONE_ID;
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
+
+    const name = String(templateName || '').trim();
+    const meta = await getWhatsappTemplateMeta(name);
+    if (meta.bodyVarCount > 1) {
+        throw new Error(`Template "${name}" tem ${meta.bodyVarCount} variáveis no corpo; o follow-up só suporta 0 ou 1.`);
+    }
+
+    const data = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: { name, language: { code: meta.language || 'pt_BR' } },
+    };
+    if (meta.bodyVarCount === 1) {
+        const param = { type: 'text', text: String(opts.nome || 'Cliente') };
+        if (meta.isNamedParam) param.parameter_name = meta.bodyVarName;
+        data.template.components = [{ type: 'body', parameters: [param] }];
+    }
+
+    const response = await fetch(`https://graph.facebook.com/v20.0/${phone_id}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    const resultJson = await response.json();
+    if (!response.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+
+    const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
+    await queryD1(
+        'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [msg_id, to, 'out', `📋 Template enviado: *${name}*`, 'sent', opts.sentBy || 'followup']
+    );
+    try {
+        const v = phoneVariants(to);
+        await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+    } catch (e) {}
+    try {
+        await queryD1('INSERT INTO wa_template_sends (phone, template_name) VALUES (?, ?)', [to, name]);
     } catch (e) {}
     return resultJson;
 }
@@ -6431,8 +6530,8 @@ app.all('/api/flow-tick', async (req, res) => {
 // ==========================================
 // Quando um lead para de responder (última mensagem da conversa foi nossa),
 // envia lembretes numa cadência configurável e para assim que ele responder.
-// Fase 1: só texto livre dentro da janela de 24h do WhatsApp; passos fora da
-// janela são pulados (templates ficam pra Fase 2).
+// Dentro da janela de 24h do WhatsApp vai texto livre; fora dela vai o template
+// aprovado escolhido no passo (se houver) — senão o passo é pulado.
 
 const FOLLOWUP_DEFAULT = {
     ativo: false,
@@ -6584,11 +6683,18 @@ async function followupTick() {
             const within24 = lastInDate ? (Date.now() - lastInDate.getTime()) < 24 * 3600000 : false;
 
             const texto = flowInterpolate(step.texto, { nome: lead.nome || '', telefone: lead.telefone || '' });
+            const stepTemplate = String(step.template_name || '').trim();
             if (within24 && texto.trim()) {
                 try { await sendWhatsappTextInternal(lead.telefone, texto, 'followup'); }
                 catch (e) { console.error('follow-up: envio falhou:', e.message); }
+            } else if (stepTemplate) {
+                // Fora da janela de 24h (ou passo só com template): texto livre não
+                // passa na API oficial — manda o template aprovado. O nome do lead
+                // vai como única variável de corpo, se o template tiver uma.
+                try { await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: lead.nome || 'Cliente', sentBy: 'followup' }); }
+                catch (e) { console.error('follow-up: template falhou:', e.message); }
             }
-            // fora da janela (ou passo sem texto): pulado — templates ficam pra Fase 2.
+            // senão (fora da janela e sem template configurado): passo pulado.
 
             const nextIdx = run.step_idx + 1;
             const anchor = followupParseTs(run.anchor_out_ts) || new Date();

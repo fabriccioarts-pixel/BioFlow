@@ -2207,12 +2207,15 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         </div>
     `;
 
+    const ctwaClid = lead && lead.ctwa_clid ? lead.ctwa_clid : '';
     const fbClickId = lead && lead.fb_click_id ? lead.fb_click_id : '';
+    const trackId = ctwaClid || fbClickId;
+    const trackLabel = ctwaClid ? 'ID do Clique Meta (WhatsApp Ads)' : 'FB Click ID';
     const rastreamentoHTML = `
         <div>
             <div class="lead-panel-label"><i class="fa-solid fa-satellite-dish"></i> Rastreamento</div>
-            ${fbClickId
-                ? `<div class="lead-panel-card" style="font-size: 0.75rem; color: var(--text-main); word-break: break-all;"><span style="color: var(--text-muted);">FB Click ID:</span><br>${escapeHtml(fbClickId)}</div>`
+            ${trackId
+                ? `<div class="lead-panel-card" style="font-size: 0.75rem; color: var(--text-main); word-break: break-all;"><span style="color: var(--text-muted);">${trackLabel}:</span><br>${escapeHtml(trackId)}</div>`
                 : `<div class="lead-panel-empty"><i class="fa-regular fa-circle-xmark"></i> Sem dados de rastreamento</div>`
             }
         </div>
