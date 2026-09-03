@@ -4538,7 +4538,7 @@ async function sendMetaCapiEvent(eventName, {
         return { ok: true, result: j };
     } catch (e) {
         console.error(`CAPI ${eventName} exceção:`, e.message);
-        return { ok: false, error: e };
+        return { ok: false, error: { message: e.message, name: e.name } };
     } finally {
         clearTimeout(to);
     }
@@ -4627,18 +4627,29 @@ app.get('/api/capi-selftest', async (req, res) => {
         if (ev === 'Lead')     where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != ''`;
         if (ev === 'Schedule') where += ` AND column_id = 'col-agendado'`;
         if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
-        const pend = await queryD1(`SELECT id FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
-        const ids = (pend || []).map(r => r.id);
-        let enviados = 0, falharam = 0, primeiroErro = null;
-        for (const lid of ids) {
-            const r = await fireCapiForLead(lid, ev);
+        const pend = await queryD1(`SELECT id, telefone, ctwa_clid FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
+        const linhas = pend || [];
+        let enviados = 0, falharam = 0, primeiroErro = null, primeiroErroLead = null;
+        for (const linha of linhas) {
+            const r = await fireCapiForLead(linha.id, ev);
             if (r && r.ok) { enviados++; }
             else {
                 falharam++;
-                if (!primeiroErro) primeiroErro = (r && (r.error?.message || r.error || r.reason)) || 'sem detalhe';
+                if (!primeiroErro) {
+                    // objeto de erro COMPLETO do Meta (message, code, error_subcode,
+                    // error_user_title, error_user_msg, fbtrace_id) — é o que revela
+                    // qual parâmetro o Meta está recusando.
+                    primeiroErro = (r && (r.error || r.reason)) || 'sem detalhe';
+                    primeiroErroLead = {
+                        lead_id: linha.id,
+                        telefone_len: (linha.telefone || '').replace(/\D/g, '').length,
+                        ctwa_clid_len: (linha.ctwa_clid || '').length,
+                        ctwa_clid_preview: (linha.ctwa_clid || '').slice(0, 12)
+                    };
+                }
             }
         }
-        return res.json({ cfg, colunas_leads, fire_pendentes: { evento: ev, encontrados: ids.length, enviados, falharam, primeiro_erro: primeiroErro } });
+        return res.json({ cfg, colunas_leads, fire_pendentes: { evento: ev, encontrados: linhas.length, enviados, falharam, primeiro_erro: primeiroErro, primeiro_erro_lead: primeiroErroLead } });
     }
 
     if (req.query.send !== '1') {
