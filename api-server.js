@@ -1175,7 +1175,7 @@ Como conduzir:
 - Faça descoberta: entenda o objetivo, há quanto tempo, o que já tentou, o impacto no dia a dia. Uma pergunta por vez.
 - Depois da descoberta, apresente o procedimento com profundidade usando o contexto acima: como funciona, benefícios, o que esperar, cuidados. NÃO invente dados.
 - Trate objeções com empatia ("vou pensar", medo, falta de tempo, "depois eu vejo"): acolha, reforce segurança e resultados, e volte a propor a avaliação.
-- Termine TODA mensagem com um próximo passo: convide para agendar a avaliação e ofereça duas opções ("prefere de manhã ou à tarde?", "essa semana ou a próxima?").
+- Termine a RESPOSTA (não cada frase) com um próximo passo: convide para agendar a avaliação e ofereça duas opções ("prefere de manhã ou à tarde?", "essa semana ou a próxima?"). UMA vez só, no fim.
 - NUNCA invente preço, promoção ou horário disponível. Se perguntarem valor: explique que depende da avaliação, que lá a pessoa recebe o plano e o valor certos, e proponha agendar.
 - Nunca diga que é uma IA/robô/sistema.
 
@@ -1190,6 +1190,16 @@ QUANDO PARAR (handoff): só então responda EXATAMENTE a palavra QUALIFICADO_SIL
 - insistiu num valor exato mesmo depois de você já ter explicado;
 - perguntou sobre um agendamento que já existe, remarcação, ou fez uma dúvida médica específica.
 Fora desses casos, você NUNCA responde o token.`;
+
+// Sempre anexada (qualquer modo). Corrige o vício de mandar 5-6 balões
+// repetindo a mesma ideia e a mesma pergunta.
+const WHATSAPP_AI_FORMAT_RULE = `
+
+FORMATO DA RESPOSTA (OBRIGATÓRIO):
+- No MÁXIMO 2 mensagens curtas, separadas por UMA linha em branco. Cada mensagem com 1 ou 2 frases.
+- NUNCA repita a mesma informação nem a mesma pergunta na mesma resposta.
+- No máximo UMA pergunta na resposta inteira, sempre na última mensagem.
+- Escreva como no WhatsApp: direto, sem "Prezado(a)", sem listas, sem títulos.`;
 
 async function getWhatsappAiContext() {
     try {
@@ -1295,7 +1305,7 @@ async function callGeminiForWhatsappReply(phone) {
     const context = await getWhatsappAiContext();
     const mode = await getWhatsappAiMode();
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
-    const systemPrompt = context + behaviorRule;
+    const systemPrompt = context + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
@@ -1556,8 +1566,14 @@ async function aiStillOnForPhone(phone) {
 // Com ritmo humano ligado: pausa de leitura variável, tempo de digitação
 // proporcional ao tamanho, jitter, distração ocasional e "digitando…".
 async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0) {
-    const parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    let parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
     if (!parts.length) return;
+    // Trava dura: nunca mais que 3 balões por resposta (o modelo às vezes cospe
+    // 5-6). O excedente é juntado na última mensagem.
+    const AI_MAX_CHUNKS = 3;
+    if (parts.length > AI_MAX_CHUNKS) {
+        parts = [...parts.slice(0, AI_MAX_CHUNKS - 1), parts.slice(AI_MAX_CHUNKS - 1).join('\n\n')];
+    }
 
     const cfg = await getWhatsappAiTiming();
 
