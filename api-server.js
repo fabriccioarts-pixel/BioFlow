@@ -4478,7 +4478,7 @@ function leadPurchaseValueBRL(lead) {
 
 // Envia UM evento pro Conversions API. Retorna { ok, ... } e nunca lança.
 async function sendMetaCapiEvent(eventName, {
-    telefone, email, ctwa_clid, eventId, eventTimeSec, value, currency = 'BRL'
+    telefone, email, nome, externalId, ctwa_clid, eventId, eventTimeSec, value, currency = 'BRL'
 } = {}) {
     // .trim() defensivo: colar env var na Vercel costuma deixar \n / espaço no fim.
     const siteDatasetId = (process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || '').trim();
@@ -4507,6 +4507,12 @@ async function sendMetaCapiEvent(eventName, {
 
     const phone = (telefone || '').replace(/\D/g, '');   // 5561999999999
     const isMsg = !!ctwa_clid;
+
+    // nome completo -> fn / ln (tira sufixo [MKT] do CRM, colapsa espaços)
+    const nomeLimpo = String(nome || '').replace(/\[mkt\]/ig, '').replace(/\s+/g, ' ').trim();
+    const nomePartes = nomeLimpo ? nomeLimpo.split(' ') : [];
+    const fn = nomePartes[0] || '';
+    const ln = nomePartes.length > 1 ? nomePartes.slice(1).join(' ') : '';
 
     // Pra action_source 'business_messaging' (Click-to-WhatsApp) o Meta só aceita
     // um punhado de event_name. Testado: 'Lead', 'Schedule', 'CompleteRegistration',
@@ -4539,6 +4545,9 @@ async function sendMetaCapiEvent(eventName, {
         user_data: {
             ph: phone ? [sha(phone)] : undefined,
             em: email ? [sha(email)] : undefined,
+            fn: fn ? [sha(fn)] : undefined,
+            ln: ln ? [sha(ln)] : undefined,
+            external_id: externalId ? [sha(String(externalId))] : undefined,
             ctwa_clid: ctwa_clid || undefined,          // CRU, sem hash
             // business_messaging exige page_id OU whatsapp_business_account_id (subcode 2804116)
             whatsapp_business_account_id: isMsg ? (wabaId || undefined) : undefined
@@ -4583,7 +4592,7 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
     let lead;
     try {
         const rows = await queryD1(
-            `SELECT telefone, email, ctwa_clid, valor_recebido, orcamento, ${col} AS sent FROM leads WHERE id = ?`,
+            `SELECT telefone, email, nome, ctwa_clid, valor_recebido, orcamento, ${col} AS sent FROM leads WHERE id = ?`,
             [leadId]
         );
         lead = rows && rows[0];
@@ -4602,6 +4611,8 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
     const res = await sendMetaCapiEvent(eventName, {
         telefone: lead.telefone,
         email: lead.email,
+        nome: lead.nome,
+        externalId: leadId,
         ctwa_clid: lead.ctwa_clid,
         eventId: `${eventName}:${leadId}`,
         ...extra
@@ -4686,16 +4697,16 @@ app.get('/api/capi-selftest', async (req, res) => {
         const nome = String(req.query.probe).slice(0, 40);
         let lr = null;
         if (req.query.lead) {
-            lr = await queryD1('SELECT id, telefone, email, ctwa_clid FROM leads WHERE id = ?', [String(req.query.lead)]).catch(() => null);
+            lr = await queryD1('SELECT id, telefone, email, nome, ctwa_clid FROM leads WHERE id = ?', [String(req.query.lead)]).catch(() => null);
         }
         if (!lr || !lr[0]) {
             // fallback: pega o lead mais recente que tenha ctwa_clid
-            lr = await queryD1("SELECT id, telefone, email, ctwa_clid FROM leads WHERE ctwa_clid IS NOT NULL AND ctwa_clid != '' ORDER BY created_at DESC LIMIT 1", []).catch(() => null);
+            lr = await queryD1("SELECT id, telefone, email, nome, ctwa_clid FROM leads WHERE ctwa_clid IS NOT NULL AND ctwa_clid != '' ORDER BY created_at DESC LIMIT 1", []).catch(() => null);
         }
         const ld = lr && lr[0];
         if (!ld) return res.json({ cfg, colunas_leads, probe: { erro: 'nenhum lead com ctwa_clid encontrado — passe &lead=<id>' } });
         const r = await sendMetaCapiEvent(nome, {
-            telefone: ld.telefone, email: ld.email, ctwa_clid: ld.ctwa_clid,
+            telefone: ld.telefone, email: ld.email, nome: ld.nome, externalId: ld.id, ctwa_clid: ld.ctwa_clid,
             eventId: `probe:${nome}:${ld.id}:${Date.now()}`
         });
         return res.json({ cfg, colunas_leads, probe: { event_name: nome, lead_id: ld.id, tinha_ctwa_clid: !!ld.ctwa_clid, resposta_meta: r } });
@@ -5527,7 +5538,8 @@ app.post('/api/agendar', async (req, res) => {
             } else {
                 sendMetaCapiEvent('Schedule', {
                     telefone: payload.patient_phone,
-                    email: payload.patient_email
+                    email: payload.patient_email,
+                    nome: payload.patient_name
                 });
             }
         }
