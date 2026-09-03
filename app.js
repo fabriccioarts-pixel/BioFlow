@@ -970,7 +970,7 @@ return true;
 });
 
 // Ordenação dos cards (seletor "Ordenar cards" — persistido em localStorage).
-const sortKey = localStorage.getItem('kanban-sort') || 'created_asc';
+const sortKey = localStorage.getItem('kanban-sort') || 'created_desc';
 const sortSel = document.getElementById('kanban-sort');
 if (sortSel && sortSel.value !== sortKey) sortSel.value = sortKey;
 const sortedLeads = sortLeadsForBoard(filteredLeads, sortKey);
