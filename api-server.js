@@ -6829,6 +6829,18 @@ app.all('/api/flow-tick', async (req, res) => {
 
     try {
         const now = flowDbTime();
+
+        // Heartbeat: guarda quando o tick rodou. Abrir /api/flow-tick logado mostra
+        // "prev_run" = quando foi a última execução — se for ~1 min atrás, o pinger
+        // externo está vivo; se for null / horas atrás, o pinger parou.
+        let prevRun = null;
+        try {
+            const pr = await queryD1("SELECT value FROM crm_settings WHERE key = 'flow_tick_last_run'");
+            prevRun = pr && pr[0] ? pr[0].value : null;
+        } catch (e) {}
+        queryD1("INSERT INTO crm_settings (key, value) VALUES ('flow_tick_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [now]).catch(() => {});
+        const prevRunAgoSec = prevRun ? Math.round((Date.now() - (followupParseTs(prevRun)?.getTime() || Date.now())) / 1000) : null;
+
         const due = await queryD1(
             "SELECT * FROM crm_flow_runs WHERE status IN ('sleeping','waiting_reply') AND next_wake_at IS NOT NULL AND next_wake_at <= ? ORDER BY next_wake_at ASC LIMIT 25", [now]);
         let processed = 0;
@@ -6848,7 +6860,7 @@ app.all('/api/flow-tick', async (req, res) => {
         let followup = { opened: 0, processed: 0 };
         try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
 
-        res.json({ processed, followup });
+        res.json({ processed, followup, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
