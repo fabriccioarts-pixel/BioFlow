@@ -4484,6 +4484,7 @@ async function sendMetaCapiEvent(eventName, {
     const datasetId = (process.env.META_CAPI_DATASET_ID || process.env.META_PIXEL_ID || '').trim();
     const token     = (process.env.META_CAPI_TOKEN     || process.env.META_ACCESS_TOKEN || '').trim();
     const testCode  = (process.env.META_CAPI_TEST_EVENT_CODE || '').trim();
+    const wabaId    = (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim();
     if (!datasetId || !token) {
         console.warn(`CAPI ${eventName} PULADO: falta ${!datasetId ? 'META_CAPI_DATASET_ID/META_PIXEL_ID' : 'META_CAPI_TOKEN/META_ACCESS_TOKEN'} no ambiente`);
         return { ok: false, skipped: true };
@@ -4511,6 +4512,9 @@ async function sendMetaCapiEvent(eventName, {
         return { ok: false, unsupportedForCtwa: true };
     }
     const finalEventName = isMsg ? (MSG_EVENT_MAP[eventName] || eventName) : eventName;
+    if (isMsg && !wabaId) {
+        console.warn(`CAPI ${eventName}: business_messaging sem META_WABA_ID — o Meta vai recusar (2804116)`);
+    }
 
     // event_time: nunca no futuro, nunca > ~7 dias atrás (janela do CTWA).
     const now = Math.floor(Date.now() / 1000);
@@ -4525,7 +4529,9 @@ async function sendMetaCapiEvent(eventName, {
         user_data: {
             ph: phone ? [sha(phone)] : undefined,
             em: email ? [sha(email)] : undefined,
-            ctwa_clid: ctwa_clid || undefined          // CRU, sem hash
+            ctwa_clid: ctwa_clid || undefined,          // CRU, sem hash
+            // business_messaging exige page_id OU whatsapp_business_account_id (subcode 2804116)
+            whatsapp_business_account_id: isMsg ? (wabaId || undefined) : undefined
         }
     };
     if (eventName === 'Purchase' && value != null) {
@@ -4614,7 +4620,10 @@ app.get('/api/capi-selftest', async (req, res) => {
             : (process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN (fallback)' : null),
         graph_version: META_GRAPH,
         test_event_code: (process.env.META_CAPI_TEST_EVENT_CODE || '').trim() || null,
-        test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length
+        test_event_code_raw_len: (process.env.META_CAPI_TEST_EVENT_CODE || '').length,
+        waba_id: (process.env.META_CAPI_WABA_ID || process.env.META_WABA_ID || '').trim() || null,
+        waba_id_source: process.env.META_CAPI_WABA_ID ? 'META_CAPI_WABA_ID'
+            : (process.env.META_WABA_ID ? 'META_WABA_ID' : null)
     };
     // Checa se as colunas novas existem na tabela leads (o caminho do arrasto depende delas).
     await ensureCapiColumns(); // cria as colunas se faltarem — só de abrir esse endpoint já conserta
