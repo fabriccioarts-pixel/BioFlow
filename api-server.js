@@ -4497,12 +4497,18 @@ async function sendMetaCapiEvent(eventName, {
     const phone = (telefone || '').replace(/\D/g, '');   // 5561999999999
     const isMsg = !!ctwa_clid;
 
+    // Pra action_source 'business_messaging' o Meta usa um vocabulário próprio de
+    // event_name — 'Lead' cru é recusado (error_subcode 2804066). 'LeadSubmitted'
+    // é o equivalente. 'Schedule' e 'Purchase' valem nos dois.
+    const MSG_EVENT_MAP = { Lead: 'LeadSubmitted' };
+    const finalEventName = isMsg ? (MSG_EVENT_MAP[eventName] || eventName) : eventName;
+
     // event_time: nunca no futuro, nunca > ~7 dias atrás (janela do CTWA).
     const now = Math.floor(Date.now() / 1000);
     const t = Math.min(now, Math.max(eventTimeSec || now, now - 6 * 86400));
 
     const evt = {
-        event_name: eventName,                       // Lead | Schedule | Purchase
+        event_name: finalEventName,                   // Lead->LeadSubmitted (msg) | Schedule | Purchase
         event_time: t,
         event_id: eventId || `${eventName}:${phone}`,   // dedup
         action_source: isMsg ? 'business_messaging' : 'system_generated',
