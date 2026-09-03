@@ -1263,15 +1263,13 @@ async function callGeminiCopilot(systemPrompt, userText) {
         body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ role: 'user', parts: [{ text: userText }] }],
-            // gemini-3.6-flash é modelo "thinking": com o thinking ligado ele
-            // consumia parte do maxOutputTokens raciocinando e o texto visível
-            // saía cortado no meio da frase (finishReason MAX_TOKENS). Resumo e
-            // rascunho de resposta não precisam de raciocínio interno — desligar
-            // deixa a saída completa, mais rápida e mais barata.
+            // maxOutputTokens generoso: mesmo que o modelo gaste parte "pensando"
+            // (é modelo thinking), sobra espaço pra resposta visível não sair
+            // cortada. thinkingConfig foi removido — o modelo recusava com
+            // INVALID_ARGUMENT.
             generationConfig: {
                 temperature: 0.6,
-                maxOutputTokens: 800,
-                thinkingConfig: { thinkingBudget: 0 }
+                maxOutputTokens: 2048
             }
         })
     });
