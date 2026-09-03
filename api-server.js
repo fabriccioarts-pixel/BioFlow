@@ -4651,6 +4651,82 @@ app.get('/api/capi-selftest', async (req, res) => {
     res.json({ cfg, colunas_leads, envio: r });
 });
 
+// Por que a IA não está respondendo esse lead?
+// /api/ai-selftest?phone=5561999999999   (ou ?lead=<id>)
+app.get('/api/ai-selftest', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const AI_COLS = ['col-entrada', 'col-contatado'];
+        const out = { checks: {}, bloqueios: [] };
+
+        const globalRow = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
+        const globalEnabled = globalRow && globalRow[0] ? globalRow[0].value === '1' : true;
+        out.checks.ia_global_ligada = globalEnabled;
+        if (!globalEnabled) out.bloqueios.push('IA global desligada (Configurações da IA).');
+
+        out.checks.gemini_key_configurada = !!(process.env.GEMINI_API_KEY || '').trim();
+        if (!out.checks.gemini_key_configurada) out.bloqueios.push('GEMINI_API_KEY não configurada.');
+
+        let lead = null;
+        if (req.query.lead) {
+            const r = await queryD1('SELECT * FROM leads WHERE id = ?', [String(req.query.lead)]);
+            lead = r && r[0];
+        } else if (req.query.phone) {
+            const variants = phoneVariants(String(req.query.phone));
+            const ph = variants.map(() => '?').join(', ');
+            const r = await queryD1(`SELECT * FROM leads WHERE telefone IN (${ph}) ORDER BY created_at DESC LIMIT 1`, variants);
+            lead = r && r[0];
+        } else {
+            return res.status(400).json({ error: 'Passe ?phone=<numero> ou ?lead=<id>.' });
+        }
+        if (!lead) return res.json(Object.assign(out, { erro: 'Lead não encontrado pra esse telefone/id.' }));
+
+        out.lead = { id: lead.id, nome: lead.nome, telefone: lead.telefone, column_id: lead.column_id, ai_enabled: lead.ai_enabled, owner_id: lead.owner_id, tags: lead.tags };
+
+        out.checks.lead_ai_enabled = Number(lead.ai_enabled) === 1;
+        if (!out.checks.lead_ai_enabled) out.bloqueios.push('ai_enabled do lead é 0 — alguém mandou mensagem manual, ou a IA já qualificou/entregou. Religue no painel do lead ou use "Transferir para a IA".');
+
+        out.checks.coluna_atendida_pela_ia = AI_COLS.includes(lead.column_id);
+        if (!out.checks.coluna_atendida_pela_ia) out.bloqueios.push(`Lead está em "${lead.column_id}" — a IA só responde em ${AI_COLS.join(' ou ')}.`);
+
+        const parsedTags = lead.tags ? String(lead.tags).split(',').map(s => s.trim()).filter(Boolean) : [];
+        out.checks.tem_tag_ia_qualificado = parsedTags.includes('ia-qualificado');
+        if (out.checks.tem_tag_ia_qualificado) out.bloqueios.push('Lead tem a tag "ia-qualificado" — a IA já entregou pra equipe. Remova a tag (ou use "Transferir para a IA") pra ela voltar.');
+
+        const variants = phoneVariants(lead.telefone || '');
+        const ph = variants.map(() => '?').join(', ');
+
+        const flowRuns = await queryD1(
+            `SELECT id, flow_id, status, current_node_id, updated_at FROM crm_flow_runs WHERE phone IN (${ph}) AND status IN ('running','waiting_reply','sleeping') ORDER BY updated_at DESC`,
+            variants
+        ).catch(() => []);
+        out.checks.fluxos_ativos = flowRuns || [];
+        if ((flowRuns || []).some(r => r.status === 'waiting_reply')) {
+            out.bloqueios.push('Há um fluxo em "waiting_reply" pra esse número — o motor de fluxo intercepta a mensagem e a IA não responde. Encerre o fluxo ou use "Transferir para a IA" (que já encerra os fluxos).');
+        }
+
+        const lastMsg = await queryD1(
+            `SELECT direction, message, timestamp FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 1`,
+            variants
+        ).catch(() => []);
+        out.checks.ultima_mensagem = lastMsg && lastMsg[0] ? { direcao: lastMsg[0].direction, quando: lastMsg[0].timestamp, previa: String(lastMsg[0].message || '').slice(0, 80) } : null;
+        if (lastMsg && lastMsg[0] && lastMsg[0].direction === 'out') {
+            out.bloqueios.push('A última mensagem foi nossa (out) — a IA só é acionada quando CHEGA uma mensagem nova do lead. Ela responde no próximo "oi" dele.');
+        }
+
+        out.veredito = out.bloqueios.length === 0
+            ? 'Nenhum bloqueio encontrado — a IA deve responder a próxima mensagem do lead. Se ainda não responder, veja os logs do deploy (erro no Gemini / timeout).'
+            : `${out.bloqueios.length} bloqueio(s) — resolva os itens acima.`;
+
+        res.json(out);
+    } catch (e) {
+        console.error('ai-selftest erro:', e);
+        res.status(500).json({ error: 'Erro interno.', detalhe: e.message });
+    }
+});
+
 // Criar um novo lead
 app.post('/api/leads', async (req, res) => {
     const { id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, tags, valor_recebido, orcamento } = req.body;
