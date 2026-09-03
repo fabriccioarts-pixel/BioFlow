@@ -1070,7 +1070,7 @@ nav.tabs-container.sb-nav {
     justify-content: flex-start;
 }
 #chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 {
-    display: none;
+    display: none !important;
 }
 #chat-lead-panel.lp-collapsed .chat-lead-collapse {
     transform: rotate(180deg);
@@ -7407,7 +7407,7 @@ body:has(#login-overlay.active) header { display: none; }
     #chat-lead-panel.lp-collapsed { width: 100% !important; }
     #chat-lead-panel.lp-collapsed #chat-lead-panel-body { display: flex !important; }
     #chat-lead-panel.lp-collapsed .chat-lead-panel-head { flex-direction: row; padding: 1.1rem 1.25rem; }
-    #chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 { display: flex; }
+    #chat-lead-panel.lp-collapsed .chat-lead-panel-head h3 { display: flex !important; }
 
     #chat-active-header { padding: 0.8rem 1rem !important; }
     #chat-active-input { padding: 0.7rem 0.9rem !important; }
