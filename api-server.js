@@ -1733,7 +1733,8 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
             const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
             await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
             const infoRows = await queryD1('SELECT nome, telefone FROM leads WHERE id = ?', [leadId]);
-            const nomeLead = (infoRows?.[0]?.nome || 'Lead').replace(' [MKT]', '');
+            const nomeBruto = (infoRows?.[0]?.nome || '').replace(' [MKT]', '').trim();
+            const nomeLead = (nomeBruto && !LEAD_NOME_PLACEHOLDER_RE.test(nomeBruto)) ? nomeBruto : 'Lead';
             const telLead = infoRows?.[0]?.telefone || phone || null;
             const notifMsg = aiMode === 'vendas'
                 ? `🎯 ${nomeLead} — pronto pra fechar, assumir a conversa`
@@ -6899,11 +6900,31 @@ if (!process.env.VERCEL) {
 
 const FLOW_MAX_STEPS = 40;
 
+// "Lead WhatsApp"/"Contato" não são nomes de gente — são o texto que o
+// próprio sistema grava quando o WhatsApp não manda o nome de perfil do
+// contato. Sem esse filtro, {{nome}} em follow-up/fluxo virava literalmente
+// "Oi Lead WhatsApp, ...". Sempre primeiro nome só — fica mais natural.
+const LEAD_NOME_PLACEHOLDER_RE = /^(lead\s*whatsapp|contato|lead|desconhecido)$/i;
+function safeLeadFirstName(nome) {
+    const n = String(nome || '').trim();
+    if (!n || LEAD_NOME_PLACEHOLDER_RE.test(n)) return '';
+    return n.split(/\s+/)[0];
+}
+
 function flowInterpolate(text, ctx) {
-    return String(text == null ? '' : text).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
-        const v = ctx[k];
+    const raw = String(text == null ? '' : text).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+        const v = (k === 'nome') ? safeLeadFirstName(ctx[k]) : ctx[k];
         return (v === undefined || v === null) ? '' : String(v);
     });
+    // Sem nome, {{nome}} vira '' e sobra pontuação órfã ("Oi , você chegou",
+    // "{{nome}}, ainda..." -> ", ainda..."). Limpa e recapitaliza o início.
+    return raw
+        .replace(/\s+,/g, ',')
+        .replace(/,\s*,/g, ',')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[,!]\s*/, '')
+        .replace(/^([a-zà-ÿ])/i, (m) => m.toUpperCase())
+        .trim();
 }
 
 function flowDbTime(msFromNow = 0) {
@@ -7453,7 +7474,7 @@ async function followupTick() {
                 // Fora da janela de 24h (ou passo só com template): texto livre não
                 // passa na API oficial — manda o template aprovado. O nome do lead
                 // vai como única variável de corpo, se o template tiver uma.
-                try { await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: lead.nome || 'Cliente', sentBy: 'followup' }); }
+                try { await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: safeLeadFirstName(lead.nome) || 'Cliente', sentBy: 'followup' }); }
                 catch (e) { console.error('follow-up: template falhou:', e.message); }
             }
             // senão (fora da janela e sem template configurado): passo pulado.
