@@ -1,5 +1,14 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-04 — Reduz polling pra economizar cota de leitura do D1
+
+### Alterado
+* **Cloudflare D1 estava a 76% da cota diária grátis de rows_read.** Sem mudar nenhuma lógica, só espaçou os intervalos de atualização automática (a atualização em tempo real via SSE e o refresh da conversa aberta continuam rápidos):
+  * `kanbanSyncInterval` (fallback do SSE do Kanban): 30s → 90s.
+  * `globalChatCheckInterval` (lista de conversas em segundo plano): 20s → 45s.
+  * `chatPollingInterval` — cadência do `loadChats` (a consulta cara, `GROUP BY` + subquery por conversa): ~18s → ~36s. A conversa aberta continua atualizando a cada 6s (barata, filtra por telefone).
+  * `dashPollingInterval` (auto-refresh do dashboard): 30s → 60s.
+
 ## 2026-09-03 — Anti-duplicidade no envio, filtro "Aguardando resposta" e ordenação padrão
 
 ### Adicionado

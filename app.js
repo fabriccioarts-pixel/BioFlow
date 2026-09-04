@@ -314,12 +314,14 @@ function initApp() {
         startNotificationPolling();
         loadAudiences();
 
-        // SSE para sincronização instantânea; polling de 30s como fallback
+        // SSE para sincronização instantânea; polling só como rede de segurança
+        // (SSE cobre o tempo real, então esse intervalo pode ser bem largo — é
+        // só pra cobrir alguma desconexão de SSE não percebida).
         initKanbanSSE();
         if (!window.kanbanSyncInterval) {
             window.kanbanSyncInterval = setInterval(() => {
                 if (loggedUser) fetchLeadsFromServer(true);
-            }, 30000);
+            }, 90000);
         }
         
         if (loggedUser.role === 'admin' || loggedUser.username === 'admin') {
@@ -3243,8 +3245,9 @@ function switchTab(tabId) {
         }
         loadDashboardResponseMetrics().then(renderDashboard);
         renderDashboard(); // Render charts and metrics
-        // Inicia auto-refresh a cada 30s enquanto o dashboard estiver aberto
-        // (era 10s — puxava a lista de leads + métricas de resposta, ambas scans).
+        // Inicia auto-refresh a cada 60s enquanto o dashboard estiver aberto
+        // (era 10s, depois 30s — puxava a lista de leads + métricas de resposta,
+        // ambas scans; dashboard é visão gerencial, não precisa de 30s de frescor).
         if (!window.dashPollingInterval) {
             window.dashPollingInterval = setInterval(async () => {
                 if (document.getElementById('view-dashboard')?.style.display !== 'none') {
@@ -3252,7 +3255,7 @@ function switchTab(tabId) {
                     await loadDashboardResponseMetrics();
                     renderDashboard();
                 }
-            }, 30000);
+            }, 60000);
         }
     } else if (tabId === 'campanhas') {
         const view = document.getElementById('view-campanhas');
@@ -3285,9 +3288,9 @@ function switchTab(tabId) {
             view.style.display = 'flex';
             loadChats();
             // Inicia polling se ainda não estiver rodando. A lista de conversas
-            // (loadChats) faz GROUP BY na wa_messages inteira — cara — então vai
-            // a 20s; a conversa ABERTA (openChat refresh) é barata (filtra por
-            // telefone) e segue rápida, a cada 6s.
+            // (loadChats) faz GROUP BY + subquery por conversa na wa_messages —
+            // cara — então vai a ~36s; a conversa ABERTA (openChat refresh) é
+            // barata (filtra por telefone) e segue rápida, a cada 6s.
             if (!window.chatPollingInterval) {
                 let chatTick = 0;
                 window.chatPollingInterval = setInterval(() => {
@@ -3296,7 +3299,7 @@ function switchTab(tabId) {
                     if (window.currentActiveChat) {
                         openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                     }
-                    if (chatTick % 3 === 1) {
+                    if (chatTick % 6 === 1) {
                         loadChats(true);
                     }
                 }, 6000);
@@ -7857,7 +7860,7 @@ document.addEventListener('visibilitychange', () => {
         if (loggedUser && !window.kanbanSyncInterval) {
             window.kanbanSyncInterval = setInterval(() => {
                 if (loggedUser) fetchLeadsFromServer(true);
-            }, 30000);
+            }, 90000);
         }
         if (!window.globalChatCheckInterval) {
             window.globalChatCheckInterval = setInterval(() => {
@@ -7865,7 +7868,7 @@ document.addEventListener('visibilitychange', () => {
                 if (window.currentActiveChat && document.getElementById('view-chat')?.style.display !== 'none') {
                     if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                 }
-            }, 20000);
+            }, 45000);
         }
         if (loggedUser && !window.notifPollInterval && typeof startNotificationPolling === 'function') {
             startNotificationPolling();
