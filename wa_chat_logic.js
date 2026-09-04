@@ -2493,6 +2493,44 @@ async function transferLeadToAi(leadId) {
     }
 }
 
+// "Terminei minha parte" — libera a trava na hora, registra quem encerrou e
+// religa a IA pra ela assumir a próxima mensagem. Não mexe na coluna do
+// Kanban (funil de venda é dimensão separada de "quem está atendendo agora").
+async function endLeadService(leadId) {
+    const popup = document.getElementById('transfer-menu-popup');
+    if (popup) popup.style.display = 'none';
+
+    try {
+        const res = await fetch(`/api/leads/${leadId}/end-service`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok || !json.success) {
+            alert(json.error || 'Não foi possível encerrar o atendimento.');
+            return;
+        }
+
+        stopLeadLockRenewal();
+        window.chatLockState = { leadId, locked: false, ownerId: null };
+        applyChatLockUI(false, null);
+
+        if (typeof leads !== 'undefined') {
+            const lead = leads.find(l => l.id === leadId);
+            if (lead) {
+                lead.owner_id = null;
+                lead.ai_enabled = 1;
+                if (typeof renderBoard === 'function') renderBoard();
+            }
+        }
+        if (window.currentActiveChat) {
+            renderLeadInfoPanel(leads.find(l => l.id === leadId), window.currentActiveChat.phone);
+        }
+        if (typeof showToast === 'function') showToast('Atendimento encerrado. Trava liberada e IA religada.', 'success');
+    } catch (err) {
+        console.error('Erro ao encerrar atendimento:', err);
+        alert('Erro de conexão ao encerrar o atendimento.');
+    }
+}
+
 // ============================================
 // MENU "FERRAMENTAS" DO CABEÇALHO DO CHAT
 // ============================================
@@ -2525,6 +2563,7 @@ function toggleChatToolsMenu(e) {
     if (lead) {
         html += item(aiOn ? 'fa-robot' : 'fa-robot', aiOn ? 'Desligar IA nesta conversa' : 'Ligar IA nesta conversa', aiOn ? 'ai-off' : 'ai-on', { accent: aiOn ? 'var(--accent-danger, #f87171)' : 'var(--accent-teal, #2dd4bf)' });
         html += item('fa-arrow-right-arrow-left', 'Transferir para a IA', 'to-ai', { accent: 'var(--accent-teal, #2dd4bf)' });
+        html += item('fa-circle-check', 'Encerrar atendimento', 'end-service', { accent: 'var(--accent-success, #34d399)' });
         html += sep;
     }
     html += item(panelHidden ? 'fa-eye' : 'fa-eye-slash', panelHidden ? 'Mostrar ficha do lead' : 'Ocultar ficha do lead', 'toggle-panel');
@@ -2551,6 +2590,8 @@ function toggleChatToolsMenu(e) {
                 if (lead && typeof renderLeadInfoPanel === 'function' && window.currentActiveChat) renderLeadInfoPanel(lead, window.currentActiveChat.phone);
             } else if (act === 'to-ai') {
                 if (lead && typeof transferLeadToAi === 'function') transferLeadToAi(lead.id);
+            } else if (act === 'end-service') {
+                if (lead && typeof endLeadService === 'function') endLeadService(lead.id);
             } else if (act === 'toggle-panel') {
                 if (typeof toggleLeadPanelCollapse === 'function') toggleLeadPanelCollapse();
             } else if (act === 'kanban') {

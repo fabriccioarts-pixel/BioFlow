@@ -5543,6 +5543,49 @@ app.post('/api/leads/:id/handoff-ai', async (req, res) => {
     }
 });
 
+// Encerrar atendimento: o atendente terminou sua parte na conversa. Libera a
+// trava na hora (não espera o timeout de inatividade), registra quem encerrou
+// e religa a IA pra ela assumir a próxima mensagem — sem mexer na coluna do
+// Kanban, que é o funil de venda, uma dimensão separada de "quem está
+// conversando agora".
+app.post('/api/leads/:id/end-service', async (req, res) => {
+    const { id } = req.params;
+    const username = (req.user && req.user.username) || 'atendente';
+    try {
+        const rows = await queryD1('SELECT id, telefone, notas FROM leads WHERE id = ?', [id]);
+        const lead = rows && rows[0];
+        if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+
+        const carimbo = `✅ Atendimento encerrado por ${username} em ${new Date().toLocaleString('pt-BR')} — devolvido pra fila e pra IA.`;
+        const notaAtual = lead.notas || '';
+        const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}${carimbo}`;
+
+        await queryD1(
+            'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, notas = ? WHERE id = ?',
+            [novaNota, id]
+        );
+
+        // Encerra fluxos ativos desse número — senão flowDispatchInbound continua
+        // interceptando a próxima mensagem e a IA nunca chega a responder.
+        try {
+            const variants = phoneVariants(lead.telefone || '');
+            if (variants.length) {
+                const ph = variants.map(() => '?').join(', ');
+                await queryD1(
+                    `UPDATE crm_flow_runs SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE phone IN (${ph}) AND status IN ('running','waiting_reply','sleeping')`,
+                    variants
+                );
+            }
+        } catch (e) { console.error('end-service: encerrar fluxos falhou:', e.message); }
+
+        broadcastLeadsUpdate('updated', id);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('end-service erro:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Espelho da Rota Serverless da Vercel para uso Local
 app.post('/api/agendar', async (req, res) => {
     // Editar um agendamento já existente é restrito a administradores (mesma regra que a
