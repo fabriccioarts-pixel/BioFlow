@@ -509,7 +509,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 // enviada, então um "fire-and-forget" sem await nunca chegava a
                 // terminar (a chamada ao Gemini era interrompida no meio). A Meta
                 // tolera alguns segundos de resposta antes de reentregar a mensagem.
-                if (msg_type === 'text' && msg_body && resolvedLeadId) {
+                if ((msg_type === 'text' || msg_type === 'audio' || msg_type === 'voice') && msg_body && resolvedLeadId) {
                     // Motor de fluxo roda ANTES da IA. Se um fluxo assumir a conversa,
                     // a IA não responde esse turno.
                     let handledByFlow = false;
@@ -1286,11 +1286,20 @@ async function getWhatsappAiVision() {
     } catch (e) { return true; }
 }
 
+// Agente "escuta" áudio/nota de voz? (whatsapp_ai_audio, liga por padrão)
+async function getWhatsappAiAudio() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_audio'");
+        return !(rows && rows[0] && rows[0].value === '0');
+    } catch (e) { return true; }
+}
+
 const AI_MAX_IMAGES = 2;                       // quantas imagens recentes o agente enxerga
+const AI_MAX_AUDIOS = 1;                       // só a nota de voz mais recente — custa mais token
 const AI_IMG_MAX_BYTES = 5 * 1024 * 1024;
 
 // Baixa uma mídia da Meta e devolve { mimeType, data(base64) } — ou null.
-async function fetchMetaMediaBase64(mediaId) {
+async function fetchMetaMediaBase64(mediaId, fallbackMime = 'image/jpeg') {
     const token = process.env.META_WA_ACCESS_TOKEN;
     if (!token || !mediaId) return null;
     const ac = new AbortController();
@@ -1305,7 +1314,9 @@ async function fetchMetaMediaBase64(mediaId) {
         if (!bin.ok) return null;
         const buf = Buffer.from(await bin.arrayBuffer());
         if (buf.length > AI_IMG_MAX_BYTES) return null;
-        return { mimeType: info.mime_type || 'image/jpeg', data: buf.toString('base64') };
+        // Meta às vezes manda "audio/ogg; codecs=opus" — o Gemini só aceita o tipo puro.
+        const mimeType = (info.mime_type || fallbackMime).split(';')[0].trim();
+        return { mimeType, data: buf.toString('base64') };
     } catch (e) {
         return null;
     } finally {
@@ -1331,7 +1342,22 @@ async function getWhatsappAiHistory(phone, limit = 12) {
         }
         await Promise.all(idxs.map(async (i) => {
             const m = ordered[i].message.match(imgRe);
-            if (m) imgCache[i] = await fetchMetaMediaBase64(m[1]);
+            if (m) imgCache[i] = await fetchMetaMediaBase64(m[1], 'image/jpeg');
+        }));
+    }
+
+    // Nota de voz mais recente que o agente vai "escutar" (mesmo esquema da imagem).
+    const audioRe = /\/api\/whatsapp\/media\/(\d+)\.(ogg|oga|opus|mp3|m4a|amr)/i;
+    const audioCache = {};
+    if (await getWhatsappAiAudio()) {
+        const idxs = [];
+        for (let i = ordered.length - 1; i >= 0 && idxs.length < AI_MAX_AUDIOS; i--) {
+            const r = ordered[i];
+            if (r.direction === 'in' && typeof r.message === 'string' && audioRe.test(r.message)) idxs.push(i);
+        }
+        await Promise.all(idxs.map(async (i) => {
+            const m = ordered[i].message.match(audioRe);
+            if (m) audioCache[i] = await fetchMetaMediaBase64(m[1], 'audio/ogg');
         }));
     }
 
@@ -1345,6 +1371,13 @@ async function getWhatsappAiHistory(phone, limit = 12) {
                 return { role, parts: [
                     { inlineData: { mimeType: img.mimeType, data: img.data } },
                     { text: cap ? `(imagem que o paciente enviou) ${cap}` : '(imagem que o paciente enviou)' }
+                ] };
+            }
+            const audio = audioCache[i];
+            if (audio) {
+                return { role, parts: [
+                    { inlineData: { mimeType: audio.mimeType, data: audio.data } },
+                    { text: '(nota de voz que o paciente enviou — ouça e responda ao que ela disse)' }
                 ] };
             }
             return { role, parts: [{ text: cap ? `[mídia enviada] ${cap}` : '[mídia enviada]' }] };
@@ -2863,7 +2896,7 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
         const timing = await getWhatsappAiTiming();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision() });
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio() });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -2898,7 +2931,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                 [mode]
             );
         }
-        for (const k of ['human', 'typing', 'vision']) {
+        for (const k of ['human', 'typing', 'vision', 'audio']) {
             if (req.body?.[k] !== undefined) {
                 await queryD1(
                     `INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_${k}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -2907,7 +2940,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
             }
         }
         const timing = await getWhatsappAiTiming();
-        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision() });
+        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio() });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });

@@ -7107,9 +7107,11 @@ async function openWhatsappAiSettingsModal() {
         const humanEl = document.getElementById('whatsapp-ai-human');
         const typingEl = document.getElementById('whatsapp-ai-typing');
         const visionEl = document.getElementById('whatsapp-ai-vision');
+        const audioEl = document.getElementById('whatsapp-ai-audio');
         if (humanEl) humanEl.checked = toggleJson.human !== false;   // liga por padrão
         if (typingEl) typingEl.checked = toggleJson.typing !== false;
         if (visionEl) visionEl.checked = toggleJson.vision !== false;
+        if (audioEl) audioEl.checked = toggleJson.audio !== false;
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -7124,12 +7126,13 @@ async function saveWhatsappAiSettings() {
     const human = !!(document.getElementById('whatsapp-ai-human') || {}).checked;
     const typing = !!(document.getElementById('whatsapp-ai-typing') || {}).checked;
     const vision = !!(document.getElementById('whatsapp-ai-vision') || {}).checked;
+    const audio = !!(document.getElementById('whatsapp-ai-audio') || {}).checked;
     try {
         const [toggleRes, contextRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision })
+                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',
