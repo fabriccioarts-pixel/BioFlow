@@ -4976,15 +4976,32 @@ app.post('/api/leads', async (req, res) => {
     }
 });
 
+// Ordem do funil — usada por 'advance_only' pra impedir retrocesso (ver abaixo).
+const LEAD_FUNNEL_ORDER = ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho'];
+
 // Atualizar dados de um lead (coluna e/ou notas)
 app.put('/api/leads/:id', async (req, res) => {
     const { id } = req.params;
-    const { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco, empresa_id, no_auto_assign } = req.body;
+    let { column_id, notas, nome, telefone, born, email, tags, valor_recebido, orcamento, campaign_opt_out, ai_enabled, cpf, endereco, empresa_id, no_auto_assign, advance_only } = req.body;
     try {
         const leadRows = await queryD1('SELECT * FROM leads WHERE id = ?', [id]);
         const lead = leadRows && leadRows.length > 0 ? leadRows[0] : null;
-        
+
         if (!lead) return res.status(404).json({ error: 'Lead não encontrado' });
+
+        // advance_only: usado pelos gatilhos automáticos (abrir a conversa, mandar
+        // mensagem) que só deveriam EMPURRAR o lead pra frente no funil (Entrada ->
+        // Contatado). Sem isso, um estado desatualizado no navegador do atendente
+        // (corrida entre abas, SSE atrasado) podia rebaixar um lead que já estava em
+        // Agendado/Ganho de volta pra Contatado. O servidor decide pela coluna atual
+        // no banco, não pelo que o cliente acha que é — nunca deixa retroceder.
+        if (advance_only && column_id !== undefined) {
+            const curIdx = LEAD_FUNNEL_ORDER.indexOf(lead.column_id);
+            const newIdx = LEAD_FUNNEL_ORDER.indexOf(column_id);
+            if (curIdx !== -1 && newIdx !== -1 && curIdx >= newIdx) {
+                column_id = undefined; // mantém a coluna atual, ignora só essa parte do PUT
+            }
+        }
 
         const updates = [];
         const params = [];

@@ -4098,7 +4098,7 @@ async function sendCustomChatMessage(msgText, filename = '', caption = '', isVoi
                 fetch(`/api/leads/${lead.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ column_id: 'col-contatado' })
+                    body: JSON.stringify({ column_id: 'col-contatado', advance_only: true })
                 }).catch(console.error);
             }
         }
@@ -4279,7 +4279,7 @@ async function openChat(phone, name, silent = false) {
                 fetch(`/api/leads/${currentLead.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ column_id: 'col-contatado', no_auto_assign: true })
+                    body: JSON.stringify({ column_id: 'col-contatado', no_auto_assign: true, advance_only: true })
                 }).catch(console.error);
             }
 
@@ -4805,7 +4805,7 @@ async function sendActiveChatMessage() {
                 fetch(`/api/leads/${lead.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ column_id: 'col-contatado' })
+                    body: JSON.stringify({ column_id: 'col-contatado', advance_only: true })
                 }).catch(console.error);
             }
         } else {
