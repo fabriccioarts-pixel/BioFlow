@@ -7753,30 +7753,33 @@ h1, h2,
 }
 
 /* --- Copilot de IA (assistente do atendente no chat) --- */
+/* Badges-botão do cabeçalho do chat: fundo preenchido, cantos pouco arredondados. */
 .copilot-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.4rem 0.8rem;
-    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-    color: var(--accent-primary);
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    border-radius: 999px;
+    padding: 0.4rem 0.75rem;
+    background: var(--accent-primary);
+    color: #fff;
+    border: 1px solid var(--accent-primary);
+    border-radius: 7px;
     font-family: inherit;
     font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    transition: filter 0.15s, opacity 0.15s;
 }
-.copilot-btn:hover { background: color-mix(in srgb, var(--accent-primary) 20%, transparent); }
+.copilot-btn:hover { filter: brightness(1.08); }
 .copilot-btn:disabled { opacity: 0.55; cursor: default; }
-.copilot-btn--danger {
-    background: color-mix(in srgb, var(--accent-danger, #ef4444) 12%, transparent);
-    color: var(--accent-danger, #f87171);
-    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 40%, transparent);
+.copilot-btn--success {
+    background: var(--accent-success, #10b981);
+    border-color: var(--accent-success, #10b981);
 }
-.copilot-btn--danger:hover { background: color-mix(in srgb, var(--accent-danger, #ef4444) 22%, transparent); }
+.copilot-btn--danger {
+    background: var(--accent-danger, #ef4444);
+    border-color: var(--accent-danger, #ef4444);
+}
 .copilot-icon-btn { color: var(--accent-primary) !important; }
 .copilot-icon-btn.is-loading { opacity: 0.5; pointer-events: none; }
 @media (max-width: 720px) { .copilot-btn-label { display: none; } }
