@@ -1,5 +1,20 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Som de notificação mudo quando mensagem chega em segundo plano
+
+### Corrigido
+* **`playNotificationSound()` criava um `AudioContext` novo a cada mensagem
+  nova.** Todo `AudioContext` nasce "suspended" pela política de autoplay do
+  navegador e só toca de verdade depois de um gesto do usuário (clique,
+  tecla, toque) na página — antes disso funcionava porque quase sempre havia
+  algum gesto por perto. Agora que mensagem nova chega também via SSE em
+  segundo plano (sem clique nenhum no momento), o som ficava mudo,
+  silenciosamente, só com o aviso "AudioContext foi impedido de iniciar
+  automaticamente" no console. Corrigido reaproveitando um único
+  `AudioContext` (em vez de criar um novo a cada som), destravado com
+  `.resume()` no primeiro clique/tecla/toque da sessão — depois disso
+  continua tocando mesmo quando chamado sem gesto nenhum.
+
 ## 2026-09-05 — IA parava depois do 1º balão de respostas partidas em vários pedaços
 
 ### Corrigido

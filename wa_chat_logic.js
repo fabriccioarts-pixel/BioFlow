@@ -1747,12 +1747,32 @@ function renderContactsList(chats) {
 let lastSeenMaxMsgId = null;
 let hasInitializedChatCheck = false;
 
+// Contexto único e reaproveitado: criar um AudioContext novo a cada som (como
+// era antes) sempre nasce "suspended" pela política de autoplay do navegador —
+// só toca de verdade depois de um gesto do usuário na página. Como o som agora
+// também dispara em segundo plano (evento SSE de mensagem nova, sem clique
+// nenhum no momento), criar um novo a cada vez deixava a notificação muda sem
+// erro nenhum. Um único contexto, destravado no primeiro clique/toque/tecla da
+// sessão, continua tocando depois mesmo quando chamado sem gesto.
+let _notificationAudioCtx = null;
+function getNotificationAudioContext() {
+    if (_notificationAudioCtx) return _notificationAudioCtx;
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return null;
+    _notificationAudioCtx = new AudioContext();
+    const unlock = () => { _notificationAudioCtx.resume().catch(() => {}); };
+    ['click', 'keydown', 'touchstart'].forEach(evt => {
+        document.addEventListener(evt, unlock, { once: true, passive: true });
+    });
+    return _notificationAudioCtx;
+}
+
 function playNotificationSound() {
     try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
-        const ctx = new AudioContext();
-        
+        const ctx = getNotificationAudioContext();
+        if (!ctx) return;
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+
         const now = ctx.currentTime;
         
         // Tom 1 (E5 - 659.25 Hz)
