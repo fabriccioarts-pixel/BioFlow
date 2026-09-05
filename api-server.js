@@ -979,6 +979,15 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 await queryD1(`UPDATE leads SET ai_enabled = 0, last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${placeholders})`, variants);
                 // Envio manual do atendente também interrompe follow-up automático em andamento.
                 await queryD1(`UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE status IN ('agendado','enviando') AND phone IN (${placeholders})`, variants);
+
+                // Atendente respondeu manualmente: se o lead estava marcado como "quente"
+                // (badge de leads qualificados esperando), isso conta como atendido —
+                // tira a etiqueta e o carimbo de horário pra sumir do badge.
+                const quentes = await queryD1(`SELECT id, tags FROM leads WHERE telefone IN (${placeholders}) AND qualificado_em IS NOT NULL`, variants);
+                for (const q of (quentes || [])) {
+                    const restTags = (q.tags || '').split(',').map(t => t.trim()).filter(t => t && t !== 'ia-qualificado').join(',');
+                    await queryD1('UPDATE leads SET tags = ?, qualificado_em = NULL WHERE id = ?', [restTags, q.id]);
+                }
             } catch (e) {
                 console.error('Erro ao desligar a IA após envio manual:', e);
             }
@@ -1402,15 +1411,39 @@ async function getWhatsappAiHistory(phone, limit = 12) {
     });
 }
 
+// Contexto do anúncio de Click-to-WhatsApp que o lead clicou. O agente não
+// enxergava isso — via só "Posso ter mais informações sobre isso?" sem saber o
+// que era "isso" — e chutava o procedimento errado (anúncio de depilação a
+// laser, resposta oferecendo HiPRO). Pega o referral da 1ª mensagem com anúncio.
+async function getAdContextForPhone(phone) {
+    try {
+        const rows = await queryD1(
+            "SELECT referral FROM wa_messages WHERE phone = ? AND referral IS NOT NULL AND referral != '' ORDER BY timestamp ASC LIMIT 1",
+            [phone]
+        );
+        const raw = rows && rows[0] && rows[0].referral;
+        if (!raw) return '';
+        let ref; try { ref = JSON.parse(raw); } catch (e) { return ''; }
+        const headline = String(ref.headline || '').trim();
+        const body = String(ref.body || '').trim();
+        if (!headline && !body) return '';
+        let t = '\n\n[ORIGEM DO LEAD] Esta pessoa chegou clicando num anúncio de Instagram/Facebook da clínica. Baseie a conversa NO QUE ESSE ANÚNCIO PROMETIA — não ofereça um procedimento diferente do anúncio.';
+        if (headline) t += `\nTítulo do anúncio: "${headline}"`;
+        if (body) t += `\nTexto do anúncio: "${body.slice(0, 600)}"`;
+        return t;
+    } catch (e) { return ''; }
+}
+
 async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
 
     const history = await getWhatsappAiHistory(phone);
     const context = await getWhatsappAiContext();
+    const adContext = await getAdContextForPhone(phone);
     const mode = await getWhatsappAiMode();
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
-    const systemPrompt = context + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
+    const systemPrompt = context + adContext + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
@@ -1603,7 +1636,7 @@ async function tagLeadAsQualified(leadId) {
     const currentTags = (rows?.[0]?.tags || '').split(',').map(t => t.trim()).filter(Boolean);
     if (currentTags.includes(tagId)) return;
     currentTags.push(tagId);
-    await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [currentTags.join(','), leadId]);
+    await queryD1('UPDATE leads SET tags = ?, qualificado_em = CURRENT_TIMESTAMP WHERE id = ?', [currentTags.join(','), leadId]);
 }
 
 // ---- Ritmo humano do agente de IA -----------------------------------------
@@ -3435,6 +3468,11 @@ queryD1('ALTER TABLE leads ADD COLUMN ai_enabled INTEGER DEFAULT 1').catch(() =>
 
 // Empresa/emitente escolhida pra este lead no orçamento impresso (cadastro crm_empresas).
 queryD1('ALTER TABLE leads ADD COLUMN empresa_id TEXT').catch(() => {});
+
+// Timestamp de quando a IA marcou o lead como "quente" (tag ia-qualificado) —
+// alimenta o badge de "leads quentes esperando atendimento" no chat. Fica NULL
+// de novo assim que alguém atende (manda mensagem manual ou faz handoff-ai).
+queryD1('ALTER TABLE leads ADD COLUMN qualificado_em DATETIME').catch(() => {});
 
 // Guarda qual atendente fechou (criou) o orçamento, pra aparecer no relatório de Histórico.
 queryD1('ALTER TABLE agendamentos_financeiro ADD COLUMN orcado_por TEXT').catch(() => {});
@@ -5623,7 +5661,7 @@ app.post('/api/leads/:id/handoff-ai', async (req, res) => {
         const newTags = curTags.filter(t => t !== 'ia-qualificado').join(',');
 
         await queryD1(
-            'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, column_id = ?, tags = ? WHERE id = ?',
+            'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, column_id = ?, tags = ?, qualificado_em = NULL WHERE id = ?',
             [targetCol, newTags, id]
         );
 
@@ -5714,10 +5752,11 @@ app.post('/api/leads/:id/end-service', async (req, res) => {
 });
 
 // "Finalizar atendimento" — descarta o lead de vez: desliga a IA, desatribui,
-// opta por não receber campanha, para follow-ups e fluxos, bloqueia o número
-// (o webhook passa a ignorar mensagens novas) e move pra "Follow Up/Perdido"
-// com a etiqueta "descartado". Reversível: desbloquear o número + tirar o
-// opt-out + mover a coluna de volta.
+// opta por não receber campanha, para follow-ups e fluxos e move pra "Follow
+// Up/Perdido" com a etiqueta "descartado". NÃO bloqueia o número — se o lead
+// mandar mensagem de novo, ela continua chegando normalmente no chat (só não
+// dispara mais follow-up automático nem IA, a menos que reativado).
+// Reversível: tirar o opt-out + a tag + mover a coluna de volta.
 app.post('/api/leads/:id/discard', async (req, res) => {
     const { id } = req.params;
     const username = (req.user && req.user.username) || 'atendente';
@@ -5732,7 +5771,7 @@ app.post('/api/leads/:id/discard', async (req, res) => {
         const curTags = (lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
         if (!curTags.includes('descartado')) curTags.push('descartado');
 
-        const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR')} — lead descartado: IA e follow-up desligados, campanhas bloqueadas, número bloqueado.`;
+        const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR')} — lead descartado: IA e follow-up desligados, campanhas bloqueadas.`;
         const novaNota = `${lead.notas || ''}${lead.notas ? '\n' : ''}${carimbo}`;
 
         await queryD1(
@@ -5748,17 +5787,6 @@ app.post('/api/leads/:id/discard', async (req, res) => {
                 await queryD1(`UPDATE crm_flow_runs SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE phone IN (${ph}) AND status IN ('running','waiting_reply','sleeping')`, variants);
             }
         } catch (e) { console.error('discard: parar follow-up/fluxos falhou:', e.message); }
-
-        // Bloqueia todas as variantes do número — o webhook checa is_blocked por
-        // WHERE phone = <from da Meta>, que pode não ser o formato canônico do lead.
-        try {
-            for (const v of variants) {
-                await queryD1(
-                    "INSERT INTO crm_chat_settings (phone, is_blocked) VALUES (?, 1) ON CONFLICT(phone) DO UPDATE SET is_blocked = 1, updated_at = CURRENT_TIMESTAMP",
-                    [v]
-                );
-            }
-        } catch (e) { console.error('discard: bloquear número falhou:', e.message); }
 
         broadcastLeadsUpdate('updated', id);
         res.json({ success: true });
@@ -7533,7 +7561,12 @@ app.all('/api/flow-tick', async (req, res) => {
         let opps = { skipped: 'erro' };
         try { opps = await opportunitiesTick(); } catch (e) { console.error('Erro no detector de oportunidades:', e); }
 
-        res.json({ processed, followup, opps, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Digest do Agente de IA — mesma lógica de cadência própria (só reprocessa
+        // a cada ai_insights_config.intervalo_horas).
+        let insights = { skipped: 'erro' };
+        try { insights = await aiInsightsTick(); } catch (e) { console.error('Erro no digest do Agente de IA:', e); }
+
+        res.json({ processed, followup, opps, insights, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -8064,6 +8097,187 @@ app.post('/api/opps/run', async (req, res) => {
         const result = await opportunitiesTick({ force: true });
         res.json({ success: true, result });
     } catch (e) { console.error('opps/run:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ============================================================================
+// AGENTE DE IA (painel "Ask AI" da topbar) — responde perguntas de gestão
+// sobre a carteira de leads ("como estão", "principal queixa", "por que não
+// fecham", "feedback geral"). Economia de tokens em 3 camadas:
+//   1) Números do funil vêm PRONTOS do front (já em memória, zero leitura no D1);
+//   2) Queixas/motivos de perda são um "digest" gerado no máximo 1x a cada
+//      intervalo_horas (mesmo molde do detector de oportunidades) e CACHEADO
+//      em crm_settings — nunca reprocessado a cada pergunta;
+//   3) A pergunta em si usa só esses dois resumos como contexto (nunca o
+//      histórico bruto de todas as conversas) — 1 chamada Gemini curta por
+//      pergunta, sempre no mesmo modelo barato já usado no resto do sistema.
+// ============================================================================
+const AI_INSIGHTS_DEFAULT = {
+    ativo: true,
+    intervalo_horas: 6,
+    colunas_amostra: ['col-perdido', 'col-orcado'],
+    max_conversas: 25,
+    idade_max_dias: 45,
+};
+
+async function aiInsightsGetConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, AI_INSIGHTS_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return Object.assign({}, AI_INSIGHTS_DEFAULT);
+}
+
+async function aiInsightsTick(opts = {}) {
+    const cfg = await aiInsightsGetConfig();
+    if (!cfg.ativo && !opts.force) return { skipped: 'inativo' };
+
+    if (!opts.force) {
+        try {
+            const lr = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_last_run'");
+            const prev = lr && lr[0] ? followupParseTs(lr[0].value) : null;
+            if (prev && (Date.now() - prev.getTime()) < cfg.intervalo_horas * 3600000) {
+                return { skipped: 'cadencia', last_run: lr[0].value };
+            }
+        } catch (e) {}
+    }
+
+    const stampLastRun = () => queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('ai_insights_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [flowDbTime()]
+    ).catch(() => {});
+
+    // ---- Amostra: leads parados/perdidos mais recentes (1 SELECT) ----
+    const cutoffOld = flowDbTime(-(cfg.idade_max_dias || 45) * 86400000);
+    const colunas = (Array.isArray(cfg.colunas_amostra) && cfg.colunas_amostra.length) ? cfg.colunas_amostra.map(String) : AI_INSIGHTS_DEFAULT.colunas_amostra;
+    const colPh = colunas.map(() => '?').join(', ');
+    const cand = await queryD1(
+        `SELECT id, nome, telefone
+         FROM leads
+         WHERE column_id IN (${colPh})
+           AND COALESCE(last_msg_at, created_at) >= ?
+         ORDER BY COALESCE(last_msg_at, created_at) DESC
+         LIMIT ?`,
+        [...colunas, cutoffOld, cfg.max_conversas || 25]
+    );
+
+    const dbg = { candidatos: (cand || []).length, analisados: 0 };
+    if (!cand || !cand.length) { await stampLastRun(); return dbg; }
+
+    const transcritos = [];
+    for (const lead of cand) {
+        let transcript;
+        try { transcript = await oppsTranscript(lead.telefone); } catch (e) { continue; }
+        if (!transcript) continue;
+        transcritos.push({ lead, transcript });
+    }
+    dbg.analisados = transcritos.length;
+    if (!transcritos.length) { await stampLastRun(); return dbg; }
+
+    // ---- 1 chamada Gemini pra o lote inteiro (nunca 1 chamada por conversa) ----
+    const contexto = await getWhatsappAiContext();
+    const sys = `${contexto}
+
+Você é um analista de atendimento de uma clínica. Vou te passar várias conversas de WhatsApp com leads que NÃO fecharam (estão parados ou perdidos no funil). Analise o CONJUNTO e responda SOMENTE com um JSON, sem texto antes ou depois, no formato:
+{"principais_queixas": ["...", "..."], "motivos_nao_fechamento": ["...", "..."], "resumo_geral": "..."}
+
+Regras: cada item das listas em no máximo 1 linha direta; no máximo 5 itens por lista; "resumo_geral" em até 3 linhas. Baseie-se só no que está escrito nas conversas — se não der pra identificar um padrão claro em algum campo, deixe a lista vazia. Português do Brasil.`;
+
+    const userText = transcritos.map((t, idx) =>
+        `### CONVERSA ${idx + 1} (lead: ${t.lead.nome || 'sem nome'})\n${t.transcript}`
+    ).join('\n\n');
+
+    let digest = null;
+    try {
+        const raw = await callGeminiCopilot(sys, userText);
+        const m = String(raw || '').match(/\{[\s\S]*\}/);
+        if (m) digest = JSON.parse(m[0]);
+    } catch (e) {
+        console.error('ai-insights: geração do digest falhou:', e.message);
+        return dbg; // não carimba last_run — tenta de novo no próximo tick
+    }
+    if (!digest) { return dbg; }
+
+    await queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('ai_insights_digest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [JSON.stringify(digest)]
+    );
+    await stampLastRun();
+    dbg.digest = digest;
+    return dbg;
+}
+
+app.get('/api/ai-agent/digest', async (req, res) => {
+    try {
+        const cfg = await aiInsightsGetConfig();
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_digest'");
+        const lastRun = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_last_run'");
+        let digest = null;
+        if (rows && rows[0] && rows[0].value) { try { digest = JSON.parse(rows[0].value); } catch (e) {} }
+        res.json({ digest, last_run: (lastRun && lastRun[0]) ? lastRun[0].value : null, ativo: cfg.ativo });
+    } catch (e) { console.error('ai-agent/digest:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.post('/api/ai-agent/refresh', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_manual_last'");
+        const prev = r && r[0] ? followupParseTs(r[0].value) : null;
+        if (prev && (Date.now() - prev.getTime()) < 3600000) {
+            return res.status(429).json({ error: 'A análise já foi atualizada há menos de 1h. Aguarde.' });
+        }
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('ai_insights_manual_last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [flowDbTime()]);
+        const result = await aiInsightsTick({ force: true });
+        res.json({ success: true, result });
+    } catch (e) { console.error('ai-agent/refresh:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// Perguntas livres do atendente/gestor no painel. "funil" vem PRONTO do front
+// (contagem por coluna já calculada em memória — zero leitura extra no D1).
+app.post('/api/ai-agent/ask', async (req, res) => {
+    try {
+        if (!copilotThrottle(req, res)) return;
+        const pergunta = String(req.body?.pergunta || '').trim().slice(0, 500);
+        if (!pergunta) return res.status(400).json({ error: 'Digite uma pergunta.' });
+
+        const historico = Array.isArray(req.body?.historico) ? req.body.historico.slice(-6) : [];
+        const funil = req.body?.funil && typeof req.body.funil === 'object' ? req.body.funil : {};
+
+        const digestRows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_digest'");
+        const lastRunRows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ai_insights_last_run'");
+        let digest = null;
+        if (digestRows && digestRows[0] && digestRows[0].value) { try { digest = JSON.parse(digestRows[0].value); } catch (e) {} }
+
+        // Números só como texto simples — nunca deixamos o modelo "inventar" um
+        // valor que não veio daqui.
+        const funilTexto = Object.keys(funil).length
+            ? Object.entries(funil).map(([k, v]) => `${k}: ${v}`).join(', ')
+            : 'não disponível nesta sessão';
+
+        const digestTexto = digest
+            ? `Principais queixas: ${(digest.principais_queixas || []).join(' | ') || 'nenhuma identificada'}\nMotivos de não-fechamento: ${(digest.motivos_nao_fechamento || []).join(' | ') || 'nenhum identificado'}\nResumo geral: ${digest.resumo_geral || '-'}`
+            : 'Ainda não há análise qualitativa gerada (roda automaticamente a cada poucas horas).';
+
+        const contexto = await getWhatsappAiContext();
+        const sys = `${contexto}
+
+Você é o assistente interno de gestão do CRM de uma clínica — fala com o ATENDENTE/GESTOR, nunca com o paciente. Responda a pergunta dele usando SOMENTE os dados abaixo (não invente números nem fatos que não estão aqui). Seja direto, use bullets quando ajudar a leitura, português do Brasil, sem saudação nem despedida.
+
+DADOS DISPONÍVEIS:
+- Funil de leads (contagem por coluna): ${funilTexto}
+- Última análise qualitativa das conversas (${(lastRunRows && lastRunRows[0]) ? lastRunRows[0].value : 'ainda não rodou'}):
+${digestTexto}
+
+Se a pergunta pedir algo que não está nos dados acima, diga isso claramente em vez de inventar.`;
+
+        const userText = historico.map(h => `${h.role === 'user' ? 'Atendente' : 'Você'}: ${h.text}`).join('\n')
+            + (historico.length ? '\n' : '') + `Atendente: ${pergunta}`;
+
+        const resposta = await callGeminiCopilot(sys, userText);
+        res.json({ resposta: resposta || 'Não consegui gerar uma resposta agora.' });
+    } catch (e) {
+        console.error('ai-agent/ask:', e.message);
+        res.status(502).json({ error: e.message || 'Falha ao consultar o agente de IA.' });
+    }
 });
 
 app.get('/api/leads/:id/followup', async (req, res) => {

@@ -1316,6 +1316,10 @@ function setChatFilter(mode) {
     document.querySelectorAll('.chat-filter-menu-item').forEach(el => {
         el.classList.toggle('active', el.dataset.filter === mode);
     });
+    // Chips de acesso rápido embaixo da busca (subconjunto dos filtros).
+    document.querySelectorAll('.chat-filter-chip').forEach(el => {
+        el.classList.toggle('active', el.dataset.filter === mode);
+    });
 
     const toggleBtn = document.getElementById('chat-filter-toggle-btn');
     const dot = document.getElementById('chat-filter-active-dot');
@@ -1412,16 +1416,40 @@ function filterChatContacts(query) {
         } else if (activeChatFilter === 'awaiting') {
             // O lead mandou a última mensagem e ninguém (atendente ou IA) respondeu
             // ainda — é o lead que está esperando resposta nossa. Mesmo critério da
-            // etiqueta ⏳ "Aguardando Resposta" que aparece no card.
+            // etiqueta ⏳ "Aguardando Resposta" que aparece no card. EXCLUI os que a
+            // IA já qualificou (esses têm o filtro "Qualificado (IA)" só deles), pra
+            // os dois filtros não se sobreporem.
             filtered = filtered.filter(chat => {
                 if (isGroupChat(chat)) return false;
                 const dir = chat.last_direction || chat.direction;
-                return dir === 'in';
+                if (dir !== 'in') return false;
+                if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+                    const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
+                    if (lead && lead.qualificado_em) return false;
+                }
+                return true;
             });
             // Quem está esperando resposta há mais tempo no topo.
             filtered = [...filtered].sort((a, b) => {
                 const ta = parseD1TimestampMs(a.last_timestamp || a.timestamp || a.last_interaction) || 0;
                 const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
+                return ta - tb;
+            });
+        } else if (activeChatFilter === 'quente') {
+            // Leads que a IA marcou como qualificados e que ainda ninguém atendeu
+            // (tag ia-qualificado + qualificado_em setado). Mesmo critério do badge
+            // abaixo da busca.
+            filtered = filtered.filter(chat => {
+                if (typeof leads === 'undefined' || !Array.isArray(leads)) return false;
+                const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
+                return !!(lead && lead.qualificado_em);
+            });
+            // Esperando atendimento há mais tempo primeiro.
+            filtered = [...filtered].sort((a, b) => {
+                const leadA = leads.find(l => isSamePhone(l.telefone, a.phone));
+                const leadB = leads.find(l => isSamePhone(l.telefone, b.phone));
+                const ta = parseD1TimestampMs(leadA && leadA.qualificado_em) || 0;
+                const tb = parseD1TimestampMs(leadB && leadB.qualificado_em) || 0;
                 return ta - tb;
             });
         } else if (activeChatFilter === 'favorites') {
@@ -1568,6 +1596,7 @@ function renderContactsList(chats) {
         const emptyMessages = {
             unread: 'Nenhuma conversa não lida.',
             awaiting: 'Nenhuma conversa aguardando resposta do atendente.',
+            quente: 'Nenhum lead quente esperando atendimento no momento.',
             favorites: 'Nenhum favorito ainda. Passe o mouse numa conversa e clique na estrela pra favoritar.',
             contacts: 'Nenhum contato encontrado.',
             groups: 'Sem conversas em grupo. A API do WhatsApp Business usada aqui não suporta grupos.',
@@ -2135,6 +2164,11 @@ function applyLeadPanelCollapsed() {
     panel.classList.toggle('lp-hidden', !open);
     const btn = panel.querySelector('.chat-lead-collapse');
     if (btn) btn.title = 'Ocultar ficha do lead';
+    const hdrBtn = document.getElementById('btn-chat-ficha');
+    if (hdrBtn) {
+        hdrBtn.classList.toggle('is-on', open);
+        hdrBtn.title = open ? 'Ocultar a ficha do lead' : 'Mostrar a ficha do lead';
+    }
 }
 
 function toggleLeadPanelCollapse() {
@@ -2590,8 +2624,8 @@ async function endLeadService(leadId) {
 }
 
 // "Finalizar atendimento" (botão vermelho do cabeçalho do chat) — descarta o
-// lead: desliga IA e follow-up, para campanhas, bloqueia o número e move pra
-// "Follow Up/Perdido" com a etiqueta "descartado".
+// lead: desliga IA e follow-up, para campanhas e move pra "Follow Up/Perdido"
+// com a etiqueta "descartado". NÃO bloqueia o número.
 async function finalizeLeadFromChat() {
     const lead = (typeof findLeadFromActiveChat === 'function') ? findLeadFromActiveChat() : null;
     if (!lead) { if (typeof showToast === 'function') showToast('Abra uma conversa primeiro.', 'danger'); return; }
@@ -2599,8 +2633,8 @@ async function finalizeLeadFromChat() {
     const nomeSafe = (typeof escapeHtml === 'function') ? escapeHtml(lead.nome || 'este contato') : (lead.nome || 'este contato');
     const ok = await customConfirm(
         `Finalizar o atendimento de <b>${nomeSafe}</b>?<br><br>` +
-        `O lead vai para "Follow Up/Perdido" com a etiqueta <b>descartado</b>, a IA e os follow-ups são desligados, ele para de receber campanhas e o <b>número é bloqueado</b> (mensagens novas dele passam a ser ignoradas).<br><br>` +
-        `Dá pra reverter: desbloquear o número, tirar o opt-out de campanha e mover o lead de volta.`,
+        `O lead vai para "Follow Up/Perdido" com a etiqueta <b>descartado</b>, a IA e os follow-ups são desligados e ele para de receber campanhas. O número <b>não é bloqueado</b> — se ele mandar mensagem de novo, ela continua chegando normalmente.<br><br>` +
+        `Dá pra reverter: tirar o opt-out de campanha e mover o lead de volta.`,
         'Finalizar atendimento'
     );
     if (!ok) return;
@@ -2627,14 +2661,11 @@ async function finalizeLeadFromChat() {
                 if (!t.includes('descartado')) { t.push('descartado'); l.tags = t.join(','); }
             }
         }
-        if (window.currentActiveChat) {
-            try { setChatSetting(window.currentActiveChat.phone, 'is_blocked', true); } catch (e) {}
-        }
         if (typeof stopLeadLockRenewal === 'function') stopLeadLockRenewal();
         if (typeof renderBoard === 'function') renderBoard();
         if (typeof closeActiveChat === 'function') closeActiveChat();
         if (typeof loadChats === 'function') loadChats(true);
-        if (typeof showToast === 'function') showToast('Atendimento finalizado. Lead descartado e número bloqueado.', 'success');
+        if (typeof showToast === 'function') showToast('Atendimento finalizado. Lead descartado.', 'success');
     } catch (err) {
         console.error('Erro ao finalizar atendimento:', err);
         if (typeof showToast === 'function') showToast('Erro de conexão ao finalizar o atendimento.', 'danger');

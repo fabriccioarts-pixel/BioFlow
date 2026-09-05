@@ -600,6 +600,57 @@
         </div>
     </header>
 
+    <!-- ============================================================ -->
+    <!-- AGENTE DE IA — painel deslizante (overlay, não empurra layout) -->
+    <!-- ============================================================ -->
+    <div id="ai-agent-overlay" onclick="closeAiAgentPanel()"
+        style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 9990;"></div>
+    <div id="ai-agent-panel"
+        style="position: fixed; top: 0; right: 0; height: 100vh; width: 400px; max-width: 100vw; background: var(--bg-card); border-left: 1px solid var(--border-color); z-index: 9991; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.25s ease; box-shadow: -8px 0 24px rgba(0,0,0,0.25);">
+
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.1rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+            <div style="display: flex; align-items: center; gap: 0.55rem;">
+                <i class="fa-solid fa-sparkles" style="color: var(--accent-purple);"></i>
+                <b style="color: var(--text-main); font-size: 0.95rem;">Agente de IA</b>
+            </div>
+            <button onclick="closeAiAgentPanel()" title="Fechar"
+                style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 0.2rem;">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <div style="padding: 0.5rem 1.1rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+            <span id="ai-agent-digest-freshness" style="font-size: 0.72rem; color: var(--text-muted);">Análise: carregando...</span>
+            <button id="ai-agent-refresh-btn" onclick="refreshAiAgentDigest()" title="Atualizar análise agora (1x por hora)"
+                style="background: transparent; border: none; color: var(--accent-purple); cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.3rem; flex-shrink: 0;">
+                <i class="fa-solid fa-rotate"></i> Atualizar
+            </button>
+        </div>
+
+        <div id="ai-agent-messages" style="flex: 1; overflow-y: auto; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.7rem;">
+            <div id="ai-agent-empty-state" style="text-align: center; padding: 1.5rem 0.5rem;">
+                <i class="fa-solid fa-sparkles" style="font-size: 1.8rem; color: var(--accent-purple); opacity: 0.7;"></i>
+                <p style="color: var(--text-muted); font-size: 0.82rem; margin: 0.7rem 0 1rem;">Pergunte qualquer coisa sobre a sua carteira de leads.</p>
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <button class="ai-agent-chip" onclick="askAiAgentChip('Como estão os leads agora?')">Como estão os leads agora?</button>
+                    <button class="ai-agent-chip" onclick="askAiAgentChip('Qual a principal queixa dos pacientes?')">Qual a principal queixa dos pacientes?</button>
+                    <button class="ai-agent-chip" onclick="askAiAgentChip('Por que as pessoas não estão fechando?')">Por que as pessoas não estão fechando?</button>
+                    <button class="ai-agent-chip" onclick="askAiAgentChip('Me dá um feedback geral do atendimento.')">Me dá um feedback geral do atendimento</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 0.85rem 1.1rem; border-top: 1px solid var(--border-color); flex-shrink: 0; display: flex; gap: 0.5rem; align-items: flex-end;">
+            <textarea id="ai-agent-input" rows="1" placeholder="Pergunte algo..."
+                onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); sendAiAgentMessage(); }"
+                style="flex: 1; resize: none; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem; border-radius: 8px; outline: none; font-family: inherit; font-size: 0.85rem; max-height: 100px;"></textarea>
+            <button id="ai-agent-send-btn" onclick="sendAiAgentMessage()" title="Enviar"
+                style="width: 38px; height: 38px; flex-shrink: 0; background: var(--accent-purple); border: none; color: #fff; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
+    </div>
+
     <!-- Envolve a barra superior + todas as views, pra elas empilharem em coluna
          ao lado da sidebar (que fica sozinha na linha do body). -->
     <div class="app-content" id="main-content">
@@ -619,6 +670,11 @@
                 style="display: none; position: absolute; top: calc(100% + 6px); left: 0; width: 100%; max-height: 320px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none; z-index: 9999;">
             </div>
         </div>
+
+        <button class="sb-icon-btn" id="ai-agent-toggle-btn" onclick="toggleAiAgentPanel()" title="Agente de IA — pergunte sobre a carteira de leads"
+            style="flex-shrink: 0;">
+            <span class="lqa" data-liquid aria-hidden="true"></span>
+        </button>
 
         <button class="sb-icon-btn" id="theme-toggle" onclick="toggleTheme()" title="Alternar modo claro/escuro"
             style="flex-shrink: 0;">
@@ -3371,7 +3427,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                 <i class="fa-solid fa-hourglass-half"></i> Aguardando resposta
                             </div>
                             <div class="chat-filter-menu-item" data-filter="quente" onclick="setChatFilter('quente')">
-                                <i class="fa-solid fa-fire" style="color: #f97316;"></i> Quentes (IA)
+                                <i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA
                             </div>
                             <div class="chat-filter-menu-item" data-filter="favorites" onclick="setChatFilter('favorites')">
                                 <i class="fa-regular fa-star"></i> Favoritos
@@ -3391,10 +3447,18 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </div>
                     </div>
                 </div>
+                <!-- Chips de acesso rápido aos filtros mais usados (embaixo da busca) -->
+                <div id="chat-filter-chips"
+                    style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem;">
+                    <button type="button" class="chat-filter-chip active" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
+                    <button type="button" class="chat-filter-chip" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
+                    <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')">Aguardando resposta</button>
+                    <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+                </div>
             </div>
             <!-- Badge de leads quentes (qualificados pela IA) esperando atendimento -->
             <div id="hot-leads-badge" onclick="setChatFilter('quente')"
-                style="display: none; align-items: center; gap: 0.5rem; margin: 0 1.5rem 0.6rem; padding: 0.55rem 0.85rem; border-radius: 8px; cursor: pointer; font-size: 0.82rem; font-weight: 600; flex-shrink: 0;">
+                style="display: none; align-items: center; gap: 0.5rem; margin: 0; padding: 0.6rem 1.5rem; border-radius: 0; cursor: pointer; font-size: 0.82rem; font-weight: 600; flex-shrink: 0;">
                 <i class="fa-solid fa-fire"></i>
                 <span id="hot-leads-badge-text">0 leads quentes esperando atendimento</span>
             </div>
@@ -3449,7 +3513,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
-                    <button type="button" id="btn-copilot-summary" onclick="copilotSummarize()" class="copilot-btn"
+                    <button type="button" id="btn-copilot-summary" onclick="copilotSummarize()" class="copilot-btn copilot-btn--purple"
                         title="Resumir esta conversa com IA">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> <span class="copilot-btn-label">Resumir</span>
                     </button>
@@ -3462,12 +3526,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 236px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; z-index: 1200; padding: 0.35rem 0; max-height: 70vh; overflow-y: auto;">
                         </div>
                     </div>
-                    <button type="button" id="btn-chat-ficha" onclick="toggleLeadPanelCollapse()" class="copilot-btn"
+                    <button type="button" id="btn-chat-ficha" onclick="toggleLeadPanelCollapse()" class="copilot-btn copilot-btn--warning"
                         title="Mostrar / ocultar a ficha do lead">
                         <i class="fa-solid fa-address-card"></i> <span class="copilot-btn-label">Ficha</span>
                     </button>
                     <button type="button" id="btn-chat-finalize" onclick="finalizeLeadFromChat()" class="copilot-btn copilot-btn--success"
-                        title="Finalizar atendimento: descarta o lead, desliga IA e follow-up, bloqueia campanhas e o número">
+                        title="Finalizar atendimento: descarta o lead, desliga IA e follow-up e bloqueia campanhas (número não é bloqueado)">
                         <i class="fa-solid fa-circle-check"></i> <span class="copilot-btn-label">Finalizar atendimento</span>
                     </button>
                     <button type="button" class="chat-mobile-ficha" title="Ficha do lead" aria-label="Ver ficha do lead"

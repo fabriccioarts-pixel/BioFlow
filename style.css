@@ -71,6 +71,11 @@
     100% { opacity: 1; }
 }
 
+@keyframes hotLeadPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
 @keyframes funnel-zoom-in {
     0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
     100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -123,10 +128,12 @@
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
     --accent-info: #38bdf8;
+    --accent-purple: #a78bfa;
     --accent-success-tint: rgba(16, 185, 129, 0.12);
     --accent-warning-tint: rgba(251, 191, 36, 0.12);
     --accent-danger-tint: rgba(248, 113, 113, 0.12);
     --accent-info-tint: rgba(56, 189, 248, 0.12);
+    --accent-purple-tint: rgba(167, 139, 250, 0.12);
     --bg-main: hsl(230, 12%, 10%);
     --bg-hover: hsl(230, 9%, 16%);
     --border-color: hsl(var(--border));
@@ -216,10 +223,12 @@
     --accent-warning: #d97706;
     --accent-danger: #dc2626;
     --accent-info: #0284c7;
+    --accent-purple: #7c3aed;
     --accent-success-tint: rgba(5, 150, 105, 0.12);
     --accent-warning-tint: rgba(217, 119, 6, 0.12);
     --accent-danger-tint: rgba(220, 38, 38, 0.12);
     --accent-info-tint: rgba(2, 132, 199, 0.12);
+    --accent-purple-tint: rgba(124, 58, 237, 0.12);
     --border-color: hsl(var(--border));
     --btn-secondary-bg: hsl(var(--secondary));
     --btn-secondary-hover: hsl(var(--muted));
@@ -4943,6 +4952,30 @@ select.form-control option,
     color: var(--accent-success);
 }
 
+/* Chips de acesso rápido aos filtros, embaixo da barra de busca do chat. */
+.chat-filter-chip {
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-main);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.chat-filter-chip:hover { color: var(--text-main); border-color: var(--text-muted); }
+.chat-filter-chip.active {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: var(--accent-success);
+}
 
 .dash-card-compact {
     padding: 0.55rem !important;
@@ -7397,6 +7430,8 @@ body:has(#login-overlay.active) header { display: none; }
 
     /* No mobile a ficha é um drawer de tela cheia — abre pelo botão "Ficha do lead" */
     .chat-lead-collapse { display: none !important; }
+    /* No mobile quem abre a ficha é o ícone .chat-mobile-ficha, não o badge do topo. */
+    #btn-chat-ficha { display: none !important; }
 
     #chat-active-header { padding: 0.8rem 1rem !important; }
     #chat-active-input { padding: 0.7rem 0.9rem !important; }
@@ -7566,6 +7601,11 @@ body:has(#login-overlay.active) header { display: none; }
 /* No item "Agente de IA" da navbar lateral: no lugar do ícone de robô */
 .sb-tool-btn .lqa {
     --lqa-size: 18px;
+}
+
+/* No botão da topbar (ao lado do modo noturno) */
+#ai-agent-toggle-btn .lqa {
+    --lqa-size: 22px;
 }
 
 /* ============================================================================
@@ -7772,13 +7812,123 @@ h1, h2,
 }
 .copilot-btn:hover { filter: brightness(1.08); }
 .copilot-btn:disabled { opacity: 0.55; cursor: default; }
+.copilot-btn.is-on { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.55); }
 .copilot-btn--success {
     background: var(--accent-success, #10b981);
     border-color: var(--accent-success, #10b981);
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+/* Brilho "hard" (faixa nítida, sem blur) varrendo o botão em loop constante. */
+.copilot-btn--success > * { position: relative; z-index: 2; }
+.copilot-btn--success::before {
+    content: "";
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    left: 0;
+    width: 60%;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(
+        105deg,
+        transparent 0,
+        transparent 43%,
+        rgba(255, 255, 255, 0.9) 44%,
+        rgba(255, 255, 255, 0.9) 49%,
+        transparent 50%,
+        transparent 100%
+    );
+    transform: translateX(-170%);
+    animation: copilotBtnShine 2.2s linear infinite;
+}
+@keyframes copilotBtnShine {
+    0%   { transform: translateX(-170%); }
+    100% { transform: translateX(370%); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .copilot-btn--success::before { animation: none; opacity: 0; }
 }
 .copilot-btn--danger {
     background: var(--accent-danger, #ef4444);
     border-color: var(--accent-danger, #ef4444);
+}
+.copilot-btn--purple {
+    background: var(--accent-purple, #8b5cf6);
+    border-color: var(--accent-purple, #8b5cf6);
+}
+.copilot-btn--warning {
+    background: var(--accent-warning, #fbbf24);
+    border-color: var(--accent-warning, #fbbf24);
+    color: #422006; /* âmbar é claro demais pra texto branco ler bem em cima */
+}
+
+/* --- Painel "Agente de IA" (topbar) --- */
+#ai-agent-panel.open { transform: translateX(0) !important; }
+
+.ai-agent-chip {
+    text-align: left;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.55rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+.ai-agent-chip:hover {
+    border-color: var(--accent-purple);
+    background: var(--accent-purple-tint);
+}
+
+.ai-agent-msg {
+    max-width: 88%;
+    padding: 0.55rem 0.8rem;
+    border-radius: 12px;
+    font-size: 0.84rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.ai-agent-msg--user {
+    align-self: flex-end;
+    background: var(--accent-purple);
+    color: #fff;
+    border-bottom-right-radius: 3px;
+}
+.ai-agent-msg--assistant {
+    align-self: flex-start;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    border-bottom-left-radius: 3px;
+}
+.ai-agent-msg--loading {
+    align-self: flex-start;
+    display: flex;
+    gap: 4px;
+    padding: 0.7rem 0.9rem;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    border-bottom-left-radius: 3px;
+}
+.ai-agent-msg--loading span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-purple);
+    opacity: 0.5;
+    animation: aiAgentDotBounce 1.1s infinite ease-in-out;
+}
+.ai-agent-msg--loading span:nth-child(2) { animation-delay: 0.15s; }
+.ai-agent-msg--loading span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes aiAgentDotBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-4px); opacity: 1; }
 }
 .copilot-icon-btn { color: var(--accent-primary) !important; }
 .copilot-icon-btn.is-loading { opacity: 0.5; pointer-events: none; }

@@ -533,6 +533,7 @@ async function fetchLeadsFromServer(silent = false) {
 
         leads = newLeads;
         renderBoard();
+        if (typeof renderHotLeadsBadge === 'function') renderHotLeadsBadge();
     } catch (e) {
         if (!silent) {
             console.error('Erro ao buscar leads:', e);
@@ -4746,6 +4747,220 @@ function finishLogin(user) {
     loadAvatarMap();
     loadUnidades();
     startHeartbeat();
+    startHotLeadsBadgeClock();
+}
+
+// === BADGE DE LEADS QUENTES (qualificados pela IA, esperando atendimento) ===
+// Não busca nada no servidor: só relê o array "leads" (já mantido atualizado pelo
+// polling/SSE do Kanban) e recalcula. Roda num relógio próprio porque a urgência
+// (15min = vira "atrasado") muda com o tempo mesmo sem nenhum dado novo chegar.
+const HOT_LEAD_SLA_MS = 15 * 60 * 1000;
+
+function renderHotLeadsBadge() {
+    const el = document.getElementById('hot-leads-badge');
+    const textEl = document.getElementById('hot-leads-badge-text');
+    if (!el || !textEl || typeof leads === 'undefined' || !Array.isArray(leads)) return;
+
+    const quentes = leads.filter(l => l.qualificado_em);
+    if (quentes.length === 0) {
+        el.style.display = 'none';
+        return;
+    }
+
+    const now = Date.now();
+    const parseTs = (typeof parseD1TimestampMs === 'function') ? parseD1TimestampMs : (s) => new Date((s || '').replace(' ', 'T') + 'Z').getTime();
+    let piorEsperaMs = 0;
+    quentes.forEach(l => {
+        const t = parseTs(l.qualificado_em) || now;
+        piorEsperaMs = Math.max(piorEsperaMs, now - t);
+    });
+
+    const atrasado = piorEsperaMs >= HOT_LEAD_SLA_MS;
+
+    el.style.display = 'flex';
+    // Faixa de largura total, fundo cheio: vermelho forte quando atrasado,
+    // laranja forte caso contrário. Texto e ícone brancos.
+    el.style.background = atrasado ? '#dc2626' : '#ea580c';
+    el.style.border = 'none';
+    el.style.borderTop = el.style.borderBottom = '1px solid rgba(0, 0, 0, 0.18)';
+    el.style.color = '#fff';
+    el.style.animation = atrasado ? 'hotLeadPulse 1.5s ease-in-out infinite' : 'none';
+
+    const plural = quentes.length > 1;
+    if (quentes.length === 1 && quentes[0].nome) {
+        const nome = quentes[0].nome.replace(' [MKT]', '');
+        textEl.textContent = atrasado
+            ? `${nome} está quente há mais de 15min sem atendimento!`
+            : `${nome} está pronto(a) pra ser atendido(a)`;
+    } else {
+        textEl.textContent = atrasado
+            ? `${quentes.length} leads quentes esperando — alguns há mais de 15min!`
+            : `${quentes.length} lead${plural ? 's' : ''} quente${plural ? 's' : ''} esperando atendimento`;
+    }
+}
+
+function startHotLeadsBadgeClock() {
+    renderHotLeadsBadge();
+    if (window._hotLeadsClock) clearInterval(window._hotLeadsClock);
+    // Só recalcula a urgência com base no relógio — não bate no servidor.
+    window._hotLeadsClock = setInterval(renderHotLeadsBadge, 20000);
+}
+
+// ============================================================================
+// AGENTE DE IA (painel da topbar) — pergunta livre sobre a carteira de leads.
+// Economia de tokens: o funil (contagem por coluna) é calculado aqui, 100% em
+// memória, a partir do array "leads" que o Kanban já mantém sincronizado —
+// nunca gera uma leitura nova no D1 só pra abrir o painel. O texto qualitativo
+// (queixas/motivos de perda) vem de um digest cacheado no servidor, recalculado
+// no máximo a cada poucas horas — o painel só consome o que já está pronto.
+// ============================================================================
+let aiAgentHistory = []; // {role: 'user'|'assistant', text} — só a sessão atual, nunca persistido
+let aiAgentOpen = false;
+
+function computeAiAgentFunnel() {
+    if (typeof leads === 'undefined' || !Array.isArray(leads)) return {};
+    const counts = {};
+    leads.forEach(l => {
+        const col = l.column_id || l.column || 'col-entrada';
+        const label = (typeof KANBAN_COLUMNS !== 'undefined' && KANBAN_COLUMNS[col]) ? KANBAN_COLUMNS[col].label : col;
+        counts[label] = (counts[label] || 0) + 1;
+    });
+    const quentes = leads.filter(l => l.qualificado_em).length;
+    if (quentes > 0) counts['Quentes (IA) esperando atendimento'] = quentes;
+    return counts;
+}
+
+function toggleAiAgentPanel() {
+    if (aiAgentOpen) closeAiAgentPanel(); else openAiAgentPanel();
+}
+
+function openAiAgentPanel() {
+    const panel = document.getElementById('ai-agent-panel');
+    const overlay = document.getElementById('ai-agent-overlay');
+    if (!panel || !overlay) return;
+    overlay.style.display = 'block';
+    panel.classList.add('open');
+    aiAgentOpen = true;
+    loadAiAgentDigestFreshness();
+    const input = document.getElementById('ai-agent-input');
+    if (input) setTimeout(() => input.focus(), 250);
+}
+
+function closeAiAgentPanel() {
+    const panel = document.getElementById('ai-agent-panel');
+    const overlay = document.getElementById('ai-agent-overlay');
+    if (!panel || !overlay) return;
+    panel.classList.remove('open');
+    overlay.style.display = 'none';
+    aiAgentOpen = false;
+}
+
+async function loadAiAgentDigestFreshness() {
+    const el = document.getElementById('ai-agent-digest-freshness');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/ai-agent/digest');
+        const json = await res.json();
+        if (!json.last_run) { el.textContent = 'Análise: ainda não gerada'; return; }
+        const ms = (typeof parseD1TimestampMs === 'function') ? parseD1TimestampMs(json.last_run) : new Date(json.last_run).getTime();
+        const minAgo = Math.max(0, Math.round((Date.now() - ms) / 60000));
+        const texto = minAgo < 60 ? `há ${minAgo}min` : `há ${Math.round(minAgo / 60)}h`;
+        el.textContent = `Análise: ${texto}`;
+    } catch (e) {
+        el.textContent = 'Análise: indisponível';
+    }
+}
+
+async function refreshAiAgentDigest() {
+    const btn = document.getElementById('ai-agent-refresh-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/ai-agent/refresh', { method: 'POST' });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (typeof showToast === 'function') showToast(json.error || 'Não foi possível atualizar agora.', 'danger');
+            return;
+        }
+        if (typeof showToast === 'function') showToast('Análise atualizada.', 'success');
+        loadAiAgentDigestFreshness();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('Erro de conexão ao atualizar a análise.', 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function askAiAgentChip(pergunta) {
+    const input = document.getElementById('ai-agent-input');
+    if (input) input.value = pergunta;
+    sendAiAgentMessage();
+}
+
+function renderAiAgentMessage(role, text) {
+    const container = document.getElementById('ai-agent-messages');
+    if (!container) return null;
+    const emptyState = document.getElementById('ai-agent-empty-state');
+    if (emptyState) emptyState.style.display = 'none';
+
+    const div = document.createElement('div');
+    div.className = `ai-agent-msg ai-agent-msg--${role}`;
+    div.textContent = text;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return div;
+}
+
+function renderAiAgentLoading() {
+    const container = document.getElementById('ai-agent-messages');
+    if (!container) return null;
+    const div = document.createElement('div');
+    div.className = 'ai-agent-msg--loading';
+    div.id = 'ai-agent-loading-bubble';
+    div.innerHTML = '<span></span><span></span><span></span>';
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return div;
+}
+
+async function sendAiAgentMessage() {
+    const input = document.getElementById('ai-agent-input');
+    const sendBtn = document.getElementById('ai-agent-send-btn');
+    if (!input) return;
+    const pergunta = input.value.trim();
+    if (!pergunta) return;
+
+    input.value = '';
+    if (sendBtn) sendBtn.disabled = true;
+    renderAiAgentMessage('user', pergunta);
+    aiAgentHistory.push({ role: 'user', text: pergunta });
+    const loadingBubble = renderAiAgentLoading();
+
+    try {
+        const res = await fetch('/api/ai-agent/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pergunta,
+                historico: aiAgentHistory.slice(0, -1), // sem a pergunta atual, que já vai separada
+                funil: computeAiAgentFunnel()
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (loadingBubble) loadingBubble.remove();
+        if (!res.ok) {
+            renderAiAgentMessage('assistant', json.error || 'Não consegui responder agora. Tente de novo em instantes.');
+            return;
+        }
+        renderAiAgentMessage('assistant', json.resposta || 'Não consegui gerar uma resposta.');
+        aiAgentHistory.push({ role: 'assistant', text: json.resposta || '' });
+        // Mantém só as últimas 6 trocas — sessão de chat curta, custo de token previsível.
+        if (aiAgentHistory.length > 12) aiAgentHistory = aiAgentHistory.slice(-12);
+    } catch (e) {
+        if (loadingBubble) loadingBubble.remove();
+        renderAiAgentMessage('assistant', 'Erro de conexão. Tente de novo.');
+    } finally {
+        if (sendBtn) sendBtn.disabled = false;
+    }
 }
 
 // === MEU PERFIL ===
