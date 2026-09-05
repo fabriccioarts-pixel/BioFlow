@@ -7511,6 +7511,10 @@ async function followupTick() {
     const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho']);
 
     // ---- Estágio A: abrir execuções novas (só cadência global, só se ativa) ----
+    // Consultas em LOTE. Antes: ~4 consultas por lead candidato (até 200 leads =
+    // ~800 consultas por tick, quase todas só pra descartar o lead que já tinha
+    // run). Agora: filtro barato em memória + 3 consultas por bloco de 15 leads
+    // (bloco pequeno pro nº de parâmetros ligados não passar do limite do D1).
     if (cfg.ativo && Array.isArray(cfg.steps) && cfg.steps.length) {
         const firstDelay = cfg.steps[0].atraso_min || 60;
         const cutoffDelay = flowDbTime(-firstDelay * 60000);
@@ -7522,29 +7526,72 @@ async function followupTick() {
                AND last_msg_at <= ? AND last_msg_at >= ?
              LIMIT 200`, [cutoffDelay, cutoffOld]);
         dbg.janela = (cand || []).length;
-        for (const lead of (cand || [])) {
-            try {
-                if (termCols.includes(lead.column_id)) { dbg.ja_terminado++; continue; }
-                if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) { dbg.fora_das_colunas++; continue; }
-                if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) { dbg.humano_desligado++; continue; }
 
-                const open = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND status IN ('agendado','enviando') LIMIT 1", [lead.id]);
-                if (open && open[0]) { dbg.ja_tem_run++; continue; }
-                const sameAnchor = await queryD1("SELECT id FROM crm_followup_runs WHERE lead_id = ? AND anchor_out_ts = ? LIMIT 1", [lead.id, lead.last_msg_at]);
-                if (sameAnchor && sameAnchor[0]) { dbg.mesma_ancora++; continue; }
+        // Filtros que não precisam de banco — descarta antes de qualquer consulta.
+        const elegiveis = (cand || []).filter(lead => {
+            if (termCols.includes(lead.column_id)) { dbg.ja_terminado++; return false; }
+            if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) { dbg.fora_das_colunas++; return false; }
+            if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) { dbg.humano_desligado++; return false; }
+            return true;
+        });
 
-                const vph = phoneVariants(lead.telefone || '');
-                const vp = vph.map(() => '?').join(', ');
-                const flowWaiting = await queryD1(`SELECT id FROM crm_flow_runs WHERE status = 'waiting_reply' AND phone IN (${vp}) LIMIT 1`, vph);
-                if (flowWaiting && flowWaiting[0]) { dbg.flow_esperando++; continue; }
-                const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
+        const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
 
-                const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-                await queryD1(
-                    'INSERT INTO crm_followup_runs (id, lead_id, phone, origem, step_idx, status, anchor_out_ts, last_inbound_ts, next_send_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
-                    [runId, lead.id, lead.telefone || '', 'global', 'agendado', lead.last_msg_at, (lastIn && lastIn[0] && lastIn[0].timestamp) || null, flowDbTime()]);
-                opened++;
-            } catch (e) { console.error('follow-up: abertura falhou:', e.message); }
+        for (const bloco of chunk(elegiveis, 15)) {
+            const ids = bloco.map(l => l.id);
+            const phonesByLead = new Map(bloco.map(l => [l.id, phoneVariants(l.telefone || '')]));
+            const allPhones = Array.from(new Set([].concat(...phonesByLead.values())));
+            const idPh = ids.map(() => '?').join(', ');
+            const phPh = allPhones.map(() => '?').join(', ');
+
+            // 1) runs já existentes desses leads (qualquer status)
+            const runsRows = ids.length
+                ? await queryD1(`SELECT lead_id, status, anchor_out_ts FROM crm_followup_runs WHERE lead_id IN (${idPh})`, ids)
+                : [];
+            const openLeads = new Set();
+            const anchorsByLead = new Map();
+            for (const r of runsRows) {
+                const lid = String(r.lead_id);
+                if (r.status === 'agendado' || r.status === 'enviando') openLeads.add(lid);
+                if (!anchorsByLead.has(lid)) anchorsByLead.set(lid, new Set());
+                anchorsByLead.get(lid).add(r.anchor_out_ts);
+            }
+
+            // 2) fluxos aguardando resposta nesses telefones
+            const flowRows = allPhones.length
+                ? await queryD1(`SELECT DISTINCT phone FROM crm_flow_runs WHERE status = 'waiting_reply' AND phone IN (${phPh})`, allPhones)
+                : [];
+            const flowWaitingPhones = new Set(flowRows.map(r => r.phone));
+
+            // 3) última mensagem recebida por telefone
+            const lastInRows = allPhones.length
+                ? await queryD1(`SELECT phone, MAX(timestamp) AS ts FROM wa_messages WHERE direction = 'in' AND phone IN (${phPh}) GROUP BY phone`, allPhones)
+                : [];
+            const lastInByPhone = new Map(lastInRows.map(r => [r.phone, r.ts]));
+
+            for (const lead of bloco) {
+                try {
+                    const lid = String(lead.id);
+                    if (openLeads.has(lid)) { dbg.ja_tem_run++; continue; }
+                    const anchors = anchorsByLead.get(lid);
+                    if (anchors && anchors.has(lead.last_msg_at)) { dbg.mesma_ancora++; continue; }
+
+                    const vph = phonesByLead.get(lead.id) || [];
+                    if (vph.some(p => flowWaitingPhones.has(p))) { dbg.flow_esperando++; continue; }
+
+                    let lastInTs = null;
+                    for (const p of vph) {
+                        const ts = lastInByPhone.get(p);
+                        if (ts && (!lastInTs || ts > lastInTs)) lastInTs = ts;
+                    }
+
+                    const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+                    await queryD1(
+                        'INSERT INTO crm_followup_runs (id, lead_id, phone, origem, step_idx, status, anchor_out_ts, last_inbound_ts, next_send_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
+                        [runId, lead.id, lead.telefone || '', 'global', 'agendado', lead.last_msg_at, lastInTs, flowDbTime()]);
+                    opened++;
+                } catch (e) { console.error('follow-up: abertura falhou:', e.message); }
+            }
         }
     }
 

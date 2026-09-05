@@ -1,6 +1,20 @@
 # Changelog - CRM Natuclinic
 
-## 2026-09-05 — Som de notificação mudo quando mensagem chega em segundo plano
+## 2026-09-05 — followupTick fazia ~800 consultas D1 por tick (Estágio A em lote)
+
+### Alterado
+* **`followupTick` (Estágio A — abrir follow-ups novos) passou a consultar em
+  lote.** Antes, pra cada lead candidato (até 200 por tick) fazia ~4 consultas
+  separadas ao D1 — "já tem run?", "mesma âncora?", "fluxo esperando?", "última
+  mensagem recebida?" — mesmo quando o lead já ia ser descartado. Como o cron
+  (`/api/flow-tick`) roda a cada poucos minutos, isso sozinho era um dreno
+  grande de `rows_read` do D1 (a mesma cota que a gente já mexeu no polling do
+  chat). Agora: os filtros que não dependem de banco rodam em memória primeiro,
+  e as 3 consultas restantes são feitas UMA vez por bloco de 15 leads
+  (`... WHERE lead_id IN (...)` / `phone IN (...)`), não por lead. Mesmo
+  comportamento e mesmas contagens de debug, com ~1 consulta pra cada 40 de
+  antes. Estágio B (processar os agendados que já venceram) não mudou — ele já
+  é limitado por `max_por_tick` e só roda quando há algo realmente vencido.
 
 ### Corrigido
 * **`playNotificationSound()` criava um `AudioContext` novo a cada mensagem
