@@ -1,5 +1,27 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Agente de IA: coalesce respostas duplicadas + "Hoje" no Kanban
+
+### Corrigido
+* **IA mandando duas respostas completas pro mesmo lead** (ex.: duas saudações
+  "Oi, sou a Nati..." seguidas, quase iguais): quando o lead manda uma rajada
+  de mensagens, a Meta dispara um webhook por mensagem e cada um chamava
+  `handleWhatsappAiAutoReply` em paralelo, sem nenhuma checagem entre eles —
+  cada invocação gerava e enviava a própria resposta. Agora a função recebe a
+  mensagem-gatilho (`incomingWamid` + timestamp) e, em três pontos (antes de
+  chamar o Gemini, logo depois, e dentro de `sendWhatsappAiReplyHuman` antes de
+  cada balão), confere se ainda é a última mensagem do lead e se ninguém já
+  respondeu depois dela — se não for, desiste e deixa a invocação da mensagem
+  mais nova responder com a conversa inteira no contexto. Não foi somado
+  nenhum atraso novo: as checagens reaproveitam a latência que já existia
+  (chamada ao Gemini + pausas de ritmo humano) pra não arriscar estourar o
+  timeout do webhook da Meta.
+* **Card do Kanban mostrando "1d atrás" pra lead criado hoje:** o cálculo de
+  `daysSince` usava `Math.ceil` + `Math.abs`, então qualquer diferença maior
+  que zero (mesmo segundos) virava 1 dia inteiro. Agora é `Math.floor` e
+  mostra "Hoje" quando dá zero ou negativo. (A causa de fuso horário nesse
+  mesmo cálculo já tinha sido corrigida antes, em `fb2bf1e`.)
+
 ## 2026-09-04 — Reduz polling pra economizar cota de leitura do D1
 
 ### Alterado

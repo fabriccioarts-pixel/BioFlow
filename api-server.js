@@ -519,7 +519,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         console.error('Erro no motor de fluxo:', e);
                     }
                     if (!handledByFlow) {
-                        await handleWhatsappAiAutoReply(resolvedLeadId, from, msg_id).catch(e => console.error('Erro no agente de IA:', e));
+                        await handleWhatsappAiAutoReply(resolvedLeadId, from, msg_id, msgTimestamp).catch(e => console.error('Erro no agente de IA:', e));
                     }
                 }
             } catch(e) {
@@ -1654,7 +1654,13 @@ async function aiStillOnForPhone(phone) {
 // Envia a resposta da IA. Cada parágrafo (linha em branco) vira uma mensagem.
 // Com ritmo humano ligado: pausa de leitura variável, tempo de digitação
 // proporcional ao tamanho, jitter, distração ocasional e "digitando…".
-async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0) {
+// supersededCheck (opcional): callback assíncrono que devolve true se outra
+// invocação já deve responder no lugar dessa (rajada de mensagens do lead —
+// veja o comentário grande acima de handleWhatsappAiAutoReply). Reaproveita as
+// pausas de ritmo humano que já existem aqui como janela de "assentamento" da
+// rajada, em vez de somar mais um atraso novo (a soma já é limitada por
+// max_total pra não estourar o timeout do webhook da Meta).
+async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0, supersededCheck = null) {
     let parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
     if (!parts.length) return;
     // Trava dura: nunca mais que 3 balões por resposta (o modelo às vezes cospe
@@ -1664,16 +1670,22 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
         parts = [...parts.slice(0, AI_MAX_CHUNKS - 1), parts.slice(AI_MAX_CHUNKS - 1).join('\n\n')];
     }
 
+    const stillGood = async () => {
+        if (!(await aiStillOnForPhone(phone))) return false;
+        if (supersededCheck && await supersededCheck()) return false;
+        return true;
+    };
+
     const cfg = await getWhatsappAiTiming();
 
     // Ritmo humano desligado: comportamento antigo (delay fixo + gap uniforme).
     if (!cfg.human) {
         if (floorSec > 0) {
             await new Promise(r => setTimeout(r, floorSec * 1000));
-            if (!(await aiStillOnForPhone(phone))) return;
+            if (!(await stillGood())) return;
         }
         for (let i = 0; i < parts.length; i++) {
-            if (!(await aiStillOnForPhone(phone))) return;
+            if (!(await stillGood())) return;
             await sendWhatsappTextInternal(phone, parts[i]);
             if (i < parts.length - 1) await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
         }
@@ -1693,10 +1705,10 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     let readMs = Math.max(jit(rand(cfg.readMinMs, cfg.readMaxMs)), floorSec * 1000);
     if (cfg.typing) await sendTypingIndicator(incomingWamid);
     await sleep(readMs);
-    if (!(await aiStillOnForPhone(phone))) return;
+    if (!(await stillGood())) return;
 
     for (let i = 0; i < parts.length; i++) {
-        if (!(await aiStillOnForPhone(phone))) return;
+        if (!(await stillGood())) return;
 
         let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
         if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
@@ -1707,7 +1719,47 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     }
 }
 
-async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
+// Anti-duplicidade da IA: quando o lead manda uma rajada de mensagens, a Meta
+// dispara um webhook por mensagem, e cada um chama handleWhatsappAiAutoReply em
+// paralelo — sem trava, cada invocação gera e envia sua própria resposta (saíam
+// 2-3 respostas completas, cada uma quase igual, parafraseando a mesma coisa —
+// ex.: duas saudações "Oi, sou a Nati..." seguidas). A defesa é "coalescer": só
+// responde a invocação cuja mensagem-gatilho (incomingWamid) ainda for a ÚLTIMA
+// mensagem recebida do lead; as demais abortam e deixam essa responder já com a
+// conversa toda no contexto. Decidido pelo estado em wa_messages, então vale
+// igual em invocações concorrentes (servidor local) ou separadas (serverless).
+// Sem atraso novo: reaproveita a latência que já existe (chamada ao Gemini +
+// pausas de ritmo humano) como janela de assentamento, checando em cada ponto.
+
+async function latestInboundMsgId(phone) {
+    const rows = await queryD1(
+        "SELECT id FROM wa_messages WHERE phone = ? AND direction = 'in' ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+        [phone]
+    );
+    return rows && rows[0] ? rows[0].id : null;
+}
+
+async function hasOutboundSince(phone, sinceTs) {
+    if (!sinceTs) return false;
+    const rows = await queryD1(
+        "SELECT 1 FROM wa_messages WHERE phone = ? AND direction = 'out' AND timestamp >= ? LIMIT 1",
+        [phone, sinceTs]
+    );
+    return !!(rows && rows[0]);
+}
+
+// true = essa invocação deve desistir (chegou mensagem nova do lead depois do
+// gatilho, ou alguém já respondeu depois dele).
+async function aiReplySupersededBy(phone, incomingWamid, triggerTs) {
+    if (incomingWamid) {
+        const latest = await latestInboundMsgId(phone);
+        if (latest && latest !== incomingWamid) return true;
+    }
+    if (await hasOutboundSince(phone, triggerTs)) return true;
+    return false;
+}
+
+async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs = null) {
     try {
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const globalEnabled = globalSetting && globalSetting[0] ? globalSetting[0].value === '1' : true;
@@ -1718,8 +1770,18 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
         if (!lead || Number(lead.ai_enabled) !== 1) return;
         if (!['col-entrada', 'col-contatado'].includes(lead.column_id)) return;
 
+        // Checagem de entrada: se por acaso essa invocação só rodou depois que
+        // uma mensagem mais nova do lead já chegou (fila do event loop, retry da
+        // Meta etc.), desiste na hora — a invocação da mensagem mais nova cuida.
+        if (await aiReplySupersededBy(phone, incomingWamid, triggerTs)) return;
+
         const replyText = await callGeminiForWhatsappReply(phone);
         if (!replyText) return;
+
+        // A chamada ao Gemini acima já deu tempo de uma mensagem-irmã da mesma
+        // rajada chegar e ser processada — reconfere antes de decidir o que fazer
+        // com a resposta.
+        if (await aiReplySupersededBy(phone, incomingWamid, triggerTs)) return;
 
         if (replyText.startsWith(WHATSAPP_AI_QUALIFIED_TOKEN)) {
             const aiMode = await getWhatsappAiMode();
@@ -1760,7 +1822,8 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid) {
         // vira o mínimo da pausa inicial. Aborta se a IA do lead for desligada no meio.
         // Não se aplica ao handoff de qualificação acima.
         const replyDelay = await getWhatsappAiReplyDelay();
-        await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay);
+        await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
+            () => aiReplySupersededBy(phone, incomingWamid, triggerTs));
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
     }
@@ -5523,12 +5586,12 @@ app.post('/api/leads/:id/handoff-ai', async (req, res) => {
                 if (variants.length) {
                     const vp = variants.map(() => '?').join(', ');
                     const lastMsg = await queryD1(
-                        `SELECT id, direction FROM wa_messages WHERE phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`,
+                        `SELECT id, direction, timestamp FROM wa_messages WHERE phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`,
                         variants
                     );
                     if (lastMsg && lastMsg[0] && lastMsg[0].direction === 'in') {
                         // await obrigatório: na Vercel a função congela após a resposta HTTP.
-                        await handleWhatsappAiAutoReply(id, lead.telefone, lastMsg[0].id).catch(e => console.error('handoff-ai: IA falhou:', e));
+                        await handleWhatsappAiAutoReply(id, lead.telefone, lastMsg[0].id, lastMsg[0].timestamp).catch(e => console.error('handoff-ai: IA falhou:', e));
                         respondeuAgora = true;
                     }
                 }

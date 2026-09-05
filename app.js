@@ -1014,9 +1014,10 @@ procedimentoName = escapeHtml(procedimentoName);
 let daysSince = 'Recente';
 if (lead.created_at) {
 const createdDate = parseSqlDate(lead.created_at);
-const diffTime = Math.abs(new Date() - createdDate);
-const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-daysSince = `${diffDays}d atrás`;
+// Math.floor (não ceil): um lead de hoje tem que dar "Hoje", não "1d atrás".
+// Sem Math.abs: se o horário vier levemente no futuro (clock skew), continua "Hoje".
+const diffDays = Math.floor((new Date() - createdDate) / 86400000);
+daysSince = diffDays <= 0 ? 'Hoje' : `${diffDays}d atrás`;
 }
 
 // 3. Indicadores de Metadados
