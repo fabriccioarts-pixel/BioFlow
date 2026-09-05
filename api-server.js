@@ -7601,7 +7601,16 @@ async function followupTick() {
         `SELECT * FROM crm_followup_runs WHERE status = 'agendado' AND next_send_at IS NOT NULL AND next_send_at <= ? ORDER BY next_send_at ASC LIMIT ${lim}`,
         [flowDbTime()]);
 
+    // Orçamento de tempo: se o lote demorar demais (ex.: cada envio à Meta ~0,3-0,5s
+    // + updates), para com folga antes de a função serverless estourar o timeout e
+    // ser morta no meio. O que sobrar continua 'agendado' com next_send_at vencido
+    // e é pego no próximo tick — sem perder nem duplicar nada.
+    const STAGE_B_BUDGET_MS = 35000;
+    const stageBStart = Date.now();
+    let stageBCortado = false;
+
     for (const run of (runs || [])) {
+        if (Date.now() - stageBStart > STAGE_B_BUDGET_MS) { stageBCortado = true; break; }
         try {
             const lr = await queryD1('SELECT * FROM leads WHERE id = ?', [run.lead_id]);
             const lead = lr && lr[0];
@@ -7636,6 +7645,22 @@ async function followupTick() {
 
             const texto = flowInterpolate(step.texto, { nome: lead.nome || '', telefone: lead.telefone || '' });
             const stepTemplate = String(step.template_name || '').trim();
+
+            // Avança o run ANTES de enviar. Se a função morrer (timeout da Vercel)
+            // entre este UPDATE e o envio, o passo é PULADO, nunca reenviado — um
+            // follow-up perdido é bem melhor que um follow-up duplicado. O código
+            // já ignorava erro de envio e avançava assim mesmo; isto só torna o
+            // comportamento consistente também no caso de timeout.
+            const nextIdx = run.step_idx + 1;
+            const anchor = followupParseTs(run.anchor_out_ts) || new Date();
+            const isLast = nextIdx >= steps.length;
+            if (isLast) {
+                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, run.id]);
+            } else {
+                const nextAt = new Date(anchor.getTime() + (steps[nextIdx].atraso_min || 60) * 60000);
+                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, followupAtSql(nextAt), run.id]);
+            }
+
             if (within24 && texto.trim()) {
                 try { await sendWhatsappTextInternal(lead.telefone, texto, 'followup'); }
                 catch (e) { console.error('follow-up: envio falhou:', e.message); }
@@ -7648,20 +7673,17 @@ async function followupTick() {
             }
             // senão (fora da janela e sem template configurado): passo pulado.
 
-            const nextIdx = run.step_idx + 1;
-            const anchor = followupParseTs(run.anchor_out_ts) || new Date();
-            if (nextIdx < steps.length) {
-                const nextAt = new Date(anchor.getTime() + (steps[nextIdx].atraso_min || 60) * 60000);
-                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, followupAtSql(nextAt), run.id]);
-            } else {
-                await followupApplyFinal(cfg, lead);
-                await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, run.id]);
-            }
+            if (isLast) await followupApplyFinal(cfg, lead);
             processed++;
+
+            // Pequena folga entre envios: não é rate-limit da Meta (o limite é bem
+            // maior), é só pra não empilhar o lote inteiro no mesmo instante.
+            await new Promise(r => setTimeout(r, 150));
         } catch (e) { console.error('follow-up: run erro:', e.message); }
     }
 
-    return { opened, processed, debug: dbg };
+    if (stageBCortado) console.warn('follow-up: orçamento de tempo do Estágio B esgotado — resto no próximo tick');
+    return { opened, processed, debug: dbg, stage_b_cortado: stageBCortado };
 }
 
 app.get('/api/followup/config', async (req, res) => {

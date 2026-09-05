@@ -1,5 +1,24 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — followupTick Estágio B: blindado contra reenvio e enxurrada
+
+### Alterado
+* **O run avança de etapa ANTES do envio** (era depois). Se a função serverless
+  fosse morta por timeout entre o envio e o `UPDATE`, o run continuava
+  `agendado` com a mesma etapa e vencido — e o próximo tick **reenviava** a
+  mesma mensagem. Agora, se algo morrer entre o `UPDATE` e o envio, a etapa é
+  **pulada** (nunca reenviada). O código já engolia erro de envio e avançava
+  do mesmo jeito, então isso só deixa o comportamento consistente também no
+  caso de timeout — um follow-up perdido é bem melhor que um duplicado.
+* **Orçamento de tempo no Estágio B:** se o lote demorar mais de ~35s, para com
+  folga antes do timeout da Vercel. O que sobrar fica `agendado`/vencido e é
+  processado no próximo tick, sem perder nem duplicar.
+* **Folga de 150 ms entre envios**, pra não empilhar o lote inteiro no mesmo
+  instante (não é limite da Meta — é só cadência).
+* O teto de `max_por_tick` (config = 25) já limitava o lote por tick; nada disso
+  muda com o cron passando a rodar a cada 30 min — só faz uma fila acumulada
+  (ex.: a das ~17h que ficou parado) escoar mais devagar, 25 por tick.
+
 ## 2026-09-05 — followupTick fazia ~800 consultas D1 por tick (Estágio A em lote)
 
 ### Alterado
