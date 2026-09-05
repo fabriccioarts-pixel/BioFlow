@@ -1,5 +1,18 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Reverte redução de polling do chat (D1 quota)
+
+### Revertido
+* **Polling de chat/dashboard/notificações voltou aos intervalos originais**
+  (chat 5–6s, dashboard 10s, notificações 10s, kanban em aba oculta 5s). O
+  commit `f127ddf` ("Corta consumo de rows_read do D1") tinha esticado esses
+  intervalos (chat pra 18–20s, notificações pra 60s, dashboard pra 30s) pra
+  não estourar a cota diária do D1 free tier, mas isso deixou a chegada de
+  mensagens perceptivelmente lenta — passou a precisar de F5 pra ver mensagem
+  nova. Revertido a pedido: prioriza latência sobre economia de cota. Os
+  índices e a poda de `crm_notifications` desse mesmo commit foram mantidos
+  em `api-server.js` (só reduzem custo de leitura, não afetam latência).
+
 ## 2026-09-03 — Agente de IA: fim das respostas automáticas duplicadas
 
 ### Corrigido
