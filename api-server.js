@@ -504,6 +504,16 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                 } catch (e) { console.error('follow-up: hook de inbound falhou:', e.message); }
 
+                // Avisa os atendentes conectados NA HORA (mesmo canal SSE do Kanban).
+                // Sem isso, quem não está com essa conversa aberta só via mensagem nova
+                // dependendo de polling — e o polling é pausado de propósito quando a
+                // aba fica em segundo plano (economia de cota do D1). A conexão SSE
+                // continua viva mesmo com a aba oculta, então plugamos nela em vez de
+                // esperar o agente de IA (que pode levar vários segundos pra responder).
+                if (resolvedLeadId) {
+                    try { broadcastLeadsUpdate('wa_message', resolvedLeadId); } catch (e) {}
+                }
+
                 // Agente de IA de pré-qualificação — precisa de "await" aqui: na Vercel
                 // (serverless), a função é congelada assim que a resposta HTTP é
                 // enviada, então um "fire-and-forget" sem await nunca chegava a

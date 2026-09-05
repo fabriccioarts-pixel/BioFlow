@@ -1,5 +1,20 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Mensagem nova do WhatsApp avisa na hora (SSE), mesmo com a aba em segundo plano
+
+### Adicionado
+* **Chat deixa de depender só de polling pra saber que chegou mensagem nova.**
+  O código pausa de propósito TODO o polling (lista de chats, dashboard,
+  notificações) quando a aba fica em segundo plano — dá pra economizar cota
+  do D1, mas isso fazia a chegada de mensagem parecer travada até o atendente
+  voltar pra aba ou clicar no card da conversa. A conexão SSE do Kanban
+  (`/api/kanban/events`) não está nessa lista de pausa e continua viva com a
+  aba oculta. Agora o webhook do WhatsApp manda um evento `wa_message` nela
+  assim que salva a mensagem recebida (antes mesmo do agente de IA rodar, que
+  pode levar vários segundos) — o front atualiza a lista de conversas (badge,
+  som, ordem) e, se for a conversa que já está aberta, atualiza ela também,
+  na hora, em qualquer aba conectada.
+
 ## 2026-09-05 — Agente de IA: coalesce respostas duplicadas + "Hoje" no Kanban
 
 ### Corrigido

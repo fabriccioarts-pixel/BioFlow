@@ -476,13 +476,26 @@ function initKanbanSSE() {
 
     es.onmessage = (e) => {
         try {
-            const { action } = JSON.parse(e.data);
+            const { action, leadId } = JSON.parse(e.data);
             if (loggedUser && ['created', 'updated', 'deleted'].includes(action)) {
                 fetchLeadsFromServer(true);
             }
             // Alguém entrou/saiu de uma conversa — atualiza os avatares nos cards do chat na hora.
             if (action === 'presence' && typeof refreshChatPresence === 'function') {
                 refreshChatPresence();
+            }
+            // Mensagem nova no WhatsApp — chega na hora por SSE (sobrevive à aba em
+            // segundo plano, ao contrário do polling, que fica pausado nesse caso).
+            // Atualiza a lista de conversas (badge, som, ordem) e, se for a conversa
+            // que já está aberta na tela, atualiza ela também.
+            if (action === 'wa_message') {
+                if (typeof loadChats === 'function') loadChats(true);
+                if (window.currentActiveChat && typeof leads !== 'undefined' && Array.isArray(leads)) {
+                    const lead = leads.find(l => l.id === leadId);
+                    if (lead && typeof isSamePhone === 'function' && isSamePhone(lead.telefone, window.currentActiveChat.phone)) {
+                        if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
+                    }
+                }
             }
         } catch (_) {}
     };
