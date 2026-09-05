@@ -418,7 +418,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         console.error('Erro no motor de fluxo:', e);
                     }
                     if (!handledByFlow) {
-                        await handleWhatsappAiAutoReply(resolvedLeadId, from).catch(e => console.error('Erro no agente de IA:', e));
+                        await handleWhatsappAiAutoReply(resolvedLeadId, from, msg_id, msgTimestamp).catch(e => console.error('Erro no agente de IA:', e));
                     }
                 }
             } catch(e) {
@@ -1221,7 +1221,45 @@ async function sendWhatsappAiReplyInChunks(phone, replyText) {
     }
 }
 
-async function handleWhatsappAiAutoReply(leadId, phone) {
+// Anti-duplicidade da IA: quando o lead manda uma rajada de mensagens, a Meta
+// dispara um webhook por mensagem, e cada um chama handleWhatsappAiAutoReply em
+// paralelo — sem trava, cada invocação gera e envia sua própria resposta (saíam
+// 2, 3 balões quase iguais). A defesa é "coalescer": só responde a invocação
+// cuja mensagem-gatilho ainda for a ÚLTIMA mensagem recebida do lead; as demais
+// abortam e deixam essa responder já com a conversa toda no contexto. Tudo é
+// decidido pelo estado no banco (wa_messages), então funciona igual no servidor
+// local (invocações concorrentes) e no serverless (invocações separadas).
+const WHATSAPP_AI_MIN_DEBOUNCE = 6; // s — janela mínima pra rajada assentar antes de responder
+
+async function latestInboundMsgId(phone) {
+    const rows = await queryD1(
+        "SELECT id FROM wa_messages WHERE phone = ? AND direction = 'in' ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+        [phone]
+    );
+    return rows && rows[0] ? rows[0].id : null;
+}
+
+async function hasOutboundSince(phone, sinceTs) {
+    if (!sinceTs) return false;
+    const rows = await queryD1(
+        "SELECT 1 FROM wa_messages WHERE phone = ? AND direction = 'out' AND timestamp >= ? LIMIT 1",
+        [phone, sinceTs]
+    );
+    return !!(rows && rows[0]);
+}
+
+// true = essa invocação deve desistir (chegou mensagem nova do lead, ou alguém
+// já respondeu depois do gatilho).
+async function aiReplySupersededBy(phone, triggerMsgId, triggerTs) {
+    if (triggerMsgId) {
+        const latest = await latestInboundMsgId(phone);
+        if (latest && latest !== triggerMsgId) return true;
+    }
+    if (await hasOutboundSince(phone, triggerTs)) return true;
+    return false;
+}
+
+async function handleWhatsappAiAutoReply(leadId, phone, triggerMsgId = null, triggerTs = null) {
     try {
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const globalEnabled = globalSetting && globalSetting[0] ? globalSetting[0].value === '1' : true;
@@ -1231,6 +1269,14 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
         const lead = leadRows && leadRows[0];
         if (!lead || Number(lead.ai_enabled) !== 1) return;
         if (!['col-entrada', 'col-contatado'].includes(lead.column_id)) return;
+
+        // Espera curta pra rajada de mensagens do lead assentar, e então checa se
+        // essa invocação ainda é a "dona" do turno. Fica dentro do orçamento do
+        // webhook (<= WHATSAPP_AI_MAX_DELAY) pra Meta não reentregar.
+        await new Promise(r => setTimeout(r, WHATSAPP_AI_MIN_DEBOUNCE * 1000));
+        if (await aiReplySupersededBy(phone, triggerMsgId, triggerTs)) return;
+        const stillOnPre = await queryD1('SELECT ai_enabled FROM leads WHERE id = ?', [leadId]);
+        if (!stillOnPre || !stillOnPre[0] || Number(stillOnPre[0].ai_enabled) !== 1) return;
 
         const replyText = await callGeminiForWhatsappReply(phone);
         if (!replyText) return;
@@ -1258,13 +1304,19 @@ async function handleWhatsappAiAutoReply(leadId, phone) {
 
         // Atraso configurável antes de responder (deixa mais humano / dá janela
         // pro atendente assumir). Não se aplica ao handoff de qualificação acima.
+        // Já esperamos WHATSAPP_AI_MIN_DEBOUNCE lá em cima, então só o que faltar.
         const replyDelay = await getWhatsappAiReplyDelay();
-        if (replyDelay > 0) {
-            await new Promise(r => setTimeout(r, replyDelay * 1000));
-            // Se um atendente desligou a IA desse lead durante a espera, aborta.
-            const stillOn = await queryD1('SELECT ai_enabled FROM leads WHERE id = ?', [leadId]);
-            if (!stillOn || !stillOn[0] || Number(stillOn[0].ai_enabled) !== 1) return;
+        const remaining = Math.max(replyDelay - WHATSAPP_AI_MIN_DEBOUNCE, 0);
+        if (remaining > 0) {
+            await new Promise(r => setTimeout(r, remaining * 1000));
         }
+
+        // Últimas checagens antes de enviar: o Gemini pode ter demorado e nesse
+        // meio-tempo o atendente assumiu, o lead mandou mais mensagem ou outra
+        // invocação já respondeu.
+        const stillOn = await queryD1('SELECT ai_enabled FROM leads WHERE id = ?', [leadId]);
+        if (!stillOn || !stillOn[0] || Number(stillOn[0].ai_enabled) !== 1) return;
+        if (await aiReplySupersededBy(phone, triggerMsgId, triggerTs)) return;
 
         await sendWhatsappAiReplyInChunks(phone, replyText);
     } catch (e) {
@@ -3567,6 +3619,9 @@ app.post('/api/init-db', async (req, res) => {
         try { await queryD1('ALTER TABLE leads ADD COLUMN data_valor DATETIME'); } catch(e) {}
         // Proteção anti-bloqueio: lead que optou por não receber disparos de campanha/marketing
         try { await queryD1('ALTER TABLE leads ADD COLUMN campaign_opt_out INTEGER DEFAULT 0'); } catch(e) {}
+        // Marca se o evento "Purchase" já foi mandado pra Meta pra esse lead — evita mandar
+        // de novo (e inflar o número de vendas reportado) toda vez que o card é reaberto/editado.
+        try { await queryD1('ALTER TABLE leads ADD COLUMN meta_purchase_sent_at DATETIME'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN cpf TEXT'); } catch(e) {}
         try { await queryD1('ALTER TABLE leads ADD COLUMN endereco TEXT'); } catch(e) {}
         
@@ -4021,7 +4076,7 @@ app.get('/api/leads', async (req, res) => {
 // ==========================================
 // FUNÇÃO DE ENVIO PARA META CAPI
 // ==========================================
-async function sendMetaCapiEvent(eventName, userData) {
+async function sendMetaCapiEvent(eventName, userData, customData) {
     const { META_PIXEL_ID, META_ACCESS_TOKEN } = process.env;
     if (!META_PIXEL_ID || !META_ACCESS_TOKEN) return;
 
@@ -4045,7 +4100,10 @@ async function sendMetaCapiEvent(eventName, userData) {
                     em: emailHash ? [emailHash] : undefined,
                     fbc: userData.fb_click_id ? `fb.1.${Date.now()}.${userData.fb_click_id}` : undefined,
                     client_user_agent: 'Sistema_Clinica_CRM/1.0'
-                }
+                },
+                // Valor da venda (obrigatório pra Meta otimizar anúncio por ROAS de verdade,
+                // não só por quantidade de conversão) — só vai quando o chamador manda.
+                ...(customData ? { custom_data: customData } : {})
             }]
         };
 
@@ -4206,6 +4264,21 @@ app.put('/api/leads/:id', async (req, res) => {
 
         if (column_id === 'col-atendimento' && lead) {
             sendMetaCapiEvent('Lead', lead);
+        }
+
+        // Evento "Purchase" — dispara quando o lead está (ou acaba de entrar) na coluna
+        // "Ganho" E já tem um valor recebido preenchido. Como coluna e valor costumam ser
+        // preenchidos em passos separados (arrasta o card, só depois abre o modal e
+        // preenche o valor), olhamos o estado FINAL (o que já tinha + o que veio agora),
+        // não só o que mudou nesta requisição. `meta_purchase_sent_at` garante que só manda
+        // uma vez por lead, mesmo que o card seja reaberto/editado depois.
+        if (lead) {
+            const finalColumnId = column_id !== undefined ? (column_id || 'col-entrada') : lead.column_id;
+            const finalValorRecebido = valor_recebido !== undefined ? valor_recebido : lead.valor_recebido;
+            if (finalColumnId === 'col-ganho' && parseFloat(finalValorRecebido) > 0 && !lead.meta_purchase_sent_at) {
+                sendMetaCapiEvent('Purchase', lead, { value: parseFloat(finalValorRecebido), currency: 'BRL' });
+                await queryD1('UPDATE leads SET meta_purchase_sent_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
+            }
         }
 
         // Mantém o espelho do valor do card na tela Financeiro.

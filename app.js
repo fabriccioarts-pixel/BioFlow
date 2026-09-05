@@ -134,10 +134,15 @@ function escapeHtml(str) {
 
 function parseSqlDate(dateStr) {
     if (!dateStr) return null;
-    let isoStr = dateStr.replace(' ', 'T');
-    if (!isoStr.endsWith('Z') && !isoStr.includes('+') && !isoStr.includes('-')) {
-        isoStr += 'Z';
-    }
+    let isoStr = String(dateStr).trim().replace(' ', 'T');
+    // Sem marcador de fuso (Z ou ±HH:MM depois do "T"), a data vem do banco em UTC
+    // (D1 grava CURRENT_TIMESTAMP em UTC). O check antigo olhava a string inteira e
+    // achava o "-" das datas (2026-09-03), então NUNCA acrescentava o Z e o horário
+    // era lido como local — um lead criado agora aparecia ~3h no futuro (BRT), e
+    // qualquer diferença > 0 virava "1d atrás".
+    const timePart = isoStr.includes('T') ? isoStr.slice(isoStr.indexOf('T') + 1) : '';
+    const hasTz = /[Zz]$/.test(isoStr) || /[+-]\d{2}:?\d{2}$/.test(timePart);
+    if (!hasTz) isoStr += 'Z';
     const d = new Date(isoStr);
     if (!isNaN(d.getTime())) return d;
     const parts = dateStr.split(/[- :]/);
@@ -1006,9 +1011,10 @@ procedimentoName = escapeHtml(procedimentoName);
 let daysSince = 'Recente';
 if (lead.created_at) {
 const createdDate = parseSqlDate(lead.created_at);
-const diffTime = Math.abs(new Date() - createdDate);
-const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-daysSince = `${diffDays}d atrás`;
+// Math.floor (não ceil): um lead de hoje tem que dar "Hoje", não "1d atrás".
+// Sem Math.abs: se o horário vier levemente no futuro (clock skew), continua "Hoje".
+const diffDays = Math.floor((new Date() - createdDate) / 86400000);
+daysSince = diffDays <= 0 ? 'Hoje' : `${diffDays}d atrás`;
 }
 
 // 3. Indicadores de Metadados

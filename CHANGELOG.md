@@ -1,5 +1,30 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-03 — Agente de IA: fim das respostas automáticas duplicadas
+
+### Corrigido
+* **Respostas duplicadas do agente de IA no WhatsApp:** quando o lead mandava
+  uma rajada de mensagens seguidas, a Meta disparava um webhook por mensagem e
+  cada um chamava o agente em paralelo — sem trava, cada invocação gerava e
+  enviava a própria resposta (saíam 2–3 balões parafraseados quase iguais).
+  Agora `handleWhatsappAiAutoReply` recebe a mensagem-gatilho (`id` + timestamp),
+  espera uma janela curta (`WHATSAPP_AI_MIN_DEBOUNCE`, 6s, dentro do orçamento do
+  webhook) pra rajada assentar e só responde a invocação cuja mensagem ainda for
+  a ÚLTIMA recebida do lead — as demais abortam antes mesmo de chamar o Gemini.
+  Reforço: nova checagem "alguém já respondeu depois do gatilho?" (via
+  `wa_messages`, direção `out`) antes de chamar o Gemini e de novo logo antes de
+  enviar (o Gemini pode demorar e o atendente/uma sibling responder nesse meio).
+  Tudo decidido pelo estado no banco, então vale igual no servidor local e no
+  serverless.
+* **Cards do Kanban mostravam "1d atrás" para leads criados hoje:** dois bugs
+  somados em `app.js`. (1) `parseSqlDate` só acrescentava o `Z` de UTC quando a
+  string não tinha `+` nem `-` — mas toda data tem o `-` do `YYYY-MM-DD`, então o
+  horário do banco (UTC) era lido como local e um lead recém-criado aparecia ~3h
+  no futuro (BRT). Agora o marcador de fuso é procurado só na parte de hora.
+  (2) O cálculo usava `Math.ceil` + `Math.abs`, então qualquer diferença > 0
+  virava 1 dia. Agora é `Math.floor` e mostra "Hoje" quando dá zero (ou negativo,
+  por clock skew).
+
 ## 2026-08-22 — Correções e Melhorias no Fluxo de Mídia e Respostas do WhatsApp
 
 ### Alterado
