@@ -2512,6 +2512,9 @@ queryD1("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at)").cat
 queryD1("CREATE INDEX IF NOT EXISTS idx_leads_owner_created ON leads(owner_id, created_at)").catch(() => {});
 // crm_chat_presence: limpeza por last_ping_at vencido.
 queryD1("CREATE INDEX IF NOT EXISTS idx_presence_ping ON crm_chat_presence(last_ping_at)").catch(() => {});
+// leads: peneira de candidatos do detector de oportunidades ("lead mandou a
+// última e está esperando"): WHERE last_msg_direction='in' AND last_msg_at BETWEEN ...
+queryD1("CREATE INDEX IF NOT EXISTS idx_leads_lastmsg ON leads(last_msg_direction, last_msg_at)").catch(() => {});
 
 // ==========================================
 // DINHEIRO — sempre inteiro em centavos internamente
@@ -7424,7 +7427,13 @@ app.all('/api/flow-tick', async (req, res) => {
         let followup = { opened: 0, processed: 0 };
         try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
 
-        res.json({ processed, followup, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Detector de oportunidades — tem cadência própria por dentro (só roda a
+        // varredura cara a cada opps_config.intervalo_horas), então pode ser
+        // chamado em todo tick sem custo.
+        let opps = { skipped: 'erro' };
+        try { opps = await opportunitiesTick(); } catch (e) { console.error('Erro no detector de oportunidades:', e); }
+
+        res.json({ processed, followup, opps, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -7507,8 +7516,8 @@ async function followupTick() {
     const cfg = await followupGetConfig();
     let opened = 0, processed = 0;
     const dbg = { ativo: !!cfg.ativo, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, mesma_ancora: 0, flow_esperando: 0 };
-    // 'col-ganho' (lead fechado) sempre para; o resto é escolha do admin.
-    const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho']);
+    // 'col-ganho' (lead fechado) e 'col-agendado' (já marcou horário) sempre param; o resto é escolha do admin.
+    const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho', 'col-agendado']);
 
     // ---- Estágio A: abrir execuções novas (só cadência global, só se ativa) ----
     // Consultas em LOTE. Antes: ~4 consultas por lead candidato (até 200 leads =
@@ -7715,6 +7724,245 @@ app.put('/api/followup/config', async (req, res) => {
         await queryD1("INSERT INTO crm_settings (key, value) VALUES ('followup_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
         res.json({ success: true, config: clean });
     } catch (e) { console.error('Erro ao salvar config de follow-up:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ============================================================================
+// DETECTOR DE OPORTUNIDADES — varre as conversas algumas vezes por dia e
+// sinaliza leads "quentes" que estão esperando retorno e demonstraram intenção
+// de compra. Funil de 3 camadas (peneira SQL barata -> palavra-chave em
+// memória -> 1 chamada Gemini flash) pra o custo de rows_read do D1 ficar
+// desprezível. Passivo: NUNCA manda mensagem — só cria uma notificação
+// clicável e põe a etiqueta "Oportunidade" no lead.
+// ============================================================================
+const OPPS_DEFAULT = {
+    ativo: true,
+    intervalo_horas: 8,           // varredura cara roda no máx 1x a cada X horas
+    so_horario_comercial: true,   // usa a mesma janela do follow-up
+    colunas: ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado'],
+    gap_min_horas: 2,             // ignora quem mandou msg agora (dá tempo do atendente ver)
+    idade_max_dias: 20,           // não olha conversa mais velha que isso
+    max_por_rodada: 20,           // teto de leads que vão pra IA por rodada
+    palavras_chave: 'preço|preco|valor|quanto|quanto custa|orçamento|orcamento|agendar|agendamento|marcar|marca|horário|horario|ainda tem|quando|disponível|disponivel|tem vaga|vaga|consigo|dá pra|da pra|posso ir|fazer o|fazer a|quero fazer|me chama|retorna',
+};
+const OPPS_TAG_ID = 'oportunidade';
+
+async function oppsGetConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'opps_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, OPPS_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return Object.assign({}, OPPS_DEFAULT);
+}
+
+// Etiqueta "Oportunidade" na lista compartilhada (mesmo padrão de
+// ensureQualifiedTagExists), sem apagar as etiquetas que já existem.
+async function ensureOpportunityTagExists() {
+    const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+    let tags = [];
+    if (rows && rows[0] && rows[0].value) { try { tags = JSON.parse(rows[0].value); } catch (e) {} }
+    if (!Array.isArray(tags) || tags.length === 0) tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
+    if (!tags.some(t => t.id === OPPS_TAG_ID)) {
+        tags.push({ id: OPPS_TAG_ID, label: '💰 Oportunidade', bg: 'rgba(234, 179, 8, 0.15)', color: '#fbbf24', border: '#eab308' });
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(tags)]);
+    }
+    return OPPS_TAG_ID;
+}
+async function tagLeadAsOpportunity(leadId) {
+    const tagId = await ensureOpportunityTagExists();
+    const rows = await queryD1('SELECT tags FROM leads WHERE id = ?', [leadId]);
+    const cur = (rows?.[0]?.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (cur.includes(tagId)) return;
+    cur.push(tagId);
+    await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [cur.join(','), leadId]);
+}
+
+// id determinístico: mesma última mensagem do lead => mesma notificação (não
+// re-sinaliza). O lead manda algo novo => last_msg_at muda => volta a ser elegível.
+function oppNotifId(leadId, lastMsgAt) {
+    return 'opp-' + leadId + '-' + String(lastMsgAt || '').replace(/[^0-9]/g, '');
+}
+
+// Transcrição curta e redigida (tira telefone/mídia), casando qualquer variante
+// do número. ~12-25 linhas lidas via idx_wa_msg_phone_ts.
+async function oppsTranscript(phone) {
+    const v = phoneVariants(phone || '');
+    if (!v.length) return '';
+    const ph = v.map(() => '?').join(', ');
+    const rows = await queryD1(
+        `SELECT direction, message FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 12`, v);
+    return (rows || []).reverse()
+        .map(r => `${r.direction === 'in' ? 'Paciente' : 'Atendimento'}: ${copilotRedact(r.message)}`)
+        .join('\n');
+}
+
+async function opportunitiesTick(opts = {}) {
+    const cfg = await oppsGetConfig();
+    if (!cfg.ativo && !opts.force) return { skipped: 'inativo' };
+
+    // ---- Camada 0: cadência (≈1 leitura) ----
+    if (!opts.force) {
+        if (cfg.so_horario_comercial) {
+            const fu = await followupGetConfig();
+            if (followupInBlockedTime(fu, new Date())) return { skipped: 'fora_horario' };
+        }
+        try {
+            const lr = await queryD1("SELECT value FROM crm_settings WHERE key = 'opps_last_run'");
+            const prev = lr && lr[0] ? followupParseTs(lr[0].value) : null;
+            if (prev && (Date.now() - prev.getTime()) < cfg.intervalo_horas * 3600000) {
+                return { skipped: 'cadencia', last_run: lr[0].value };
+            }
+        } catch (e) {}
+    }
+
+    const stampLastRun = () => queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('opps_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [flowDbTime()]
+    ).catch(() => {});
+
+    // ---- Camada 1: peneira SQL barata (1 SELECT, ~60 linhas) ----
+    const cutoffRecent = flowDbTime(-(cfg.gap_min_horas || 2) * 3600000);
+    const cutoffOld = flowDbTime(-(cfg.idade_max_dias || 20) * 86400000);
+    const colunas = (Array.isArray(cfg.colunas) && cfg.colunas.length) ? cfg.colunas.map(String) : OPPS_DEFAULT.colunas;
+    const colPh = colunas.map(() => '?').join(', ');
+    const cand = await queryD1(
+        `SELECT id, nome, telefone, column_id, last_msg_at
+         FROM leads
+         WHERE last_msg_direction = 'in'
+           AND last_msg_at IS NOT NULL
+           AND last_msg_at <= ? AND last_msg_at >= ?
+           AND column_id IN (${colPh})
+           AND (campaign_opt_out IS NULL OR campaign_opt_out = 0)
+         ORDER BY last_msg_at DESC
+         LIMIT 60`,
+        [cutoffRecent, cutoffOld, ...colunas]
+    );
+
+    const dbg = { candidatos: (cand || []).length, com_intencao: 0, analisados: 0, sinalizados: 0 };
+    if (!cand || !cand.length) { await stampLastRun(); return dbg; }
+
+    // Dedupe: já sinalizados pra a mesma última mensagem
+    const candIds = cand.map(c => oppNotifId(c.id, c.last_msg_at));
+    let jaVistos = new Set();
+    try {
+        const seen = await queryD1(
+            `SELECT id FROM crm_notifications WHERE id IN (${candIds.map(() => '?').join(', ')})`, candIds);
+        jaVistos = new Set((seen || []).map(r => r.id));
+    } catch (e) {}
+
+    // ---- Camada 1.5: palavra-chave na última fala do lead (sem IA) ----
+    let kwRe;
+    try { kwRe = new RegExp('(' + (cfg.palavras_chave || OPPS_DEFAULT.palavras_chave) + ')', 'i'); }
+    catch (e) { kwRe = new RegExp('(' + OPPS_DEFAULT.palavras_chave + ')', 'i'); }
+
+    const promissores = [];
+    for (const lead of cand) {
+        if (promissores.length >= (cfg.max_por_rodada || 20)) break;
+        if (jaVistos.has(oppNotifId(lead.id, lead.last_msg_at))) continue;
+        let transcript;
+        try { transcript = await oppsTranscript(lead.telefone); } catch (e) { continue; }
+        if (!transcript) continue;
+        const falasLead = transcript.split('\n').filter(l => l.startsWith('Paciente:'));
+        const ultimaFala = falasLead.length ? falasLead[falasLead.length - 1] : '';
+        if (!kwRe.test(ultimaFala)) continue;
+        promissores.push({ lead, transcript });
+    }
+    dbg.com_intencao = promissores.length;
+    if (!promissores.length) { await stampLastRun(); return dbg; }
+
+    // ---- Camada 2: 1 chamada Gemini flash pra o lote inteiro ----
+    const contexto = await getWhatsappAiContext();
+    const sys = `${contexto}
+
+Você é um analista de vendas. Vou te passar VÁRIAS conversas de WhatsApp entre a clínica e leads. Para CADA conversa, decida se AGORA existe uma oportunidade de venda real que a equipe está deixando passar: o lead demonstrou intenção clara (perguntou preço, quis agendar, pediu horário, disse que quer fazer o procedimento, etc.) e a clínica NÃO deu um encaminhamento adequado — ficou sem resposta, ou respondeu de forma genérica/incompleta.
+
+Responda SOMENTE com um array JSON, sem nenhum texto antes ou depois, no formato:
+[{"i": <número da conversa>, "oportunidade": true|false, "motivo": "<no máximo 1 linha, direto>", "proximo_passo": "<no máximo 1 linha, ação concreta pro atendente>"}]
+
+Seja RIGOROSO: se a conversa já foi bem encaminhada, se o lead só agradeceu/despediu, ou se você não tem certeza, marque "oportunidade": false.`;
+
+    const userText = promissores.map((p, idx) =>
+        `### CONVERSA ${idx + 1} (lead: ${p.lead.nome || 'sem nome'})\n${p.transcript}`
+    ).join('\n\n');
+
+    let veredito = [];
+    try {
+        const raw = await callGeminiCopilot(sys, userText);
+        const m = String(raw || '').match(/\[[\s\S]*\]/);
+        if (m) veredito = JSON.parse(m[0]);
+    } catch (e) {
+        console.error('opps: leitura da IA falhou:', e.message);
+        return dbg; // NÃO carimba opps_last_run — tenta de novo no próximo tick
+    }
+    dbg.analisados = promissores.length;
+
+    for (const v of (Array.isArray(veredito) ? veredito : [])) {
+        if (!v || v.oportunidade !== true) continue;
+        const p = promissores[Number(v.i) - 1];
+        if (!p) continue;
+        const nid = oppNotifId(p.lead.id, p.lead.last_msg_at);
+        const motivo = String(v.motivo || 'lead quente esperando retorno').replace(/\s+/g, ' ').trim().slice(0, 180);
+        const passo = String(v.proximo_passo || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+        const nome = (p.lead.nome && !LEAD_NOME_PLACEHOLDER_RE.test(p.lead.nome)) ? p.lead.nome : 'Lead';
+        const msg = `💰 ${nome}: ${motivo}${passo ? ' — ' + passo : ''}`;
+        try {
+            await queryD1(
+                "INSERT OR IGNORE INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)",
+                [nid, msg, p.lead.telefone || null]
+            );
+            await tagLeadAsOpportunity(p.lead.id);
+            dbg.sinalizados++;
+        } catch (e) { console.error('opps: gravar sinal falhou:', e.message); }
+    }
+
+    await stampLastRun();
+    return dbg;
+}
+
+app.get('/api/opps/config', async (req, res) => {
+    try {
+        const cfg = await oppsGetConfig();
+        let lastRun = null;
+        try { const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'opps_last_run'"); lastRun = r && r[0] ? r[0].value : null; } catch (e) {}
+        res.json({ config: cfg, last_run: lastRun });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/opps/config', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const b = req.body || {};
+        // Mescla no que já existe — a UI só manda alguns campos, os demais
+        // (colunas, thresholds) ficam como estavam.
+        const cur = await oppsGetConfig();
+        const clean = {
+            ativo: b.ativo !== undefined ? !!b.ativo : cur.ativo,
+            intervalo_horas: b.intervalo_horas !== undefined ? Math.min(48, Math.max(1, parseInt(b.intervalo_horas, 10) || 8)) : cur.intervalo_horas,
+            so_horario_comercial: b.so_horario_comercial !== undefined ? !!b.so_horario_comercial : cur.so_horario_comercial,
+            colunas: (Array.isArray(b.colunas) && b.colunas.length) ? b.colunas.map(String) : cur.colunas,
+            gap_min_horas: b.gap_min_horas !== undefined ? Math.min(72, Math.max(1, parseInt(b.gap_min_horas, 10) || 2)) : cur.gap_min_horas,
+            idade_max_dias: b.idade_max_dias !== undefined ? Math.min(90, Math.max(1, parseInt(b.idade_max_dias, 10) || 20)) : cur.idade_max_dias,
+            max_por_rodada: b.max_por_rodada !== undefined ? Math.min(50, Math.max(1, parseInt(b.max_por_rodada, 10) || 20)) : cur.max_por_rodada,
+            palavras_chave: b.palavras_chave !== undefined ? String(b.palavras_chave || OPPS_DEFAULT.palavras_chave).slice(0, 1000) : cur.palavras_chave,
+        };
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('opps_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        res.json({ success: true, config: clean });
+    } catch (e) { console.error('Erro ao salvar config de oportunidades:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.post('/api/opps/run', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        try {
+            const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'opps_manual_last'");
+            const prev = r && r[0] ? followupParseTs(r[0].value) : null;
+            if (prev && (Date.now() - prev.getTime()) < 3600000) {
+                return res.status(429).json({ error: 'Já rodou há menos de 1h. Aguarde.' });
+            }
+        } catch (e) {}
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('opps_manual_last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [flowDbTime()]);
+        const result = await opportunitiesTick({ force: true });
+        res.json({ success: true, result });
+    } catch (e) { console.error('opps/run:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 app.get('/api/leads/:id/followup', async (req, res) => {

@@ -5255,7 +5255,8 @@ async function fetchNotifications() {
                     
                     // Tipo da notificação (só pra cor/ícone) — inferido da mensagem.
                     let ntype = 'success';
-                    if (/novo lead/i.test(n.message)) ntype = 'lead';
+                    if (/^\s*💰/.test(n.message) || /\boportunidade\b/i.test(n.message)) ntype = 'opp';
+                    else if (/novo lead/i.test(n.message)) ntype = 'lead';
                     else if (/qualificad|\bIA\b/i.test(n.message)) ntype = 'ai';
                     else if (/entrou no sistema|saiu do sistema|entrou na conversa/i.test(n.message)) ntype = 'user';
 
@@ -5263,7 +5264,8 @@ async function fetchNotifications() {
                     let cleanMsg = n.message;
                     try { cleanMsg = n.message.replace(/^[^\p{L}\p{N}("']+/u, '').trim() || n.message; } catch (e) {}
 
-                    const typeIcon = ntype === 'ai' ? 'fa-robot'
+                    const typeIcon = ntype === 'opp' ? 'fa-sack-dollar'
+                        : ntype === 'ai' ? 'fa-robot'
                         : ntype === 'lead' ? 'fa-user-plus'
                         : ntype === 'user' ? 'fa-right-to-bracket'
                         : 'fa-check';
@@ -7109,11 +7111,55 @@ function applyAiModeToChips(mode) {
     if (desc) desc.textContent = AI_MODE_DESCRIPTIONS[m] || '';
 }
 
+// Chips de "intervalo" do detector de oportunidades (mesmo padrão de setAiDelay).
+function setOppsIntervalo(btn) {
+    const value = btn ? btn.getAttribute('data-h') : '8';
+    const hidden = document.getElementById('opps-intervalo');
+    if (hidden) hidden.value = value;
+    document.querySelectorAll('#opps-intervalo-chips .aix-chip').forEach(c => c.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+}
+function applyOppsIntervaloToChips(horas) {
+    const h = String(parseInt(horas, 10) || 8);
+    const hidden = document.getElementById('opps-intervalo');
+    if (hidden) hidden.value = h;
+    const chips = document.querySelectorAll('#opps-intervalo-chips .aix-chip');
+    let matched = false;
+    chips.forEach(c => { const on = c.getAttribute('data-h') === h; c.classList.toggle('active', on); if (on) matched = true; });
+    if (!matched && chips[1]) chips[1].classList.add('active'); // cai no "8h"
+}
+function renderOppsStatus(lastRun) {
+    const el = document.getElementById('opps-status');
+    if (!el) return;
+    if (!lastRun) { el.textContent = 'Ainda não rodou.'; return; }
+    const d = parseSqlDate(lastRun);
+    el.textContent = d ? ('Última varredura: ' + d.toLocaleString('pt-BR')) : ('Última varredura: ' + lastRun);
+}
+async function runOppsNow(btn) {
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+    try {
+        const res = await fetch('/api/opps/run', { method: 'POST' });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || 'Falhou');
+        const r = j.result || {};
+        await customAlert(
+            `Varredura concluída.\nCandidatos: ${r.candidatos ?? 0} · Com intenção: ${r.com_intencao ?? 0} · Analisados pela IA: ${r.analisados ?? 0} · Oportunidades sinalizadas: ${r.sinalizados ?? 0}`,
+            'Detector de oportunidades'
+        );
+        try { const c = await (await fetch('/api/opps/config')).json(); renderOppsStatus(c.last_run); } catch (e) {}
+    } catch (e) {
+        await customAlert('Erro: ' + e.message, 'Detector de oportunidades');
+    } finally {
+        if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+    }
+}
+
 async function openWhatsappAiSettingsModal() {
     try {
-        const [toggleRes, contextRes] = await Promise.all([
+        const [toggleRes, contextRes, oppsRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai'),
-            fetch('/api/settings/whatsapp-ai-context')
+            fetch('/api/settings/whatsapp-ai-context'),
+            fetch('/api/opps/config')
         ]);
         const toggleJson = await toggleRes.json();
         const contextJson = await contextRes.json();
@@ -7129,6 +7175,17 @@ async function openWhatsappAiSettingsModal() {
         if (typingEl) typingEl.checked = toggleJson.typing !== false;
         if (visionEl) visionEl.checked = toggleJson.vision !== false;
         if (audioEl) audioEl.checked = toggleJson.audio !== false;
+
+        try {
+            const oppsJson = await oppsRes.json();
+            const oc = oppsJson.config || {};
+            const at = document.getElementById('opps-ativo');
+            if (at) at.checked = oc.ativo !== false;
+            applyOppsIntervaloToChips(oc.intervalo_horas);
+            const pw = document.getElementById('opps-palavras');
+            if (pw) pw.value = oc.palavras_chave || '';
+            renderOppsStatus(oppsJson.last_run);
+        } catch (e) { console.error('Erro ao buscar config de oportunidades:', e); }
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -7144,8 +7201,11 @@ async function saveWhatsappAiSettings() {
     const typing = !!(document.getElementById('whatsapp-ai-typing') || {}).checked;
     const vision = !!(document.getElementById('whatsapp-ai-vision') || {}).checked;
     const audio = !!(document.getElementById('whatsapp-ai-audio') || {}).checked;
+    const oppsAtivo = !!(document.getElementById('opps-ativo') || {}).checked;
+    const oppsIntervalo = parseInt((document.getElementById('opps-intervalo') || {}).value, 10) || 8;
+    const oppsPalavras = (document.getElementById('opps-palavras') || {}).value || '';
     try {
-        const [toggleRes, contextRes] = await Promise.all([
+        const [toggleRes, contextRes, oppsRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -7155,12 +7215,18 @@ async function saveWhatsappAiSettings() {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ context })
+            }),
+            fetch('/api/opps/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ativo: oppsAtivo, intervalo_horas: oppsIntervalo, palavras_chave: oppsPalavras })
             })
         ]);
         const toggleJson = await toggleRes.json();
         const contextJson = await contextRes.json();
         if (!toggleRes.ok) throw new Error(toggleJson.error || 'Erro ao salvar interruptor da IA');
         if (!contextRes.ok) throw new Error(contextJson.error || 'Erro ao salvar contexto da IA');
+        if (!oppsRes.ok) { const oj = await oppsRes.json().catch(() => ({})); throw new Error(oj.error || 'Erro ao salvar detector de oportunidades'); }
         closeModals();
         await customAlert('Configuração do agente de IA atualizada!', 'Salvo com Sucesso');
     } catch (e) {

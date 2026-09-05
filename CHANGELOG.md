@@ -1,5 +1,35 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Detector de oportunidades no WhatsApp (IA, custo mínimo)
+
+### Adicionado
+* **Ferramenta que varre as conversas algumas vezes por dia e sinaliza leads
+  "quentes" que estão esperando retorno e demonstraram intenção de compra**
+  (perguntou preço, quis agendar, pediu horário). É passiva — nunca manda
+  mensagem; cria uma **notificação clicável** no sino ("Abrir conversa →") e
+  põe a etiqueta **💰 Oportunidade** no lead (filtrável no Kanban).
+* **Funil de 3 camadas pra o custo de `rows_read` do D1 ficar desprezível**
+  (medido: ~100–300 linhas lidas por rodada, contra a cota de 5M/dia):
+  1. Peneira SQL barata em `leads` (`last_msg_direction='in'` + janela de data
+     + colunas ativas) — 1 consulta, ~60 linhas. Índice novo
+     `idx_leads_lastmsg`.
+  2. Palavra-chave (regex configurável) na última fala do lead — em memória,
+     sem IA. Só quem passa vai adiante.
+  3. **Uma** chamada `gemini-3.6-flash` (reaproveita `callGeminiCopilot`) com o
+     lote inteiro, pedindo JSON `{oportunidade, motivo, proximo_passo}` por
+     conversa. ~2–3 chamadas/dia.
+* **Cadência própria por dentro:** roda a varredura cara no máximo 1x a cada
+  `intervalo_horas` (padrão 8, config) e só em horário comercial — então é
+  chamada de dentro do `/api/flow-tick` (que já roda periódico) sem custo
+  extra. Dedupe por id de notificação determinístico
+  (`opp-<leadId>-<last_msg_at>`): não re-sinaliza a mesma mensagem; se o lead
+  mandar algo novo, volta a ser elegível.
+* **Endpoints:** `GET/PUT /api/opps/config` (admin), `POST /api/opps/run`
+  (admin, "rodar agora" com cooldown de 1h).
+* **UI:** seção "Detector de oportunidades" no modal "Agente de IA" — liga/
+  desliga, intervalo, lista de palavras-chave e botão "Rodar agora" com o
+  resumo da última varredura.
+
 ## 2026-09-05 — followupTick Estágio B: blindado contra reenvio e enxurrada
 
 ### Alterado

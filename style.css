@@ -2941,6 +2941,10 @@ select.form-control option,
     background: color-mix(in srgb, var(--text-main) 10%, transparent);
     color: var(--text-muted);
 }
+.notif-icon--opp {
+    background: color-mix(in srgb, #eab308 20%, transparent);
+    color: #eab308;
+}
 
 .notif-body {
     min-width: 0;

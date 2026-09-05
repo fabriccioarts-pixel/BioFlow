@@ -1716,6 +1716,35 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             acima.</span>
                     </div>
                 </div>
+
+                <div class="aix-block">
+                    <div class="aix-block-label">Detector de oportunidades</div>
+                    <p class="aix-block-help">Algumas vezes por dia a IA varre as conversas e avisa (notificação no sino +
+                        etiqueta 💰 no lead) quando alguém demonstrou intenção de compra — perguntou preço, quis agendar —
+                        e está esperando retorno. Nunca envia mensagem sozinha.</p>
+                    <label class="aix-toggle-row">
+                        <span class="ui-switch">
+                            <input type="checkbox" id="opps-ativo">
+                            <span class="ui-switch-track"></span>
+                        </span>
+                        <span><span class="aix-toggle-text">Detector ativo</span></span>
+                    </label>
+                    <div class="aix-chips" id="opps-intervalo-chips" style="margin-top: 0.75rem;">
+                        <button type="button" class="aix-chip" data-h="4" onclick="setOppsIntervalo(this)">a cada 4h</button>
+                        <button type="button" class="aix-chip" data-h="8" onclick="setOppsIntervalo(this)">a cada 8h</button>
+                        <button type="button" class="aix-chip" data-h="12" onclick="setOppsIntervalo(this)">a cada 12h</button>
+                        <button type="button" class="aix-chip" data-h="24" onclick="setOppsIntervalo(this)">1x por dia</button>
+                    </div>
+                    <input type="hidden" id="opps-intervalo" value="8">
+                    <p class="aix-block-help" style="margin-top: 0.75rem;">Palavras que indicam intenção de compra na última
+                        mensagem do lead (separadas por <code>|</code>). Só quem tem alguma delas vai para a leitura da IA.</p>
+                    <textarea id="opps-palavras" spellcheck="false" style="min-height: 60px;"></textarea>
+                    <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.75rem; flex-wrap:wrap;">
+                        <button type="button" class="btn-cancel" onclick="runOppsNow(this)"><i class="fa-solid fa-bolt"></i>
+                            Rodar agora</button>
+                        <span class="aix-block-help" id="opps-status" style="margin:0;"></span>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-actions aix-footer">
