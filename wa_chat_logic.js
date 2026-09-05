@@ -1811,6 +1811,44 @@ function hideChatNotificationDot() {
     // Mantido para não quebrar chamadas existentes
 }
 
+// Remendo LOCAL da lista de conversas quando chega uma mensagem por SSE — sem
+// refazer a consulta cara `/api/whatsapp/chats`. Move a conversa pro topo,
+// atualiza a prévia e incrementa não-lidas; se for um número novo, cria a linha.
+// A reconciliação com o servidor acontece no poll de 90s (que bate no cache).
+function patchChatListFromSSE({ phone, preview, ts, leadId }) {
+    if (!phone || !Array.isArray(allChatsList)) return;
+    const isOpen = window.currentActiveChat && typeof isSamePhone === 'function'
+        && isSamePhone(window.currentActiveChat.phone, phone);
+    let nome = null;
+    if (leadId && typeof leads !== 'undefined' && Array.isArray(leads)) {
+        const l = leads.find(x => x.id === leadId) || leads.find(x => isSamePhone(x.telefone, phone));
+        if (l && l.nome) nome = l.nome;
+    }
+    const idx = allChatsList.findIndex(c => typeof isSamePhone === 'function' ? isSamePhone(c.phone, phone) : c.phone === phone);
+    let entry;
+    if (idx >= 0) {
+        entry = allChatsList.splice(idx, 1)[0];
+        entry.message = preview != null ? preview : entry.message;
+        entry.direction = 'in';
+        entry.last_direction = 'in';
+        entry.last_interaction = ts || entry.last_interaction;
+        entry.last_timestamp = ts || entry.last_timestamp;
+        if (!isOpen) entry.unread_count = Number(entry.unread_count || 0) + 1;
+        if (nome) entry.nome = nome;
+    } else {
+        entry = { phone, message: preview || '', direction: 'in', last_direction: 'in',
+                  last_interaction: ts || '', last_timestamp: ts || '', status: 'received',
+                  unread_count: isOpen ? 0 : 1, nome: nome || undefined };
+    }
+    allChatsList.unshift(entry);
+    hasLoadedChatsOnce = true;
+    // Sincroniza a "assinatura da última mensagem vista" pra o loadChats do poll
+    // de 90s não tocar o som de novo pra esta mesma mensagem (o SSE já tocou).
+    try { lastSeenMaxMsgId = (ts || '') + '_' + (preview != null ? preview : ''); hasInitializedChatCheck = true; } catch (e) {}
+    if (typeof reapplyChatFilters === 'function') reapplyChatFilters();
+}
+if (typeof window !== 'undefined') window.patchChatListFromSSE = patchChatListFromSSE;
+
 async function loadChats(silent = false) {
     if (!silent) document.getElementById('chat-contacts-list').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando conversas...</div>';
     
@@ -5311,8 +5349,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Polling global em segundo plano para som de notificação e bolinha verde.
 // loadChats faz GROUP BY na wa_messages inteira (query mais cara do sistema) —
-// vai a 20s. A conversa ABERTA (openChat refresh) filtra por telefone, é barata,
-// e roda a cada tick (6s).
+// agora que mensagem nova chega por SSE (evento wa_message, tratado no
+// initKanbanSSE), este poll virou só rede de segurança e vai a ~90s. A conversa
+// ABERTA (openChat refresh) filtra por telefone, é barata, e roda a cada tick (6s).
 if (!window.globalChatCheckInterval) {
     let globalChatTick = 0;
     window.globalChatCheckInterval = setInterval(() => {
@@ -5321,7 +5360,7 @@ if (!window.globalChatCheckInterval) {
         if (window.currentActiveChat && document.getElementById('view-chat') && document.getElementById('view-chat').style.display !== 'none') {
             if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         }
-        if (globalChatTick % 3 === 1 && typeof loadChats === 'function') loadChats(true);
+        if (globalChatTick % 15 === 1 && typeof loadChats === 'function') loadChats(true);
     }, 6000);
 }
 

@@ -476,7 +476,7 @@ function initKanbanSSE() {
 
     es.onmessage = (e) => {
         try {
-            const { action, leadId } = JSON.parse(e.data);
+            const { action, leadId, phone, preview, msg_ts } = JSON.parse(e.data);
             if (loggedUser && ['created', 'updated', 'deleted'].includes(action)) {
                 fetchLeadsFromServer(true);
             }
@@ -486,15 +486,20 @@ function initKanbanSSE() {
             }
             // Mensagem nova no WhatsApp — chega na hora por SSE (sobrevive à aba em
             // segundo plano, ao contrário do polling, que fica pausado nesse caso).
-            // Atualiza a lista de conversas (badge, som, ordem) e, se for a conversa
-            // que já está aberta na tela, atualiza ela também.
             if (action === 'wa_message') {
-                if (typeof loadChats === 'function') loadChats(true);
-                if (window.currentActiveChat && typeof leads !== 'undefined' && Array.isArray(leads)) {
-                    const lead = leads.find(l => l.id === leadId);
-                    if (lead && typeof isSamePhone === 'function' && isSamePhone(lead.telefone, window.currentActiveChat.phone)) {
-                        if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
-                    }
+                const jaAberta = window.currentActiveChat && typeof isSamePhone === 'function'
+                    && phone && isSamePhone(window.currentActiveChat.phone, phone);
+                // Remenda a lista LOCALMENTE (topo, prévia, não-lidas) — sem refazer a
+                // consulta cara. A reconciliação com o servidor vem no poll de 90s.
+                if (typeof patchChatListFromSSE === 'function') {
+                    try { patchChatListFromSSE({ phone, preview, ts: msg_ts, leadId }); } catch (_) {}
+                }
+                if (!jaAberta && typeof playNotificationSound === 'function') {
+                    try { playNotificationSound(); } catch (_) {}
+                }
+                // Se a conversa está aberta na tela, atualiza ela também (barato: filtra por telefone).
+                if (jaAberta && typeof openChat === 'function') {
+                    openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                 }
             }
         } catch (_) {}
@@ -3302,8 +3307,9 @@ function switchTab(tabId) {
             view.style.display = 'flex';
             loadChats();
             // Inicia polling se ainda não estiver rodando. A lista de conversas
-            // (loadChats) faz GROUP BY + subquery por conversa na wa_messages —
-            // cara — então vai a ~36s; a conversa ABERTA (openChat refresh) é
+            // (loadChats) é a consulta mais cara do sistema — agora que mensagem
+            // nova chega por SSE (evento wa_message), o poll dela virou só rede
+            // de segurança e vai a ~90s. A conversa ABERTA (openChat refresh) é
             // barata (filtra por telefone) e segue rápida, a cada 6s.
             if (!window.chatPollingInterval) {
                 let chatTick = 0;
@@ -3313,7 +3319,7 @@ function switchTab(tabId) {
                     if (window.currentActiveChat) {
                         openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
                     }
-                    if (chatTick % 6 === 1) {
+                    if (chatTick % 15 === 1) {
                         loadChats(true);
                     }
                 }, 6000);

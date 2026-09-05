@@ -1,5 +1,30 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Corta o rows_read do D1 (lista de conversas era ~65% da cota)
+
+### Alterado
+* **Diagnóstico:** o painel do D1 mostrou que **uma consulta** — a lista de
+  conversas (`GET /api/whatsapp/chats`: `GROUP BY` na `wa_messages` inteira +
+  3 subconsultas por conversa, sem filtro) — respondia por **~2,8M das ~4,3M
+  linhas lidas por dia** (~65%), porque o polling de cada aba a chamava ~1x/min.
+* **Snapshot cacheado no próprio D1** (`crm_settings.wa_chats_cache`, JSON com
+  `built_at` + `rows`, TTL de 5 min). Vale entre as instâncias serverless da
+  Vercel. `built_at` velho → reconstrói 1x e regrava. Consulta ganhou
+  `LIMIT 500` (blob de ~34 KB hoje, teto do D1 é 1 MB). A consulta cara passa a
+  rodar **~1x a cada 5 min** em vez de ~1x/min.
+* **Mensagem nova não refaz a consulta.** O evento SSE `wa_message` agora
+  carrega telefone + prévia + hora; o front **remenda a lista localmente**
+  (`patchChatListFromSSE`: move pro topo, atualiza prévia, incrementa não-lidas,
+  cria a linha se for número novo) e toca o som. A reconciliação com o servidor
+  fica pro poll de rede de segurança.
+* **Polling da lista: ~36s/18s → ~90s** (`app.js` e `wa_chat_logic.js`). Agora
+  que o SSE entrega o tempo real, o poll é só backup — e quase toda chamada
+  cai no cache (lê ~1 linha).
+* **Índice** `idx_followup_lead` em `crm_followup_runs(lead_id, status)` — a
+  consulta por `lead_id` lia ~42 linhas pra devolver 1.
+
+Estimativa: aquela consulta cai de ~2,8M linhas/dia para ~500 mil.
+
 ## 2026-09-05 — Detector de oportunidades no WhatsApp (IA, custo mínimo)
 
 ### Adicionado

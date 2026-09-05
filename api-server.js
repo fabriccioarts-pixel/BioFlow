@@ -511,7 +511,13 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 // continua viva mesmo com a aba oculta, então plugamos nela em vez de
                 // esperar o agente de IA (que pode levar vários segundos pra responder).
                 if (resolvedLeadId) {
-                    try { broadcastLeadsUpdate('wa_message', resolvedLeadId); } catch (e) {}
+                    // Manda o telefone + prévia + hora no evento pra o front atualizar
+                    // a lista de conversas SEM refazer a consulta cara (só remendo local).
+                    try {
+                        broadcastLeadsUpdate('wa_message', resolvedLeadId, {
+                            phone: from, preview: msg_body, msg_ts: msgTimestamp
+                        });
+                    } catch (e) {}
                 }
 
                 // Agente de IA de pré-qualificação — precisa de "await" aqui: na Vercel
@@ -519,7 +525,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 // enviada, então um "fire-and-forget" sem await nunca chegava a
                 // terminar (a chamada ao Gemini era interrompida no meio). A Meta
                 // tolera alguns segundos de resposta antes de reentregar a mensagem.
-                if ((msg_type === 'text' || msg_type === 'audio' || msg_type === 'voice') && msg_body && resolvedLeadId) {
+                if ((msg_type === 'text' || msg_type === 'audio' || msg_type === 'voice' || msg_type === 'image') && msg_body && resolvedLeadId) {
                     // Motor de fluxo roda ANTES da IA. Se um fluxo assumir a conversa,
                     // a IA não responde esse turno.
                     let handledByFlow = false;
@@ -1896,23 +1902,59 @@ app.post('/api/whatsapp/delete-message', async (req, res) => {
 });
 
 // 4. Listar Chats Recentes (Contatos)
+// A lista de conversas é a consulta MAIS CARA do sistema: GROUP BY na
+// wa_messages inteira + 3 subconsultas por conversa, sem filtro. Era ~65% de
+// todo o rows_read diário do D1 porque o polling de cada aba a chamava ~1x/min.
+// Agora: (1) snapshot cacheado numa linha do D1 com TTL de 5 min — vale entre as
+// instâncias serverless da Vercel; (2) mensagem nova NÃO refaz a consulta — o
+// front remenda a lista localmente com os dados que vêm no evento SSE
+// 'wa_message'; (3) o polling caiu pra 90s, só como rede de segurança. Assim a
+// consulta cara roda ~1x a cada 5 min em vez de ~1x/min.
+const WA_CHATS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function buildWaChatsList() {
+    // message/direction/status precisam vir da ÚLTIMA mensagem da conversa.
+    // Não dá pra confiar no "bare column + MAX()" do SQLite aqui (o D1 não
+    // garante que a coluna solta venha da linha do MAX) — por isso subquery
+    // explícita ordenando por timestamp e, no empate de segundo, por rowid.
+    return await queryD1(`
+        SELECT m.phone,
+               MAX(m.timestamp) as last_interaction,
+               (SELECT x.message   FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as message,
+               (SELECT x.direction FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as direction,
+               (SELECT x.status    FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as status,
+               SUM(CASE WHEN m.direction = 'in' AND (m.status IS NULL OR m.status != 'read') THEN 1 ELSE 0 END) as unread_count
+        FROM wa_messages m
+        GROUP BY m.phone
+        ORDER BY last_interaction DESC
+        LIMIT 500
+    `);
+}
+
+async function getWaChatsList() {
+    try {
+        const row = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_cache'");
+        if (row && row[0] && row[0].value) {
+            const cached = JSON.parse(row[0].value);
+            if (cached && cached.built_at && Array.isArray(cached.rows) &&
+                (Date.now() - cached.built_at) < WA_CHATS_CACHE_TTL_MS) {
+                return cached.rows;
+            }
+        }
+    } catch (e) {}
+    const rows = await buildWaChatsList();
+    try {
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify({ built_at: Date.now(), rows: rows || [] })]
+        );
+    } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
+    return rows || [];
+}
+
 app.get('/api/whatsapp/chats', async (req, res) => {
     try {
-        // message/direction/status precisam vir da ÚLTIMA mensagem da conversa.
-        // Não dá pra confiar no "bare column + MAX()" do SQLite aqui (o D1 não
-        // garante que a coluna solta venha da linha do MAX) — por isso subquery
-        // explícita ordenando por timestamp e, no empate de segundo, por rowid.
-        const rows = await queryD1(`
-            SELECT m.phone,
-                   MAX(m.timestamp) as last_interaction,
-                   (SELECT x.message   FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as message,
-                   (SELECT x.direction FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as direction,
-                   (SELECT x.status    FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as status,
-                   SUM(CASE WHEN m.direction = 'in' AND (m.status IS NULL OR m.status != 'read') THEN 1 ELSE 0 END) as unread_count
-            FROM wa_messages m
-            GROUP BY m.phone
-            ORDER BY last_interaction DESC
-        `);
+        const rows = await getWaChatsList();
         res.json({ success: true, data: rows });
     } catch(e) {
         console.error(e);
@@ -2515,6 +2557,9 @@ queryD1("CREATE INDEX IF NOT EXISTS idx_presence_ping ON crm_chat_presence(last_
 // leads: peneira de candidatos do detector de oportunidades ("lead mandou a
 // última e está esperando"): WHERE last_msg_direction='in' AND last_msg_at BETWEEN ...
 queryD1("CREATE INDEX IF NOT EXISTS idx_leads_lastmsg ON leads(last_msg_direction, last_msg_at)").catch(() => {});
+// crm_followup_runs: SELECT ... WHERE lead_id = ? (checagens do followupTick e
+// da ficha do lead) — sem isso lia ~42 linhas pra devolver 1.
+queryD1("CREATE INDEX IF NOT EXISTS idx_followup_lead ON crm_followup_runs(lead_id, status)").catch(() => {});
 
 // ==========================================
 // DINHEIRO — sempre inteiro em centavos internamente
@@ -4572,8 +4617,8 @@ app.post('/api/clear-notif', async (req, res) => {
 
 const sseClients = new Set();
 
-function broadcastLeadsUpdate(action = 'updated', leadId = null) {
-    const payload = `data: ${JSON.stringify({ action, leadId, ts: Date.now() })}\n\n`;
+function broadcastLeadsUpdate(action = 'updated', leadId = null, extra = null) {
+    const payload = `data: ${JSON.stringify(Object.assign({ action, leadId, ts: Date.now() }, extra || {}))}\n\n`;
     for (const client of sseClients) {
         try { client.write(payload); } catch (_) { sseClients.delete(client); }
     }
