@@ -1749,10 +1749,16 @@ async function latestInboundMsgId(phone) {
     return rows && rows[0] ? rows[0].id : null;
 }
 
+// Exclui sent_by='ia': senão, o 1º balão que a própria IA acabou de mandar
+// (sendWhatsappAiReplyHuman manda um por um) já conta como "alguém respondeu
+// depois do gatilho" e cancela os balões seguintes da MESMA resposta — só
+// mandava o primeiro pedaço de toda resposta partida em várias mensagens.
+// Continua pegando atendente humano ou fluxo assumindo no meio (sent_by
+// diferente de 'ia'), que é o caso real que essa checagem devia cobrir.
 async function hasOutboundSince(phone, sinceTs) {
     if (!sinceTs) return false;
     const rows = await queryD1(
-        "SELECT 1 FROM wa_messages WHERE phone = ? AND direction = 'out' AND timestamp >= ? LIMIT 1",
+        "SELECT 1 FROM wa_messages WHERE phone = ? AND direction = 'out' AND timestamp >= ? AND (sent_by IS NULL OR sent_by != 'ia') LIMIT 1",
         [phone, sinceTs]
     );
     return !!(rows && rows[0]);

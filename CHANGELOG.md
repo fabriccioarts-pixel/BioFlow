@@ -1,5 +1,20 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — IA parava depois do 1º balão de respostas partidas em vários pedaços
+
+### Corrigido
+* **A IA mandava só o primeiro balão de uma resposta com vários balões, e
+  parava.** Bug introduzido pela própria checagem anti-duplicidade desta
+  sessão: `hasOutboundSince` (usada por `sendWhatsappAiReplyHuman` antes de
+  cada balão, pra abortar se "alguém já respondeu depois do gatilho") não
+  distinguia a mensagem de outra pessoa da mensagem que a PRÓPRIA IA
+  acabou de mandar um instante antes (o balão 1 da mesma resposta). Assim
+  que o balão 1 saía, o balão 2 via aquele envio como "já responderam" e
+  desistia — a conversa parava sempre no primeiro pedaço. Corrigido
+  filtrando `sent_by != 'ia'` nessa checagem: continua pegando um atendente
+  humano (ou um fluxo) assumindo a conversa no meio do envio, só para de se
+  confundir com os próprios balões.
+
 ## 2026-09-05 — Mensagem nova do WhatsApp avisa na hora (SSE), mesmo com a aba em segundo plano
 
 ### Adicionado
