@@ -3462,6 +3462,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 236px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; z-index: 1200; padding: 0.35rem 0; max-height: 70vh; overflow-y: auto;">
                         </div>
                     </div>
+                    <button type="button" id="btn-chat-ficha" onclick="toggleLeadPanelCollapse()" class="copilot-btn"
+                        title="Mostrar / ocultar a ficha do lead">
+                        <i class="fa-solid fa-address-card"></i> <span class="copilot-btn-label">Ficha</span>
+                    </button>
                     <button type="button" id="btn-chat-finalize" onclick="finalizeLeadFromChat()" class="copilot-btn copilot-btn--success"
                         title="Finalizar atendimento: descarta o lead, desliga IA e follow-up, bloqueia campanhas e o número">
                         <i class="fa-solid fa-circle-check"></i> <span class="copilot-btn-label">Finalizar atendimento</span>
