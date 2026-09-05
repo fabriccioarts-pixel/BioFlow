@@ -1,5 +1,27 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-05 — Botão "Finalizar atendimento" no chat
+
+### Adicionado
+* **Botão vermelho "Finalizar atendimento"** no cabeçalho do chat, ao lado de
+  "Ferramentas". Para leads que não são oportunidade real (número errado, de
+  outro estado, spam). Numa ação só, via `POST /api/leads/:id/discard`:
+  * desliga a IA desse lead e desatribui o atendente;
+  * `campaign_opt_out = 1` — para de entrar em campanha;
+  * para os follow-ups em andamento (por `lead_id` e por telefone) e encerra
+    fluxos ativos;
+  * **bloqueia o número** (todas as variantes) em `crm_chat_settings` — o
+    webhook passa a ignorar mensagens novas dele, então não cria lead de novo
+    nem a IA responde;
+  * move pra "Follow Up/Perdido" com a etiqueta `descartado` e carimba a nota.
+  Reversível: desbloquear o número, tirar o opt-out e mover o lead de volta.
+* Confirmação antes de executar (`customConfirm`).
+
+### Alterado
+* **`followupTick` Estágio A** deixou de abrir follow-up para leads com
+  `campaign_opt_out = 1` (antes abria a execução e só o Estágio B a matava no
+  tick seguinte).
+
 ## 2026-09-05 — Corta o rows_read do D1 (lista de conversas era ~65% da cota)
 
 ### Alterado

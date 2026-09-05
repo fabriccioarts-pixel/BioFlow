@@ -2589,6 +2589,61 @@ async function endLeadService(leadId) {
     }
 }
 
+// "Finalizar atendimento" (botão vermelho do cabeçalho do chat) — descarta o
+// lead: desliga IA e follow-up, para campanhas, bloqueia o número e move pra
+// "Follow Up/Perdido" com a etiqueta "descartado".
+async function finalizeLeadFromChat() {
+    const lead = (typeof findLeadFromActiveChat === 'function') ? findLeadFromActiveChat() : null;
+    if (!lead) { if (typeof showToast === 'function') showToast('Abra uma conversa primeiro.', 'danger'); return; }
+
+    const nomeSafe = (typeof escapeHtml === 'function') ? escapeHtml(lead.nome || 'este contato') : (lead.nome || 'este contato');
+    const ok = await customConfirm(
+        `Finalizar o atendimento de <b>${nomeSafe}</b>?<br><br>` +
+        `O lead vai para "Follow Up/Perdido" com a etiqueta <b>descartado</b>, a IA e os follow-ups são desligados, ele para de receber campanhas e o <b>número é bloqueado</b> (mensagens novas dele passam a ser ignoradas).<br><br>` +
+        `Dá pra reverter: desbloquear o número, tirar o opt-out de campanha e mover o lead de volta.`,
+        'Finalizar atendimento'
+    );
+    if (!ok) return;
+
+    const btn = document.getElementById('btn-chat-finalize');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(`/api/leads/${lead.id}/discard`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success) {
+            if (typeof showToast === 'function') showToast(json.error || 'Não foi possível finalizar o atendimento.', 'danger');
+            return;
+        }
+
+        if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+            const l = leads.find(x => x.id === lead.id);
+            if (l) {
+                l.column = 'col-perdido';
+                l.ai_enabled = 0;
+                l.owner_id = null;
+                l.assigned_at = null;
+                l.campaign_opt_out = 1;
+                const t = (l.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+                if (!t.includes('descartado')) { t.push('descartado'); l.tags = t.join(','); }
+            }
+        }
+        if (window.currentActiveChat) {
+            try { setChatSetting(window.currentActiveChat.phone, 'is_blocked', true); } catch (e) {}
+        }
+        if (typeof stopLeadLockRenewal === 'function') stopLeadLockRenewal();
+        if (typeof renderBoard === 'function') renderBoard();
+        if (typeof closeActiveChat === 'function') closeActiveChat();
+        if (typeof loadChats === 'function') loadChats(true);
+        if (typeof showToast === 'function') showToast('Atendimento finalizado. Lead descartado e número bloqueado.', 'success');
+    } catch (err) {
+        console.error('Erro ao finalizar atendimento:', err);
+        if (typeof showToast === 'function') showToast('Erro de conexão ao finalizar o atendimento.', 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+if (typeof window !== 'undefined') window.finalizeLeadFromChat = finalizeLeadFromChat;
+
 // ============================================
 // MENU "FERRAMENTAS" DO CABEÇALHO DO CHAT
 // ============================================

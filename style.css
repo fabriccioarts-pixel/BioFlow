@@ -7771,6 +7771,12 @@ h1, h2,
 }
 .copilot-btn:hover { background: color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 .copilot-btn:disabled { opacity: 0.55; cursor: default; }
+.copilot-btn--danger {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 12%, transparent);
+    color: var(--accent-danger, #f87171);
+    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 40%, transparent);
+}
+.copilot-btn--danger:hover { background: color-mix(in srgb, var(--accent-danger, #ef4444) 22%, transparent); }
 .copilot-icon-btn { color: var(--accent-primary) !important; }
 .copilot-icon-btn.is-loading { opacity: 0.5; pointer-events: none; }
 @media (max-width: 720px) { .copilot-btn-label { display: none; } }

@@ -5713,6 +5713,61 @@ app.post('/api/leads/:id/end-service', async (req, res) => {
     }
 });
 
+// "Finalizar atendimento" — descarta o lead de vez: desliga a IA, desatribui,
+// opta por não receber campanha, para follow-ups e fluxos, bloqueia o número
+// (o webhook passa a ignorar mensagens novas) e move pra "Follow Up/Perdido"
+// com a etiqueta "descartado". Reversível: desbloquear o número + tirar o
+// opt-out + mover a coluna de volta.
+app.post('/api/leads/:id/discard', async (req, res) => {
+    const { id } = req.params;
+    const username = (req.user && req.user.username) || 'atendente';
+    try {
+        const rows = await queryD1('SELECT id, telefone, notas, tags FROM leads WHERE id = ?', [id]);
+        const lead = rows && rows[0];
+        if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+
+        const variants = phoneVariants(lead.telefone || '');
+        const ph = variants.length ? variants.map(() => '?').join(', ') : null;
+
+        const curTags = (lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+        if (!curTags.includes('descartado')) curTags.push('descartado');
+
+        const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR')} — lead descartado: IA e follow-up desligados, campanhas bloqueadas, número bloqueado.`;
+        const novaNota = `${lead.notas || ''}${lead.notas ? '\n' : ''}${carimbo}`;
+
+        await queryD1(
+            "UPDATE leads SET ai_enabled = 0, owner_id = NULL, assigned_at = NULL, campaign_opt_out = 1, column_id = 'col-perdido', tags = ?, notas = ? WHERE id = ?",
+            [curTags.join(','), novaNota, id]
+        );
+
+        // Para follow-ups em andamento (por lead_id e por telefone) e encerra fluxos.
+        try {
+            await queryD1("UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [id]);
+            if (ph) {
+                await queryD1(`UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE phone IN (${ph}) AND status IN ('agendado','enviando')`, variants);
+                await queryD1(`UPDATE crm_flow_runs SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE phone IN (${ph}) AND status IN ('running','waiting_reply','sleeping')`, variants);
+            }
+        } catch (e) { console.error('discard: parar follow-up/fluxos falhou:', e.message); }
+
+        // Bloqueia todas as variantes do número — o webhook checa is_blocked por
+        // WHERE phone = <from da Meta>, que pode não ser o formato canônico do lead.
+        try {
+            for (const v of variants) {
+                await queryD1(
+                    "INSERT INTO crm_chat_settings (phone, is_blocked) VALUES (?, 1) ON CONFLICT(phone) DO UPDATE SET is_blocked = 1, updated_at = CURRENT_TIMESTAMP",
+                    [v]
+                );
+            }
+        } catch (e) { console.error('discard: bloquear número falhou:', e.message); }
+
+        broadcastLeadsUpdate('updated', id);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('discard erro:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Espelho da Rota Serverless da Vercel para uso Local
 app.post('/api/agendar', async (req, res) => {
     // Editar um agendamento já existente é restrito a administradores (mesma regra que a
@@ -7578,6 +7633,7 @@ async function followupTick() {
              FROM leads
              WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
                AND last_msg_at <= ? AND last_msg_at >= ?
+               AND (campaign_opt_out IS NULL OR campaign_opt_out = 0)
              LIMIT 200`, [cutoffDelay, cutoffOld]);
         dbg.janela = (cand || []).length;
 
