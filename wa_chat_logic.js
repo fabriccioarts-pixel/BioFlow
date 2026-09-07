@@ -1766,7 +1766,7 @@ function renderContactsList(chats) {
     if (badge) {
         if (totalUnread > 0) {
             badge.style.display = 'inline-block';
-            badge.innerText = totalUnread > 99 ? '99+' : String(totalUnread);
+            badge.innerText = totalUnread > 999 ? '999+' : String(totalUnread);
         } else {
             badge.style.display = 'none';
         }
@@ -2259,10 +2259,10 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     let tempoHTML = '';
     if (lead && lead.created_at && typeof parseSqlDate === 'function') {
         const createdDate = parseSqlDate(lead.created_at);
-        let idadeTexto = '-';
+        let idadeHTML = 'Lead há <strong>—</strong>';
         if (createdDate) {
             const diffDays = Math.ceil(Math.abs(new Date() - createdDate) / (1000 * 60 * 60 * 24));
-            idadeTexto = diffDays <= 0 ? 'Hoje' : `${diffDays}d atrás`;
+            idadeHTML = diffDays <= 0 ? 'Lead desde <strong>hoje</strong>' : `Lead há <strong>${diffDays}d</strong>`;
         }
 
         // Preferir o histórico real da conversa (lastInteraction, vindo das mensagens já carregadas)
@@ -2286,7 +2286,7 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         tempoHTML = `
             <div>
                 <div class="lead-panel-label"><i class="fa-regular fa-clock"></i> Tempo como Lead</div>
-                <div style="font-size: 0.82rem; color: var(--text-main);">Lead há <strong>${idadeTexto}</strong></div>
+                <div style="font-size: 0.82rem; color: var(--text-main);">${idadeHTML}</div>
                 <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">Última interação: ${escapeHtml(lastInteracaoTexto)}</div>
             </div>
         `;
@@ -2331,7 +2331,7 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
     }
 
     const anuncioBlockHTML = `
-        <div>
+        <div class="lp-group-divider">
             <div class="lead-panel-label"><i class="fa-solid fa-rectangle-ad"></i> Anúncio</div>
             ${anuncioHTML}
         </div>
@@ -2345,7 +2345,11 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         <div>
             <div class="lead-panel-label"><i class="fa-solid fa-satellite-dish"></i> Rastreamento</div>
             ${trackId
-                ? `<div class="lead-panel-card" style="font-size: 0.75rem; color: var(--text-main); word-break: break-all;"><span style="color: var(--text-muted);">${trackLabel}:</span><br>${escapeHtml(trackId)}</div>`
+                ? `<div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.3rem;">${trackLabel}</div>
+                   <div class="lpp-ad-id-row">
+                       <code class="lpp-ad-id" title="${escapeHtml(trackId)}">${escapeHtml(trackId)}</code>
+                       <button type="button" class="lpp-ad-id-copy" title="Copiar" onclick="lppCopyText(event, this.previousElementSibling.textContent)"><i class="fa-regular fa-copy"></i></button>
+                   </div>`
                 : `<div class="lead-panel-empty"><i class="fa-regular fa-circle-xmark"></i> Sem dados de rastreamento</div>`
             }
         </div>
@@ -2385,7 +2389,7 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         const wasExpanded = isSameChatRerender && prevExpandedEl && prevExpandedEl.style.display === 'block';
 
         notasHTML = `
-            <div>
+            <div class="lp-group-divider">
                 <div class="lead-panel-label"><i class="fa-regular fa-note-sticky"></i> Notas Internas</div>
                 <div id="lead-notes-badge" class="lead-panel-card" onclick="toggleLeadNotesExpanded()"
                     style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; ${wasExpanded ? 'display: none;' : ''}">
@@ -2585,44 +2589,6 @@ async function transferLeadToAi(leadId) {
     }
 }
 
-// "Terminei minha parte" — libera a trava na hora, registra quem encerrou e
-// religa a IA pra ela assumir a próxima mensagem. Não mexe na coluna do
-// Kanban (funil de venda é dimensão separada de "quem está atendendo agora").
-async function endLeadService(leadId) {
-    const popup = document.getElementById('transfer-menu-popup');
-    if (popup) popup.style.display = 'none';
-
-    try {
-        const res = await fetch(`/api/leads/${leadId}/end-service`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-        const json = await res.json().catch(() => ({}));
-
-        if (!res.ok || !json.success) {
-            alert(json.error || 'Não foi possível encerrar o atendimento.');
-            return;
-        }
-
-        stopLeadLockRenewal();
-        window.chatLockState = { leadId, locked: false, ownerId: null };
-        applyChatLockUI(false, null);
-
-        if (typeof leads !== 'undefined') {
-            const lead = leads.find(l => l.id === leadId);
-            if (lead) {
-                lead.owner_id = null;
-                lead.ai_enabled = 1;
-                if (typeof renderBoard === 'function') renderBoard();
-            }
-        }
-        if (window.currentActiveChat) {
-            renderLeadInfoPanel(leads.find(l => l.id === leadId), window.currentActiveChat.phone);
-        }
-        if (typeof showToast === 'function') showToast('Atendimento encerrado. Trava liberada e IA religada.', 'success');
-    } catch (err) {
-        console.error('Erro ao encerrar atendimento:', err);
-        alert('Erro de conexão ao encerrar o atendimento.');
-    }
-}
-
 // "Finalizar atendimento" (botão vermelho do cabeçalho do chat) — descarta o
 // lead: desliga IA e follow-up, para campanhas e move pra "Follow Up/Perdido"
 // com a etiqueta "descartado". NÃO bloqueia o número.
@@ -2707,7 +2673,6 @@ function toggleChatToolsMenu(e) {
     if (lead) {
         html += item(aiOn ? 'fa-robot' : 'fa-robot', aiOn ? 'Desligar IA nesta conversa' : 'Ligar IA nesta conversa', aiOn ? 'ai-off' : 'ai-on', { accent: aiOn ? 'var(--accent-danger, #f87171)' : 'var(--accent-teal, #2dd4bf)' });
         html += item('fa-arrow-right-arrow-left', 'Transferir para a IA', 'to-ai', { accent: 'var(--accent-teal, #2dd4bf)' });
-        html += item('fa-circle-check', 'Encerrar atendimento', 'end-service', { accent: 'var(--accent-success, #34d399)' });
         html += sep;
     }
     html += item(panelHidden ? 'fa-eye' : 'fa-eye-slash', panelHidden ? 'Mostrar ficha do lead' : 'Ocultar ficha do lead', 'toggle-panel');
@@ -2734,8 +2699,6 @@ function toggleChatToolsMenu(e) {
                 if (lead && typeof renderLeadInfoPanel === 'function' && window.currentActiveChat) renderLeadInfoPanel(lead, window.currentActiveChat.phone);
             } else if (act === 'to-ai') {
                 if (lead && typeof transferLeadToAi === 'function') transferLeadToAi(lead.id);
-            } else if (act === 'end-service') {
-                if (lead && typeof endLeadService === 'function') endLeadService(lead.id);
             } else if (act === 'toggle-panel') {
                 if (typeof toggleLeadPanelCollapse === 'function') toggleLeadPanelCollapse();
             } else if (act === 'kanban') {
@@ -3885,6 +3848,64 @@ async function loadCampaigns() {
     }
 }
 
+async function loadMetaAdsReport() {
+    const box = document.getElementById('meta-ads-report-list');
+    if (!box) return;
+    box.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</div>`;
+    try {
+        const res = await fetch('/api/meta-ads/report');
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao carregar relatório.');
+        const anuncios = json.anuncios || [];
+
+        if (!anuncios.length) {
+            box.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;">Nenhum lead com clique de anúncio Meta rastreado ainda.</div>`;
+            return;
+        }
+
+        const capiBadge = (ok, total, label) => {
+            const cor = ok >= total ? 'var(--accent-success)' : (ok > 0 ? 'var(--accent-warning)' : 'var(--text-muted)');
+            return `<span style="color:${cor}; font-size:0.75rem;" title="${label}: ${ok} de ${total} eventos confirmados enviados pro Meta">${ok}/${total}</span>`;
+        };
+
+        box.innerHTML = `
+            <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse: collapse; font-size: 0.85rem;">
+                <thead>
+                    <tr style="text-align:left; color: var(--text-muted); border-bottom: 1px solid var(--border-color);">
+                        <th style="padding: 0.5rem 0.6rem;">Anúncio (origem)</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">Leads</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">Agendados</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">Ganhos</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:right;">Receita</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">CAPI Lead</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">CAPI Agend.</th>
+                        <th style="padding: 0.5rem 0.6rem; text-align:center;">CAPI Ganho</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${anuncios.map(a => `
+                        <tr style="border-bottom: 1px solid var(--border-color);">
+                            <td style="padding: 0.5rem 0.6rem; color: var(--text-main);">${escapeHtml(a.origem || 'Sem origem')}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${a.leads}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${a.agendados}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${a.ganhos}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:right;">${fmtMoney(a.receita || 0)}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${capiBadge(a.capi_lead_ok, a.leads, 'Lead')}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${capiBadge(a.capi_schedule_ok, a.agendados, 'Schedule')}</td>
+                            <td style="padding: 0.5rem 0.6rem; text-align:center;">${capiBadge(a.capi_purchase_ok, a.ganhos, 'Purchase')}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+            </div>
+        `;
+    } catch (e) {
+        console.error('Erro ao carregar relatório de anúncios Meta:', e);
+        box.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--accent-danger); font-size: 0.85rem;">Falha ao carregar: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
 function renderUtmKpiRow() {
     const box = document.getElementById('utm-kpi-row');
     if (!box) return;
@@ -4434,8 +4455,11 @@ async function openChat(phone, name, silent = false) {
     }).then(() => {
         if (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList)) {
             const found = allChatsList.find(c => isSamePhone(c.phone, phone));
-            if (found) {
+            if (found && Number(found.unread_count || 0) !== 0) {
                 found.unread_count = 0;
+                // Sem isso, a bolinha de não lidas só sumia da lista no próximo
+                // re-render "de fora" (polling/SSE) — não imediatamente ao abrir.
+                if (typeof reapplyChatFilters === 'function') reapplyChatFilters();
             }
         }
     }).catch(console.error);

@@ -13,6 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
+import webpush from 'web-push';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -217,7 +218,7 @@ async function migrateChatPhone(oldTo, newTo) {
 // Montado via app.use('/api', requireAuth) — dentro do middleware, req.path já vem
 // SEM o prefixo /api (o Express remove o trecho do mount point), por isso a lista
 // abaixo usa os caminhos relativos ao mount.
-const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick']);
+const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick', '/webhooks/psp']);
 
 function requireAuth(req, res, next) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
@@ -472,6 +473,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                             'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                             [`lead-${newLeadId}`, notifMsg]
                         );
+                        sendPushToAll('Novo lead', notifMsg).catch(() => {});
                     } catch (e) {
                         console.error('Falha ao registrar notificação de novo lead:', e.message);
                     }
@@ -976,6 +978,22 @@ app.post('/api/whatsapp/send', async (req, res) => {
             try {
                 const variants = phoneVariants(finalTo);
                 const placeholders = variants.map(() => '?').join(', ');
+
+                // Histórico: se fazia 3+ dias sem NENHUMA mensagem (nem nossa, nem
+                // dele), esse envio manual conta como "recontato" — precisa ler o
+                // last_msg_at ANTES de sobrescrever com o desta mensagem.
+                const RECONTATO_GAP_MS = 3 * 86400000;
+                const leadsAntes = await queryD1(`SELECT id, last_msg_at FROM leads WHERE telefone IN (${placeholders})`, variants);
+                const actorEnvio = (req.user && req.user.username) || null;
+                for (const l of (leadsAntes || [])) {
+                    if (!l.last_msg_at) continue;
+                    const prevDate = followupParseTs(l.last_msg_at);
+                    const gapMs = prevDate ? Date.now() - prevDate.getTime() : 0;
+                    if (gapMs >= RECONTATO_GAP_MS) {
+                        logLeadEvent(l.id, 'recontato', actorEnvio, `${Math.floor(gapMs / 86400000)} dias de silêncio`);
+                    }
+                }
+
                 await queryD1(`UPDATE leads SET ai_enabled = 0, last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${placeholders})`, variants);
                 // Envio manual do atendente também interrompe follow-up automático em andamento.
                 await queryD1(`UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE status IN ('agendado','enviando') AND phone IN (${placeholders})`, variants);
@@ -1638,6 +1656,31 @@ async function ensureQualifiedTagExists() {
     return WHATSAPP_AI_QUALIFIED_TAG_ID;
 }
 
+const DISCARDED_TAG_ID = 'descartado';
+
+// Garante que a etiqueta "Descartado" existe na lista compartilhada — sem
+// isso, getTagBadgeHTML() no front não acha o id e o badge simplesmente não
+// aparece (mesmo bug que já existia pras outras tags automáticas antes de
+// ganharem seu próprio ensure*TagExists).
+async function ensureDiscardedTagExists() {
+    const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+    let tags = [];
+    if (rows && rows[0] && rows[0].value) {
+        try { tags = JSON.parse(rows[0].value); } catch (e) {}
+    }
+    if (!Array.isArray(tags) || tags.length === 0) {
+        tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
+    }
+    if (!tags.some(t => t.id === DISCARDED_TAG_ID)) {
+        tags.push({ id: DISCARDED_TAG_ID, label: '🚫 Descartado', bg: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', border: '#64748b' });
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(tags)]
+        );
+    }
+    return DISCARDED_TAG_ID;
+}
+
 // Acrescenta a tag "Qualificado (IA)" ao lead sem duplicar e sem apagar as
 // etiquetas que ele já tinha.
 async function tagLeadAsQualified(leadId) {
@@ -1859,6 +1902,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
                 : 'IA identificou lead qualificado';
             const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
             await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
+            logLeadEvent(leadId, 'lead_qualificado_ia', 'ia', motivo);
             const infoRows = await queryD1('SELECT nome, telefone FROM leads WHERE id = ?', [leadId]);
             const nomeBruto = (infoRows?.[0]?.nome || '').replace(' [MKT]', '').trim();
             const nomeLead = (nomeBruto && !LEAD_NOME_PLACEHOLDER_RE.test(nomeBruto)) ? nomeBruto : 'Lead';
@@ -1879,6 +1923,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
                     [notifId, notifMsg]
                 ).catch(() => {});
             }
+            sendPushToAll('Lead quente 🔥', notifMsg, { phone: telLead }).catch(() => {});
             return;
         }
 
@@ -1993,6 +2038,33 @@ async function getWaChatsList() {
         );
     } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
     return rows || [];
+}
+
+// A lista de conversas é servida de um cache com TTL de 5 min. mark-read grava
+// status='read' em wa_messages, mas sem remendar esse cache a bolinha de não
+// lidas reaparecia num reload até o cache expirar. Aqui zeramos unread_count
+// (e ajustamos o status da última mensagem) das linhas do(s) telefone(s), em vez
+// de invalidar — invalidar forçaria a consulta cara na próxima leitura.
+async function waChatsCacheMarkRead(phonesArr) {
+    try {
+        const row = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_cache'");
+        if (!row || !row[0] || !row[0].value) return;
+        const cached = JSON.parse(row[0].value);
+        if (!cached || !Array.isArray(cached.rows)) return;
+        const alvo = new Set(phonesArr.map(p => String(p).replace(/\D/g, '')));
+        let mudou = false;
+        for (const c of cached.rows) {
+            if (!alvo.has(String(c.phone || '').replace(/\D/g, ''))) continue;
+            if (Number(c.unread_count || 0) !== 0) { c.unread_count = 0; mudou = true; }
+            if (c.direction === 'in' && c.status !== 'read') { c.status = 'read'; mudou = true; }
+        }
+        if (mudou) {
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [JSON.stringify(cached)]
+            );
+        }
+    } catch (e) { /* cache é best-effort */ }
 }
 
 app.get('/api/whatsapp/chats', async (req, res) => {
@@ -2374,6 +2446,7 @@ app.post('/api/whatsapp/mark-read', async (req, res) => {
         const phonesArr = Array.from(phonesSet);
         const placeholders = phonesArr.map(() => '?').join(', ');
         await queryD1(`UPDATE wa_messages SET status = 'read' WHERE phone IN (${placeholders}) AND direction = 'in'`, phonesArr);
+        await waChatsCacheMarkRead(phonesArr);
         res.json({ success: true });
     } catch(e) {
         console.error(e);
@@ -2532,6 +2605,112 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_followup_runs (
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_at DATETIME").catch(() => {});
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_direction TEXT").catch(() => {});
 
+// Web Push: inscrições de notificação nativa (Windows/Android) por dispositivo
+// logado. Uma linha por par (usuário, navegador/dispositivo) — a mesma pessoa
+// pode ter várias (celular + PC).
+// Histórico estruturado do lead (quem iniciou/finalizou atendimento, abriu
+// orçamento, mudou de etapa, recontatou, etc.) — separado de "notas", que
+// continua sendo só o texto livre que o atendente digita de propósito.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_lead_events (
+    id TEXT PRIMARY KEY,
+    lead_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    actor TEXT,
+    detalhe TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+queryD1("CREATE INDEX IF NOT EXISTS idx_lead_events_lead ON crm_lead_events(lead_id, created_at)").catch(() => {});
+
+// Registra um evento no histórico do lead. Nunca lança — histórico é
+// observabilidade, não pode derrubar a ação principal que o gerou.
+async function logLeadEvent(leadId, tipo, actor, detalhe) {
+    try {
+        const id = 'ev-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        await queryD1(
+            'INSERT INTO crm_lead_events (id, lead_id, tipo, actor, detalhe) VALUES (?, ?, ?, ?, ?)',
+            [id, leadId, tipo, actor || null, detalhe || null]
+        );
+    } catch (e) {
+        console.error('logLeadEvent falhou:', e.message);
+    }
+}
+
+queryD1(`CREATE TABLE IF NOT EXISTS crm_push_subscriptions (
+    id TEXT PRIMARY KEY,
+    username TEXT,
+    endpoint TEXT UNIQUE,
+    p256dh TEXT,
+    auth TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+const VAPID_PUBLIC = (process.env.VAPID_PUBLIC_KEY || '').trim();
+const VAPID_PRIVATE = (process.env.VAPID_PRIVATE_KEY || '').trim();
+const VAPID_SUBJECT = (process.env.VAPID_SUBJECT || 'mailto:contato@example.com').trim();
+const pushEnabled = !!(VAPID_PUBLIC && VAPID_PRIVATE);
+if (pushEnabled) {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
+} else {
+    console.warn('[push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY não configuradas — Web Push desligado.');
+}
+
+// Manda uma notificação nativa (Windows/Android/etc.) pra TODOS os
+// dispositivos inscritos. Nunca lança — falha em silêncio (a notificação
+// dentro do app, via crm_notifications, já cobre o essencial). Inscrições
+// mortas (endpoint expirado/revogado) são removidas automaticamente.
+async function sendPushToAll(title, body, extra = {}) {
+    if (!pushEnabled) return;
+    try {
+        const subs = await queryD1('SELECT id, endpoint, p256dh, auth FROM crm_push_subscriptions');
+        if (!subs || !subs.length) return;
+        const payload = JSON.stringify({ title, body, ...extra });
+        await Promise.all(subs.map(async (s) => {
+            try {
+                await webpush.sendNotification(
+                    { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+                    payload
+                );
+            } catch (e) {
+                // 404/410 = inscrição morta (usuário desinstalou/limpou dados) — remove.
+                if (e.statusCode === 404 || e.statusCode === 410) {
+                    queryD1('DELETE FROM crm_push_subscriptions WHERE id = ?', [s.id]).catch(() => {});
+                } else {
+                    console.error('[push] falha ao enviar:', e.message);
+                }
+            }
+        }));
+    } catch (e) {
+        console.error('[push] sendPushToAll falhou:', e.message);
+    }
+}
+
+app.get('/api/push/vapid-public-key', (req, res) => res.json({ publicKey: VAPID_PUBLIC || null }));
+
+app.post('/api/push/subscribe', async (req, res) => {
+    try {
+        const sub = req.body?.subscription;
+        if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Inscrição inválida.' });
+        const id = 'push-' + Buffer.from(sub.endpoint).toString('base64').slice(0, 40);
+        await queryD1(
+            `INSERT INTO crm_push_subscriptions (id, username, endpoint, p256dh, auth) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(endpoint) DO UPDATE SET username = excluded.username, p256dh = excluded.p256dh, auth = excluded.auth`,
+            [id, (req.user && req.user.username) || null, sub.endpoint, sub.keys.p256dh, sub.keys.auth]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        console.error('push/subscribe:', e.message);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+app.post('/api/push/unsubscribe', async (req, res) => {
+    try {
+        const endpoint = req.body?.endpoint;
+        if (endpoint) await queryD1('DELETE FROM crm_push_subscriptions WHERE endpoint = ?', [endpoint]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
 // Considera "online" quem mandou heartbeat nos últimos 90s
 const ONLINE_THRESHOLD_MS = 90 * 1000;
 // Tabela de aniversariantes — substitui o CSV em disco (que guardava CPF e dado
@@ -2680,69 +2859,231 @@ async function backfillAgendamentosCentavos() {
 backfillAgendamentosCentavos();
 
 // Espelha o valor do card do Kanban em crm_pagamentos, pra esse dinheiro aparecer
-// na tela Financeiro. Usa valor_recebido; se não houver, a soma do orçamento.
-// A linha-espelho é marcada com criado_por='kanban' + lead_id (sempre a mesma).
-// Idempotente: cria, atualiza o valor, ou remove se o card zerar.
+// na tela Financeiro. Usa a soma do orçamento; sem orçamento, o valor_recebido.
+// As linhas-espelho são marcadas com criado_por='kanban' + origem_sync='kanban'
+// + lead_id, uma por parcela (parcela 1..N, N lido do orçamento).
+// Idempotente: cria, atualiza valor/vencimento/status, ou remove se o card zerar.
 const COLUNAS_COM_VALOR = ['col-orcado', 'col-agendado', 'col-ganho'];
 
-async function syncLeadPagamento(leadId) {
+// Trilha de auditoria: registra por que um espelho mudou. Só grava quando
+// houve mudança de verdade (não em no-op). Ring trimado no backfill.
+async function logSyncPag(leadId, gatilho, antes, depois) {
     try {
-        const rows = await queryD1(
-            'SELECT id, nome, valor_recebido, orcamento, column_id, data_valor FROM leads WHERE id = ?',
-            [leadId]
-        );
+        await queryD1('INSERT INTO crm_sync_log (lead_id, gatilho, antes, depois) VALUES (?, ?, ?, ?)',
+            [String(leadId), gatilho || 'auto', String(antes).slice(0, 400), String(depois).slice(0, 400)]);
+    } catch (e) { /* trilha é best-effort */ }
+}
+
+function _pagDescricaoOrc(orcArr, fallbackNome) {
+    const nomes = (orcArr || []).map(i => i && i.procedimento).filter(Boolean);
+    if (!nomes.length) return 'Kanban: ' + (fallbackNome || 'venda');
+    if (nomes.length === 1) return 'Kanban: ' + nomes[0];
+    return 'Kanban: ' + nomes[0] + ' + ' + nomes[1] + (nomes.length > 2 ? ` (+${nomes.length - 2})` : '');
+}
+
+// Nº de parcelas lido dos campos de texto livre do orçamento (condicoes /
+// formaPagamento / valor): "10x", "em 12 vezes", "6 parcelas". Sem indicação -> 1.
+// Teto de 48 pra um erro de digitação não gerar um carnê gigante.
+function _parcelasOrc(orcArr) {
+    let n = 1;
+    for (const it of orcArr || []) {
+        const txt = [it && it.condicoes, it && it.formaPagamento, it && it.valor]
+            .filter(Boolean).join(' ').toLowerCase();
+        const m = txt.match(/(\d{1,2})\s*(?:x\b|vezes|parcelas?|parc\b)/);
+        if (m) n = Math.max(n, parseInt(m[1], 10) || 1);
+    }
+    return Math.max(1, Math.min(48, n));
+}
+
+// Texto de forma de pagamento do orçamento -> enum de crm_pagamentos (best-effort).
+function _formaOrcParaEnum(orcArr) {
+    const txt = (orcArr || [])
+        .map(i => [i && i.formaPagamento, i && i.condicoes].filter(Boolean).join(' '))
+        .join(' ').toLowerCase();
+    if (!txt.trim()) return null;
+    if (/pix/.test(txt)) return 'pix';
+    if (/boleto|carn[êe]/.test(txt)) return 'boleto';
+    if (/d[ée]bito/.test(txt)) return 'cartao_debito';
+    if (/cr[ée]dito|cart[ãa]o/.test(txt)) return 'cartao_credito';
+    if (/transfer|ted\b|doc\b/.test(txt)) return 'transferencia';
+    if (/dinheiro|esp[ée]cie|[àa]\s*vista/.test(txt)) return 'dinheiro';
+    return null;
+}
+
+// Espelha o estado financeiro do card do Kanban em crm_pagamentos.
+// Idempotente. Cobre criação, atualização de valor, parcelamento lido do
+// orçamento ("Nx"), transição pendente<->pago nos dois sentidos, e remoção.
+// Cada parcela é uma linha (origem_sync='kanban', parcela 1..N). Nunca lança —
+// no pior caso o espelho fica desatualizado e a fila de retry reprocessa.
+async function syncLeadPagamento(leadId, gatilho = 'auto') {
+    try {
+        // SELECT * de propósito: tolera colunas novas ainda não migradas
+        // (janela de cold start) sem derrubar o sync inteiro.
+        const rows = await queryD1('SELECT * FROM leads WHERE id = ?', [leadId]);
         if (!rows.length) return;
         const lead = rows[0];
 
-        let cents = brlToCents(lead.valor_recebido);
-        const recebido = !!(cents && cents > 0);
-        if (!recebido) {
-            const soma = parseOrcamentoArray(lead.orcamento)
-                .reduce((s, it) => s + (brlToCents(it.valor) || 0), 0);
-            cents = soma;
-        }
-
+        const orcArr = parseOrcamentoArray(lead.orcamento);
+        const recCents = brlToCents(lead.valor_recebido) || 0;
+        const orcCents = orcArr.reduce((s, it) => s + (brlToCents(it.valor) || 0), 0);
+        // Total do cronograma: soma do orçamento manda; sem orçamento, o valor recebido.
+        let cents = orcCents > 0 ? orcCents : recCents;
+        const temValor = recCents > 0 || orcCents > 0;
         // Fora de coluna com valor e sem valor recebido -> não espelha.
-        if (!recebido && !COLUNAS_COM_VALOR.includes(lead.column_id)) cents = 0;
+        if (!recCents && !COLUNAS_COM_VALOR.includes(lead.column_id)) cents = 0;
 
-        const mirror = (await queryD1(
-            "SELECT * FROM crm_pagamentos WHERE lead_id = ? AND criado_por = 'kanban' AND tipo = 'recebimento' LIMIT 1",
-            [leadId]
-        ))[0];
-
-        if (!cents || cents <= 0) {
-            if (mirror && mirror.status !== 'cancelado') {
-                await queryD1('DELETE FROM crm_pagamentos WHERE id = ?', [mirror.id]);
-            }
+        // Guarda contra erro de parsing (real x centavos): > R$ 1M num único lead
+        // quase sempre é bug. Não escreve, registra.
+        if (cents > 100000000) {
+            console.warn(`[financeiro] valor suspeito no lead ${leadId}: ${cents} centavos — sync abortado`);
+            await logSyncPag(leadId, gatilho, `${cents} centavos`, 'abortado:suspeito');
             return;
         }
 
-        const proc = parseOrcamentoArray(lead.orcamento).find(i => i.procedimento)?.procedimento;
-        const descricao = 'Kanban: ' + (proc || lead.nome || 'venda');
-        const pago = recebido || lead.column_id === 'col-ganho';
-        const dataRef = (lead.data_valor || '').split(' ')[0] || todayISO();
+        const mirrors = await queryD1(
+            "SELECT * FROM crm_pagamentos WHERE lead_id = ? AND tipo = 'recebimento' AND origem_sync IN ('kanban','kanban-detached') ORDER BY parcela ASC, id ASC",
+            [leadId]
+        );
+        // Financeiro assumiu o controle desse plano (reparcelou à mão): o card
+        // não cria, não atualiza e não apaga nada.
+        if (mirrors.some(m => m.origem_sync === 'kanban-detached')) return;
 
-        if (mirror) {
-            if (mirror.status === 'cancelado') return; // respeita estorno manual
-            const sets = ['valor_centavos = ?', 'paciente = ?', 'descricao = ?'];
-            const params = [cents, lead.nome || null, descricao];
-            if (pago && mirror.status === 'pendente') {
-                sets.push("status = 'pago'", 'pago_em = ?');
-                params.push(mirror.pago_em || dataRef);
-            }
-            params.push(mirror.id);
-            await queryD1(`UPDATE crm_pagamentos SET ${sets.join(', ')} WHERE id = ?`, params);
-        } else {
-            await queryD1(
-                `INSERT INTO crm_pagamentos
-                   (lead_id, descricao, paciente, valor_centavos, tipo, status, pago_em, parcela, parcelas_total, criado_por)
-                 VALUES (?, ?, ?, ?, 'recebimento', ?, ?, 1, 1, 'kanban')`,
-                [leadId, descricao, lead.nome || null, cents, pago ? 'pago' : 'pendente', pago ? dataRef : null]
-            );
+        // Indexa as linhas geridas por nº de parcela; dedup de corrida mantém a
+        // mais nova (linha 'cancelado' = estorno manual, sempre preservada).
+        const porParcela = new Map();
+        for (const m of mirrors) {
+            const k = Number(m.parcela) || 1;
+            const prev = porParcela.get(k);
+            if (!prev) { porParcela.set(k, m); continue; }
+            const keep = prev.status === 'cancelado' ? prev
+                : m.status === 'cancelado' ? m
+                : (Number(m.id) > Number(prev.id) ? m : prev);
+            const drop = keep === m ? prev : m;
+            if (drop.status !== 'cancelado') await queryD1('DELETE FROM crm_pagamentos WHERE id = ?', [drop.id]);
+            porParcela.set(k, keep);
         }
+
+        if (!cents || cents <= 0) {
+            let removidas = 0;
+            for (const [, row] of porParcela) {
+                if (row.status !== 'cancelado') { await queryD1('DELETE FROM crm_pagamentos WHERE id = ?', [row.id]); removidas++; }
+            }
+            if (removidas) await logSyncPag(leadId, gatilho, `${removidas} linha(s)`, 'removido');
+            return;
+        }
+
+        const N = orcCents > 0 ? _parcelasOrc(orcArr) : 1;
+        const descricao = _pagDescricaoOrc(orcArr, lead.nome);
+        const forma = _formaOrcParaEnum(orcArr);
+        // Quem montou o orçamento: created_by do item mais recente que tiver;
+        // senão o atendente dono do lead. Vai pra crm_pagamentos.criado_por
+        // (origem_sync='kanban' é o que marca a linha como espelho, não mais isso).
+        const orcadoPor = orcArr.map(it => it && it.created_by).filter(Boolean).pop()
+            || lead.owner_id || null;
+
+        // Base do vencimento = data do orçamento (data_valor); fallback: hoje.
+        // Parcela i vence data_valor + i meses (1..N) — 1ª parcela ~30 dias depois.
+        const baseISO = (lead.data_valor || '').split(' ')[0] || todayISO();
+        const addMonths = (iso, m) => {
+            const d = new Date(iso + 'T00:00:00');
+            d.setMonth(d.getMonth() + m);
+            return d.toISOString().split('T')[0];
+        };
+        const pagoEmLead = (lead.data_pagamento || '').split(' ')[0]
+            || (lead.data_valor || '').split(' ')[0] || todayISO();
+
+        // Divisão em centavos sem perder resto (mesma convenção do POST /api/pagamentos).
+        const baseC = Math.floor(cents / N);
+        const resto = cents - baseC * N;
+
+        // Quantas parcelas o valor_recebido cobre (na ordem). Sem "Nx" e em
+        // col-ganho, a linha única conta como paga (comportamento anterior).
+        let pagasCobertas = 0, acc = 0;
+        for (let i = 0; i < N; i++) {
+            acc += baseC + (i < resto ? 1 : 0);
+            if (recCents > 0 && recCents >= acc) pagasCobertas = i + 1;
+        }
+        if (N === 1 && recCents === 0 && lead.column_id === 'col-ganho') pagasCobertas = 1;
+
+        let mudou = false;
+        for (let i = 0; i < N; i++) {
+            const parcela = i + 1;
+            const pcents = baseC + (i < resto ? 1 : 0);
+            const querPago = parcela <= pagasCobertas;
+            const row = porParcela.get(parcela);
+            if (row && row.status === 'cancelado') continue; // estorno manual — não ressuscita
+
+            if (!row) {
+                const venc = querPago ? null : addMonths(baseISO, parcela);
+                await queryD1(
+                    `INSERT INTO crm_pagamentos
+                       (lead_id, descricao, paciente, valor_centavos, tipo, forma_pagamento, status, vencimento, pago_em, parcela, parcelas_total, criado_por, origem_sync)
+                     VALUES (?, ?, ?, ?, 'recebimento', ?, ?, ?, ?, ?, ?, ?, 'kanban')`,
+                    [leadId, descricao, lead.nome || null, pcents, forma, querPago ? 'pago' : 'pendente',
+                     venc, querPago ? pagoEmLead : null, parcela, N, orcadoPor]
+                );
+                mudou = true;
+                continue;
+            }
+
+            // Transição de status nos dois sentidos.
+            const novoStatus = querPago && row.status !== 'pago' ? 'pago'
+                : !querPago && row.status === 'pago' ? 'pendente'
+                : row.status;
+            const novoPagoEm = novoStatus === 'pago' ? (row.pago_em || pagoEmLead) : null;
+            const novoVenc = novoStatus === 'pago' ? null : addMonths(baseISO, parcela);
+
+            const igual =
+                Number(row.valor_centavos) === pcents &&
+                row.status === novoStatus &&
+                (row.descricao || '') === descricao &&
+                (row.paciente || '') === (lead.nome || '') &&
+                Number(row.parcelas_total || 1) === N &&
+                (row.vencimento || null) === (novoVenc || null) &&
+                (row.pago_em || null) === (novoPagoEm || null) &&
+                (!forma || row.forma_pagamento === forma) &&
+                (!orcadoPor || row.criado_por === orcadoPor);
+            if (igual) continue;
+
+            const sets = ['valor_centavos = ?', 'paciente = ?', 'descricao = ?', 'parcelas_total = ?',
+                'status = ?', 'pago_em = ?', 'vencimento = ?'];
+            const params = [pcents, lead.nome || null, descricao, N, novoStatus, novoPagoEm, novoVenc];
+            if (forma) { sets.push('forma_pagamento = ?'); params.push(forma); }
+            if (orcadoPor && row.criado_por !== orcadoPor) { sets.push('criado_por = ?'); params.push(orcadoPor); }
+            params.push(row.id);
+            await queryD1(`UPDATE crm_pagamentos SET ${sets.join(', ')} WHERE id = ?`, params);
+            mudou = true;
+        }
+
+        // Parcelas sobrando (o "Nx" diminuiu) — apaga as não canceladas.
+        for (const [parcela, row] of porParcela) {
+            if (parcela > N && row.status !== 'cancelado') {
+                await queryD1('DELETE FROM crm_pagamentos WHERE id = ?', [row.id]);
+                mudou = true;
+            }
+        }
+
+        if (mudou) await logSyncPag(leadId, gatilho, `sync`, `${cents}c/${N}x/${pagasCobertas}pg/col=${lead.column_id}`);
     } catch (e) {
         console.warn('[financeiro] syncLeadPagamento falhou para lead', leadId, '-', e.message);
     }
+}
+
+// Fila de retry: syncLeadPagamento engole os próprios erros, então a chamada
+// inline "sempre passa". Se o D1 falhou, o id fica marcado e um worker (só no
+// processo persistente) reprocessa. Na Vercel não há loop — o inline basta e o
+// botão /api/financeiro/sync-kanban continua sendo o reparo manual.
+const _dirtyLeadPag = new Set();
+function markLeadPagDirty(id) { if (id) _dirtyLeadPag.add(String(id)); }
+if (!process.env.VERCEL) {
+    setInterval(async () => {
+        if (!_dirtyLeadPag.size) return;
+        const batch = [..._dirtyLeadPag];
+        _dirtyLeadPag.clear();
+        for (const id of batch) {
+            try { await syncLeadPagamento(id, 'retry'); } catch (e) {}
+        }
+    }, 25000);
 }
 
 async function backfillKanbanPagamentos() {
@@ -2756,7 +3097,65 @@ async function backfillKanbanPagamentos() {
         console.warn('[financeiro] backfill Kanban->pagamentos falhou (repete no próximo boot):', e.message);
     }
 }
-backfillKanbanPagamentos();
+// --- Sincronia Kanban <-> Financeiro ---
+// Migrações + dedup + backfill numa sequência ÚNICA e ordenada: syncLeadPagamento
+// já lê `origem_sync` e `data_pagamento` e grava em `crm_sync_log`, então essas
+// estruturas têm que existir ANTES do backfill rodar.
+(async () => {
+    try {
+        await queryD1("ALTER TABLE crm_pagamentos ADD COLUMN origem_sync TEXT").catch(() => {});
+        await queryD1("ALTER TABLE leads ADD COLUMN data_pagamento DATETIME").catch(() => {});
+        // Endereço estruturado do lead — necessário pra emitir boleto no PSP
+        // (CEP + número não saem de um campo de texto livre).
+        for (const col of ['cep TEXT', 'logradouro TEXT', 'numero TEXT', 'complemento TEXT', 'bairro TEXT', 'cidade TEXT', 'uf TEXT']) {
+            await queryD1(`ALTER TABLE leads ADD COLUMN ${col}`).catch(() => {});
+        }
+        // Cobrança PSP (Pix/boleto) por fatura — colunas aditivas, ficam NULL até
+        // alguém gerar a cobrança daquela parcela.
+        for (const col of [
+            'psp_provider TEXT', 'psp_charge_id TEXT', 'psp_metodo TEXT',
+            'psp_qrcode TEXT', 'psp_qrcode_img TEXT', 'psp_url TEXT',
+            'psp_linha_digitavel TEXT', 'psp_expira_em TEXT', 'psp_status TEXT',
+            'psp_criado_em DATETIME', 'psp_raw TEXT'
+        ]) {
+            await queryD1(`ALTER TABLE crm_pagamentos ADD COLUMN ${col}`).catch(() => {});
+        }
+        await queryD1(`CREATE TABLE IF NOT EXISTS crm_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id TEXT, gatilho TEXT, antes TEXT, depois TEXT,
+            ts DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`).catch(() => {});
+        await queryD1("UPDATE crm_pagamentos SET origem_sync = 'kanban' WHERE criado_por = 'kanban' AND (origem_sync IS NULL OR origem_sync = '')").catch(() => {});
+        await queryD1("UPDATE crm_pagamentos SET origem_sync = 'manual' WHERE origem_sync IS NULL OR origem_sync = ''").catch(() => {});
+
+        // Mescla espelhos Kanban duplicados por (lead, parcela) — corrida antiga.
+        // Chave por parcela: um plano parcelado tem N linhas 'kanban' legítimas.
+        const dups = await queryD1(
+            "SELECT lead_id, parcela FROM crm_pagamentos WHERE origem_sync = 'kanban' AND lead_id IS NOT NULL GROUP BY lead_id, parcela HAVING COUNT(*) > 1"
+        );
+        for (const d of dups) {
+            const rows = await queryD1("SELECT id FROM crm_pagamentos WHERE origem_sync = 'kanban' AND lead_id = ? AND parcela = ? ORDER BY id DESC", [d.lead_id, d.parcela]);
+            const drop = rows.slice(1).map(r => r.id);
+            if (drop.length) await queryD1(`DELETE FROM crm_pagamentos WHERE id IN (${drop.map(() => '?').join(',')})`, drop);
+        }
+        if (dups.length) console.log(`[financeiro] ${dups.length} (lead,parcela) com espelho duplicado — mesclado.`);
+        // Índice antigo era ON (lead_id); agora precisa distinguir parcelas -> recria.
+        await queryD1("DROP INDEX IF EXISTS idx_pag_kanban_unico").catch(() => {});
+        await queryD1("CREATE UNIQUE INDEX IF NOT EXISTS idx_pag_kanban_unico ON crm_pagamentos(lead_id, parcela) WHERE origem_sync = 'kanban'").catch(() => {});
+        // Badge de vencidas (GET /api/financeiro/vencido): range scan em vez de varrer a tabela.
+        await queryD1("CREATE INDEX IF NOT EXISTS idx_pag_status_venc ON crm_pagamentos(status, vencimento)").catch(() => {});
+
+        // Trilha de sync: mantém ~800 linhas (ring).
+        await queryD1("DELETE FROM crm_sync_log WHERE id <= (SELECT MAX(id) - 800 FROM crm_sync_log)").catch(() => {});
+
+        // Re-sync em massa só no processo persistente — na Vercel cada cold start
+        // rodaria isso à toa (as edições de card mantêm tudo em dia, e
+        // /api/financeiro/sync-kanban é o reparo manual completo).
+        if (!process.env.VERCEL) await backfillKanbanPagamentos();
+    } catch (e) {
+        console.warn('[financeiro] setup da sincronia Kanban<->Financeiro:', e.message);
+    }
+})();
 
 // Configurações simples de chave/valor (ex.: meta de receita do dashboard) —
 // evita criar uma tabela dedicada pra cada configuração pontual do sistema.
@@ -4081,6 +4480,34 @@ app.get('/api/campaigns/export-leads', async (req, res) => {
     }
 });
 
+// Relatório de anúncios Meta (Click-to-WhatsApp): agrupa por "origem" (que já
+// vem como "Meta Ads: <título do anúncio>" desde o webhook) todo lead que tem
+// ctwa_clid — ou seja, veio de um clique real rastreado, não de mensagem
+// orgânica. 1 SELECT agregado só, nada de N+1 por anúncio.
+app.get('/api/meta-ads/report', async (req, res) => {
+    try {
+        const rows = await queryD1(`
+            SELECT
+                origem,
+                COUNT(*) as leads,
+                SUM(CASE WHEN column_id = 'col-agendado' THEN 1 ELSE 0 END) as agendados,
+                SUM(CASE WHEN column_id = 'col-ganho' THEN 1 ELSE 0 END) as ganhos,
+                COALESCE(SUM(CASE WHEN column_id IN ('col-ganho','col-agendado') THEN valor_recebido ELSE 0 END), 0) as receita,
+                SUM(capi_lead_sent) as capi_lead_ok,
+                SUM(capi_schedule_sent) as capi_schedule_ok,
+                SUM(capi_purchase_sent) as capi_purchase_ok
+            FROM leads
+            WHERE ctwa_clid IS NOT NULL AND ctwa_clid != ''
+            GROUP BY origem
+            ORDER BY leads DESC
+        `);
+        res.json({ anuncios: rows || [] });
+    } catch (e) {
+        console.error('Erro no relatório de anúncios Meta:', e);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
 // Link curto público (impresso em panfletos/QR) — registra o "scan" antes de
 // redirecionar, pra dar visibilidade de quantas pessoas viram a mídia física
 // mesmo quando não chegam a mandar mensagem.
@@ -4396,6 +4823,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                     'INSERT INTO crm_notifications (id, message, created_at, avatar_url, actor_username) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)',
                     [`login-${dbUser.username}-${Date.now()}`, loginMessage, dbUser.avatar_url || null, dbUser.username]
                 );
+                sendPushToAll('CRM', loginMessage).catch(() => {});
             }
         } catch (e) {
             console.error('Erro ao registrar notificação de login:', e);
@@ -5542,10 +5970,12 @@ app.put('/api/leads/:id', async (req, res) => {
         // Auto-assign: se o lead não tem dono e um usuário logado está trabalhando ele
         // (arrastando, editando, orçando). Abrir a conversa manda no_auto_assign=true —
         // só olhar a conversa não é atender, então não vira dono nem entra no ranking.
+        let logouAtendimentoIniciado = false;
         if (!lead.owner_id && req.user && req.user.username && !no_auto_assign) {
             updates.push('owner_id = ?');
             params.push(req.user.username);
             updates.push('assigned_at = CURRENT_TIMESTAMP');
+            logouAtendimentoIniciado = true;
         }
 
         if (column_id !== undefined) {
@@ -5643,10 +6073,35 @@ app.put('/api/leads/:id', async (req, res) => {
             }
         }
 
-        // Mantém o espelho do valor do card na tela Financeiro.
-        if (valor_recebido !== undefined || orcamento !== undefined ||
-            (column_id !== undefined && valueColumns.includes(column_id))) {
-            await syncLeadPagamento(id);
+        // Histórico estruturado: auto-assign = "iniciou atendimento"; mudança de
+        // coluna cobre sozinha "abriu/fechou orçamento", "agendou", "fechou venda"
+        // — é tudo a mesma transição de etapa vista de ângulos diferentes.
+        const actorUser = (req.user && req.user.username) || null;
+        if (logouAtendimentoIniciado) {
+            logLeadEvent(id, 'atendimento_iniciado', actorUser);
+        }
+        if (column_id && lead && column_id !== lead.column_id) {
+            logLeadEvent(id, 'mudanca_coluna', actorUser, JSON.stringify({ de: lead.column_id, para: column_id }));
+        }
+
+        // Carimba a data do pagamento na transição que torna o card "pago"
+        // (entrou em Ganho, ou ganhou valor_recebido). O Financeiro usa essa
+        // data como pago_em — não a data em que o orçamento foi montado.
+        const virouGanho = column_id === 'col-ganho' && lead && lead.column_id !== 'col-ganho';
+        const ganhouValor = valor_recebido !== undefined && valor_recebido && (lead && !lead.valor_recebido);
+        if (virouGanho || ganhouValor) {
+            await queryD1(
+                'UPDATE leads SET data_pagamento = COALESCE(data_pagamento, ?) WHERE id = ?',
+                [new Date().toISOString().slice(0, 19).replace('T', ' '), id]
+            ).catch(() => {});
+        }
+
+        // Espelha o estado do card na tela Financeiro. Dispara em QUALQUER
+        // mudança de coluna (inclusive sair de Ganho/Agendado -> o espelho
+        // volta a pendente ou some), além de valor/orçamento.
+        if (valor_recebido !== undefined || orcamento !== undefined || column_id !== undefined) {
+            await syncLeadPagamento(id, 'lead-update');
+            markLeadPagDirty(id);
         }
 
         broadcastLeadsUpdate('updated', id);
@@ -5680,10 +6135,12 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
     const { id } = req.params;
     const { procedimento, valor, desconto, formaPagamento, condicoes } = req.body;
     try {
-        const leadRows = await queryD1('SELECT orcamento, owner_id FROM leads WHERE id = ?', [id]);
+        const leadRows = await queryD1('SELECT orcamento, owner_id, column_id FROM leads WHERE id = ?', [id]);
         if (!leadRows || leadRows.length === 0) return res.status(404).json({ error: 'Lead não encontrado' });
 
         const items = parseOrcamentoArray(leadRows[0].orcamento);
+        const eraPrimeiroItem = items.length === 0;
+        const colunaAnterior = leadRows[0].column_id;
         const newItem = {
             id: `orc-${Date.now()}`,
             procedimento: procedimento || '',
@@ -5709,6 +6166,11 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
             `UPDATE leads SET orcamento = ?, column_id = ?, data_valor = ? ${updateOwnerSql} WHERE id = ?`,
             params
         );
+
+        // Histórico estruturado.
+        if (updateOwnerSql) logLeadEvent(id, 'atendimento_iniciado', req.user?.username, 'via abertura de orçamento');
+        if (eraPrimeiroItem) logLeadEvent(id, 'orcamento_aberto', req.user?.username, newItem.procedimento);
+        if (colunaAnterior !== 'col-orcado') logLeadEvent(id, 'mudanca_coluna', req.user?.username, JSON.stringify({ de: colunaAnterior, para: 'col-orcado' }));
 
         try {
             if (newItem.procedimento) {
@@ -5998,6 +6460,7 @@ app.post('/api/leads/:id/handoff-ai', async (req, res) => {
             'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, column_id = ?, tags = ?, qualificado_em = NULL WHERE id = ?',
             [targetCol, newTags, id]
         );
+        logLeadEvent(id, 'devolvido_para_ia', req.user?.username);
 
         // encerra fluxos ativos desse número (senão flowDispatchInbound continua
         // interceptando e a IA nunca responde)
@@ -6063,6 +6526,7 @@ app.post('/api/leads/:id/end-service', async (req, res) => {
             'UPDATE leads SET owner_id = NULL, assigned_at = NULL, ai_enabled = 1, notas = ? WHERE id = ?',
             [novaNota, id]
         );
+        logLeadEvent(id, 'atendimento_finalizado', username);
 
         // Encerra fluxos ativos desse número — senão flowDispatchInbound continua
         // interceptando a próxima mensagem e a IA nunca chega a responder.
@@ -6077,6 +6541,8 @@ app.post('/api/leads/:id/end-service', async (req, res) => {
             }
         } catch (e) { console.error('end-service: encerrar fluxos falhou:', e.message); }
 
+        await syncLeadPagamento(id, 'end-service');
+        markLeadPagDirty(id);
         broadcastLeadsUpdate('updated', id);
         res.json({ success: true });
     } catch (e) {
@@ -6095,19 +6561,24 @@ app.post('/api/leads/:id/discard', async (req, res) => {
     const { id } = req.params;
     const username = (req.user && req.user.username) || 'atendente';
     try {
-        const rows = await queryD1('SELECT id, telefone, notas, tags FROM leads WHERE id = ?', [id]);
+        const rows = await queryD1('SELECT id, telefone, notas, tags, column_id FROM leads WHERE id = ?', [id]);
         const lead = rows && rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
 
         const variants = phoneVariants(lead.telefone || '');
         const ph = variants.length ? variants.map(() => '?').join(', ') : null;
 
+        const discardedTagId = await ensureDiscardedTagExists();
         const curTags = (lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-        if (!curTags.includes('descartado')) curTags.push('descartado');
+        if (!curTags.includes(discardedTagId)) curTags.push(discardedTagId);
 
         const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR')} — lead descartado: IA e follow-up desligados, campanhas bloqueadas.`;
         const novaNota = `${lead.notas || ''}${lead.notas ? '\n' : ''}${carimbo}`;
 
+        logLeadEvent(id, 'lead_descartado', username);
+        if (lead.column_id !== 'col-perdido') {
+            logLeadEvent(id, 'mudanca_coluna', username, JSON.stringify({ de: lead.column_id, para: 'col-perdido' }));
+        }
         await queryD1(
             "UPDATE leads SET ai_enabled = 0, owner_id = NULL, assigned_at = NULL, campaign_opt_out = 1, column_id = 'col-perdido', tags = ?, notas = ? WHERE id = ?",
             [curTags.join(','), novaNota, id]
@@ -6122,6 +6593,9 @@ app.post('/api/leads/:id/discard', async (req, res) => {
             }
         } catch (e) { console.error('discard: parar follow-up/fluxos falhou:', e.message); }
 
+        // Lead descartado (-> col-perdido): tira o dinheiro do Financeiro.
+        await syncLeadPagamento(id, 'discard');
+        markLeadPagDirty(id);
         broadcastLeadsUpdate('updated', id);
         res.json({ success: true });
     } catch (e) {
@@ -6912,6 +7386,9 @@ app.post('/api/pagamentos', async (req, res) => {
                  parcelaCents, forma_pagamento || null, st, venc, finalPgEm, i + 1, n, criado_por]
             );
         }
+        // origem_sync fica NULL -> a migração do boot rotula como 'manual'. Pro
+        // syncLeadPagamento, NULL e 'manual' são equivalentes (nenhum dos dois é
+        // linha gerida pelo Kanban), então não há janela de inconsistência.
         res.status(201).json({ success: true, parcelas: n });
     } catch (e) {
         console.error('Erro ao criar pagamento:', e);
@@ -6993,6 +7470,664 @@ app.delete('/api/pagamentos/:id', async (req, res) => {
     }
 });
 
+// ============================================================================
+// PSP — cobrança Pix / boleto por fatura (Efí ou Asaas)
+// Adaptador com interface única; a implementação real fica em _asaas* / _efi*.
+// Sem PSP_PROVIDER, pspEnabled() = false e os endpoints respondem 501.
+// ============================================================================
+function pspProvider() { return (process.env.PSP_PROVIDER || '').trim().toLowerCase(); }
+function pspIsSandbox() { return (process.env.PSP_ENV || 'sandbox').trim().toLowerCase() !== 'production'; }
+function pspEnabled() {
+    const p = pspProvider();
+    if (p === 'asaas') return !!(process.env.ASAAS_API_KEY || '').trim();
+    if (p === 'efi') return !!((process.env.EFI_CLIENT_ID || '').trim() && (process.env.EFI_CLIENT_SECRET || '').trim());
+    return false;
+}
+
+// Formato normalizado que os endpoints e o front consomem, independente do PSP:
+//   { provider, chargeId, metodo, qrcode, qrcodeImg, url, linhaDigitavel, expiraEm, status, raw }
+async function pspCreateCharge({ valorCentavos, vencimento, metodo, paciente, cpf, email, telefone, endereco, descricao }) {
+    const p = pspProvider();
+    if (!pspEnabled()) { const e = new Error('PSP não configurado.'); e.code = 'PSP_OFF'; throw e; }
+    if (!['pix', 'boleto'].includes(metodo)) throw new Error('Método deve ser "pix" ou "boleto".');
+    const args = { valorCentavos, vencimento, metodo, paciente, cpf, email, telefone, endereco: endereco || {}, descricao };
+    if (p === 'asaas') return _asaasCreateCharge(args);
+    if (p === 'efi') return _efiCreateCharge(args);
+    throw new Error('PSP_PROVIDER inválido: ' + p);
+}
+
+// Recebe o webhook do PSP. Retorna { chargeId, status: 'pago'|'pendente'|'expirado'|'cancelado', pagoEm } ou null se não for evento de pagamento.
+async function pspParseWebhook(req) {
+    const p = pspProvider();
+    if (p === 'asaas') return _asaasParseWebhook(req);
+    if (p === 'efi') return _efiParseWebhook(req);
+    return null;
+}
+
+// ---- Asaas ----
+function _asaasBase() { return pspIsSandbox() ? 'https://sandbox.asaas.com/api/v3' : 'https://www.asaas.com/api/v3'; }
+async function _asaasFetch(path, opts = {}) {
+    const r = await fetch(_asaasBase() + path, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', access_token: (process.env.ASAAS_API_KEY || '').trim(), ...(opts.headers || {}) }
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        const msg = (j.errors && j.errors[0] && j.errors[0].description) || j.message || ('HTTP ' + r.status);
+        throw new Error('Asaas: ' + msg);
+    }
+    return j;
+}
+async function _asaasCreateCharge({ valorCentavos, vencimento, metodo, paciente, cpf, email, telefone, endereco, descricao }) {
+    const end = endereco || {};
+    // 1. cliente (Asaas exige um customer por cobrança)
+    const cli = await _asaasFetch('/customers', {
+        method: 'POST',
+        body: JSON.stringify({
+            name: paciente || 'Paciente',
+            cpfCnpj: (cpf || '').replace(/\D/g, '') || undefined,
+            email: email || undefined,
+            phone: (telefone || '').replace(/\D/g, '') || undefined,
+            postalCode: (end.cep || '').replace(/\D/g, '') || undefined,
+            address: end.logradouro || undefined,
+            addressNumber: end.numero || undefined,
+            complement: end.complemento || undefined,
+            province: end.bairro || undefined
+        })
+    });
+    // 2. cobrança
+    const pay = await _asaasFetch('/payments', {
+        method: 'POST',
+        body: JSON.stringify({
+            customer: cli.id,
+            billingType: metodo === 'boleto' ? 'BOLETO' : 'PIX',
+            value: Math.round(valorCentavos) / 100,
+            dueDate: vencimento || todayISO(),
+            description: descricao || 'Fatura'
+        })
+    });
+    const out = {
+        provider: 'asaas', chargeId: String(pay.id), metodo,
+        qrcode: null, qrcodeImg: null, url: pay.invoiceUrl || null,
+        linhaDigitavel: null, expiraEm: vencimento || null,
+        status: 'pendente', raw: pay
+    };
+    if (metodo === 'pix') {
+        const qr = await _asaasFetch('/payments/' + pay.id + '/pixQrCode').catch(() => ({}));
+        out.qrcode = qr.payload || null;
+        out.qrcodeImg = qr.encodedImage ? ('data:image/png;base64,' + qr.encodedImage) : null;
+        out.expiraEm = qr.expirationDate || out.expiraEm;
+    } else {
+        out.url = pay.bankSlipUrl || pay.invoiceUrl || out.url;
+        const idf = await _asaasFetch('/payments/' + pay.id + '/identificationField').catch(() => ({}));
+        out.linhaDigitavel = idf.identificationField || null;
+    }
+    return out;
+}
+function _asaasParseWebhook(req) {
+    const tok = (process.env.PSP_WEBHOOK_TOKEN || '').trim();
+    if (tok && req.get('asaas-access-token') !== tok) { const e = new Error('token inválido'); e.code = 'BAD_SIG'; throw e; }
+    const b = req.body || {};
+    if (!b.payment || !b.payment.id) return null;
+    const st = String(b.payment.status || '').toUpperCase();
+    const map = { RECEIVED: 'pago', CONFIRMED: 'pago', RECEIVED_IN_CASH: 'pago', OVERDUE: 'pendente', PENDING: 'pendente', REFUNDED: 'cancelado', DELETED: 'cancelado' };
+    return {
+        chargeId: String(b.payment.id),
+        status: map[st] || 'pendente',
+        pagoEm: (b.payment.paymentDate || b.payment.clientPaymentDate || '').split('T')[0] || todayISO()
+    };
+}
+
+// ---- Efí / Gerencianet (Pix; boleto exige a API de Cobranças, ainda não coberta) ----
+let _efiAgentPromise = null;
+async function _efiAgent() {
+    // mTLS: Pix da Efí só responde com o certificado .p12 no handshake.
+    if (_efiAgentPromise) return _efiAgentPromise;
+    _efiAgentPromise = (async () => {
+        let pfx = null;
+        const b64 = (process.env.EFI_CERT_BASE64 || '').trim();
+        const pth = (process.env.EFI_CERT_PATH || '').trim();
+        if (b64) pfx = Buffer.from(b64, 'base64');
+        else if (pth) pfx = fs.readFileSync(pth);
+        if (!pfx) throw new Error('Efí Pix precisa do certificado mTLS — configure EFI_CERT_PATH ou EFI_CERT_BASE64.');
+        let Agent;
+        try { ({ Agent } = await import('undici')); }
+        catch (e) { throw new Error('Efí Pix precisa do pacote undici — rode: npm i undici'); }
+        return new Agent({ connect: { pfx, passphrase: (process.env.EFI_CERT_PASSWORD || '').trim() || undefined } });
+    })();
+    return _efiAgentPromise;
+}
+function _efiBase() { return pspIsSandbox() ? 'https://pix-h.api.efipay.com.br' : 'https://pix.api.efipay.com.br'; }
+async function _efiToken() {
+    const agent = await _efiAgent();
+    const basic = Buffer.from(`${(process.env.EFI_CLIENT_ID || '').trim()}:${(process.env.EFI_CLIENT_SECRET || '').trim()}`).toString('base64');
+    const r = await fetch(_efiBase() + '/oauth/token', {
+        method: 'POST', dispatcher: agent,
+        headers: { Authorization: 'Basic ' + basic, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'client_credentials' })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.access_token) throw new Error('Efí: falha no OAuth (' + (j.error_description || r.status) + ')');
+    return j.access_token;
+}
+async function _efiCreateCharge({ valorCentavos, vencimento, metodo, paciente, cpf, endereco, descricao }) {
+    // endereco só é usado no boleto (API de Cobranças da Efí); o Pix /v2/cob não aceita endereço no devedor.
+    if (metodo === 'boleto') throw new Error('Boleto pela Efí ainda não implementado aqui — use Asaas pra boleto, ou peça a integração da API de Cobranças da Efí.');
+    const agent = await _efiAgent();
+    const token = await _efiToken();
+    const H = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    // Expira em segundos: da criação até o fim do dia de vencimento (ou 3 dias).
+    let expiracao = 3 * 86400;
+    if (vencimento) {
+        const diff = Math.round((new Date(vencimento + 'T23:59:59') - Date.now()) / 1000);
+        if (diff > 60) expiracao = diff;
+    }
+    const cobRes = await fetch(_efiBase() + '/v2/cob', {
+        method: 'POST', dispatcher: agent, headers: H,
+        body: JSON.stringify({
+            calendario: { expiracao },
+            valor: { original: (Math.round(valorCentavos) / 100).toFixed(2) },
+            chave: (process.env.EFI_PIX_KEY || '').trim(),
+            devedor: cpf ? { cpf: (cpf || '').replace(/\D/g, ''), nome: paciente || 'Paciente' } : undefined,
+            solicitacaoPagador: (descricao || 'Fatura').slice(0, 140)
+        })
+    });
+    const cob = await cobRes.json().catch(() => ({}));
+    if (!cobRes.ok) throw new Error('Efí: ' + (cob.mensagem || (cob.violacoes && cob.violacoes[0] && cob.violacoes[0].razao) || cobRes.status));
+    const locId = cob.loc && cob.loc.id;
+    let qrcode = cob.pixCopiaECola || null, qrcodeImg = null;
+    if (locId) {
+        const qrRes = await fetch(_efiBase() + '/v2/loc/' + locId + '/qrcode', { dispatcher: agent, headers: H });
+        const qr = await qrRes.json().catch(() => ({}));
+        if (qrRes.ok) { qrcode = qr.qrcode || qrcode; qrcodeImg = qr.imagemQrcode || null; }
+    }
+    return {
+        provider: 'efi', chargeId: String(cob.txid), metodo: 'pix',
+        qrcode, qrcodeImg, url: null, linhaDigitavel: null,
+        expiraEm: vencimento || null, status: 'pendente', raw: cob
+    };
+}
+async function _efiParseWebhook(req) {
+    // Efí manda { pix: [{ txid, valor, horario, endToEndId }] }. mTLS/HMAC do
+    // webhook varia por config — aqui reconfirmamos o status na API antes de dar pago.
+    const b = req.body || {};
+    const ev = Array.isArray(b.pix) && b.pix[0];
+    if (!ev || !ev.txid) return null;
+    try {
+        const agent = await _efiAgent();
+        const token = await _efiToken();
+        const r = await fetch(_efiBase() + '/v2/cob/' + ev.txid, { dispatcher: agent, headers: { Authorization: 'Bearer ' + token } });
+        const cob = await r.json().catch(() => ({}));
+        const st = String(cob.status || '').toUpperCase();
+        const pago = st === 'CONCLUIDA';
+        return { chargeId: String(ev.txid), status: pago ? 'pago' : (st === 'REMOVIDA_PELO_USUARIO_RECEBEDOR' ? 'cancelado' : 'pendente'), pagoEm: (ev.horario || '').split('T')[0] || todayISO() };
+    } catch (e) {
+        // Sem conseguir reconfirmar, assume pago pelo próprio evento (Efí só
+        // dispara webhook de pix quando o dinheiro entrou).
+        return { chargeId: String(ev.txid), status: 'pago', pagoEm: (ev.horario || '').split('T')[0] || todayISO() };
+    }
+}
+
+// Gera (ou regenera) a cobrança de uma parcela.
+// Valida CPF (dígitos verificadores). Aceita com ou sem máscara.
+function cpfValido(v) {
+    const c = String(v || '').replace(/\D/g, '');
+    if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+    const dv = (base, pesoIni) => {
+        let s = 0; for (let i = 0; i < base.length; i++) s += Number(base[i]) * (pesoIni - i);
+        const r = (s * 10) % 11; return r === 10 ? 0 : r;
+    };
+    return dv(c.slice(0, 9), 10) === Number(c[9]) && dv(c.slice(0, 10), 11) === Number(c[10]);
+}
+
+// Completar dados de cobrança (CPF + endereço estruturado) num lead, direto
+// do modal do Financeiro. Compõe também o `endereco` de exibição.
+app.post('/api/leads/:id/dados-cobranca', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const set = {};
+        if (b.cpf !== undefined) {
+            const cpf = String(b.cpf).replace(/\D/g, '');
+            if (cpf && !cpfValido(cpf)) return res.status(400).json({ error: 'CPF inválido.' });
+            set.cpf = cpf || null;
+        }
+        for (const f of ['cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf']) {
+            if (b[f] !== undefined) set[f] = String(b[f] || '').trim() || null;
+        }
+        if (b.cep !== undefined) {
+            const cep = String(b.cep).replace(/\D/g, '');
+            set.cep = cep ? cep.replace(/^(\d{5})(\d{3})$/, '$1-$2') : null;
+        }
+        if (!Object.keys(set).length) return res.status(400).json({ error: 'Nada para salvar.' });
+
+        // Endereço de exibição = partes compostas (quando houver).
+        const cur = (await queryD1('SELECT * FROM leads WHERE id = ?', [req.params.id]))[0] || {};
+        const g = k => (set[k] !== undefined ? set[k] : cur[k]) || '';
+        const linha = [g('logradouro') + (g('numero') ? ', ' + g('numero') : ''), g('complemento'), g('bairro'),
+            [g('cidade'), g('uf')].filter(Boolean).join(' - '), g('cep')].filter(Boolean).join(', ');
+        if (linha) set.endereco = linha;
+
+        const cols = Object.keys(set);
+        await queryD1(`UPDATE leads SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`, [...cols.map(c => set[c]), req.params.id]);
+        res.json({ success: true, endereco: set.endereco || cur.endereco || '' });
+    } catch (e) {
+        console.error('[dados-cobranca]', e.message);
+        res.status(500).json({ error: 'Erro ao salvar.' });
+    }
+});
+
+app.post('/api/pagamentos/:id/cobranca', async (req, res) => {
+    if (!pspEnabled()) return res.status(501).json({ error: 'PSP não configurado. Preencha PSP_PROVIDER e as credenciais no .env.' });
+    try {
+        const metodo = (req.body && req.body.metodo) === 'boleto' ? 'boleto' : 'pix';
+        const rows = await queryD1('SELECT * FROM crm_pagamentos WHERE id = ?', [req.params.id]);
+        const pg = rows && rows[0];
+        if (!pg) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+        if (pg.tipo !== 'recebimento') return res.status(400).json({ error: 'Só recebimentos geram cobrança.' });
+        if (pg.status === 'pago') return res.status(400).json({ error: 'Essa parcela já está paga.' });
+        if (pg.status === 'cancelado') return res.status(400).json({ error: 'Parcela cancelada.' });
+        // Já tem cobrança viva do mesmo método? devolve ela.
+        if (pg.psp_charge_id && pg.psp_metodo === metodo && pg.psp_status !== 'cancelado') {
+            return res.json({ jaExistia: true, cobranca: _pspRowToPublic(pg) });
+        }
+
+        let L = {};
+        if (pg.lead_id) {
+            L = (await queryD1('SELECT cpf, email, telefone, cep, logradouro, numero, complemento, bairro, cidade, uf FROM leads WHERE id = ?', [pg.lead_id]).catch(() => []))[0] || {};
+        }
+        // Checa completude — abre o modal no front quando faltar algo.
+        const faltando = [];
+        if (!cpfValido(L.cpf)) faltando.push('cpf');
+        if (metodo === 'boleto') {
+            if (!L.cep) faltando.push('cep');
+            if (!L.numero) faltando.push('numero');
+            if (!L.logradouro) faltando.push('logradouro');
+            if (!L.cidade) faltando.push('cidade');
+            if (!L.uf) faltando.push('uf');
+        }
+        if (faltando.length) {
+            return res.status(422).json({
+                code: 'DADOS_INCOMPLETOS', error: 'Faltam dados do paciente para gerar a cobrança.',
+                lead_id: pg.lead_id || null, metodo, faltando,
+                atual: { cpf: L.cpf || '', cep: L.cep || '', logradouro: L.logradouro || '', numero: L.numero || '', complemento: L.complemento || '', bairro: L.bairro || '', cidade: L.cidade || '', uf: L.uf || '' }
+            });
+        }
+
+        const c = await pspCreateCharge({
+            valorCentavos: pg.valor_centavos,
+            vencimento: pg.vencimento || null,
+            metodo, paciente: pg.paciente, cpf: L.cpf, email: L.email, telefone: L.telefone,
+            endereco: { cep: L.cep, logradouro: L.logradouro, numero: L.numero, complemento: L.complemento, bairro: L.bairro, cidade: L.cidade, uf: L.uf },
+            descricao: pg.descricao || 'Fatura'
+        });
+
+        await queryD1(
+            `UPDATE crm_pagamentos SET
+               psp_provider = ?, psp_charge_id = ?, psp_metodo = ?, psp_qrcode = ?, psp_qrcode_img = ?,
+               psp_url = ?, psp_linha_digitavel = ?, psp_expira_em = ?, psp_status = 'pendente',
+               psp_criado_em = CURRENT_TIMESTAMP, psp_raw = ?
+             WHERE id = ?`,
+            [c.provider, c.chargeId, c.metodo, c.qrcode, c.qrcodeImg, c.url, c.linhaDigitavel, c.expiraEm,
+             JSON.stringify(c.raw || {}).slice(0, 8000), req.params.id]
+        );
+        res.json({ cobranca: { ...c, id: Number(req.params.id) } });
+    } catch (e) {
+        console.error('[psp] criar cobrança:', e.message);
+        res.status(e.code === 'PSP_OFF' ? 501 : 400).json({ error: e.message });
+    }
+});
+
+function _pspRowToPublic(pg) {
+    return {
+        id: pg.id, provider: pg.psp_provider, chargeId: pg.psp_charge_id, metodo: pg.psp_metodo,
+        qrcode: pg.psp_qrcode, qrcodeImg: pg.psp_qrcode_img, url: pg.psp_url,
+        linhaDigitavel: pg.psp_linha_digitavel, expiraEm: pg.psp_expira_em, status: pg.psp_status
+    };
+}
+
+// Devolve a cobrança já gerada (pra reabrir o QR). Regenera a imagem do QR a
+// partir do copia-e-cola se ela não tiver sido salva.
+app.get('/api/pagamentos/:id/cobranca', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT * FROM crm_pagamentos WHERE id = ?', [req.params.id]);
+        const pg = rows && rows[0];
+        if (!pg || !pg.psp_charge_id) return res.status(404).json({ error: 'Sem cobrança gerada.' });
+        const pub = _pspRowToPublic(pg);
+        if (!pub.qrcodeImg && pub.qrcode) {
+            pub.qrcodeImg = await QRCode.toDataURL(pub.qrcode, { width: 320, margin: 1 }).catch(() => null);
+        }
+        res.json({ cobranca: pub });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Carnê: página HTML com todas as parcelas de um plano (uma por folha),
+// pronta pra Ctrl+P -> "Salvar como PDF". ?ids=1,2,3
+app.get('/api/pagamentos/carne', async (req, res) => {
+    try {
+        const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!ids.length) return res.status(400).send('Faltam os ids das parcelas.');
+        const ph = ids.map(() => '?').join(',');
+        const rows = await queryD1(
+            `SELECT * FROM crm_pagamentos WHERE id IN (${ph}) AND tipo = 'recebimento' ORDER BY parcela ASC`, ids
+        );
+        if (!rows.length) return res.status(404).send('Nenhuma parcela encontrada.');
+
+        const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+        const dt = s => { if (!s) return '—'; const p = String(s).slice(0, 10).split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : s; };
+        const fmtCnpj = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 14 ? d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : (c || ''); };
+        const fmtCpf = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 11 ? d.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4') : (c || ''); };
+        const FORMA_LBL = { pix: 'Pix', boleto: 'Boleto bancário', dinheiro: 'Dinheiro', cartao_credito: 'Cartão de crédito', cartao_debito: 'Cartão de débito', transferencia: 'Transferência', outro: 'Outro' };
+
+        const paciente = rows[0].paciente || 'Paciente';
+        const descricao = rows[0].descricao || 'Parcelamento';
+        const total = rows.reduce((s, r) => s + (Number(r.valor_centavos) || 0), 0);
+        const totalPago = rows.filter(r => r.status === 'pago').reduce((s, r) => s + (Number(r.valor_centavos) || 0), 0);
+        const saldo = total - totalPago;
+        const pagas = rows.filter(r => r.status === 'pago').length;
+        const nParc = rows[0].parcelas_total || rows.length;
+        const primeiroVenc = rows.map(r => r.vencimento).filter(Boolean).sort()[0];
+        const formaLbl = FORMA_LBL[rows[0].psp_metodo] || FORMA_LBL[rows[0].forma_pagamento] || '—';
+        const emissao = dt(new Date().toISOString());
+        // Referência do plano: menor id das parcelas, 6 dígitos. Nº do documento por parcela.
+        const planoRef = String(Math.min(...rows.map(r => Number(r.id) || 0))).padStart(6, '0');
+        const docNum = r => `${planoRef}-${String(r.parcela).padStart(2, '0')}/${r.parcelas_total}`;
+
+        // Empresa (beneficiário): a do lead -> a padrão -> a primeira ativa. + dados do pagador.
+        let emp = null, cpfPag = '', endPag = '', telPag = '', emailPag = '';
+        try {
+            const lid = rows.find(r => r.lead_id)?.lead_id;
+            let empId = null;
+            if (lid) {
+                const lr = await queryD1('SELECT empresa_id, cpf, endereco, telefone, email FROM leads WHERE id = ?', [lid]);
+                if (lr && lr[0]) { empId = lr[0].empresa_id; cpfPag = lr[0].cpf || ''; endPag = lr[0].endereco || ''; telPag = lr[0].telefone || ''; emailPag = lr[0].email || ''; }
+            }
+            emp = await resolveEmpresaParaLead(empId);
+        } catch (e) { /* segue sem cabeçalho de empresa */ }
+        const empNome = emp ? (emp.nome_fantasia || emp.razao_social) : '';
+        const empSub = emp ? [emp.razao_social && emp.razao_social !== empNome ? emp.razao_social : '', emp.cnpj ? 'CNPJ ' + fmtCnpj(emp.cnpj) : ''].filter(Boolean).join(' · ') : '';
+        const empContato = emp ? [emp.endereco, emp.telefone, emp.email, emp.site].filter(Boolean).join('  ·  ') : '';
+        const cabecalhoEmpresa = (compacto) => emp ? `
+            <div class="emp${compacto ? ' emp-min' : ''}">
+                ${emp.logo ? `<img class="emp-logo" src="${esc(emp.logo)}" alt="">` : ''}
+                <div>
+                    <div class="emp-nome">${esc(empNome)}</div>
+                    ${empSub ? `<div class="emp-sub">${esc(empSub)}</div>` : ''}
+                    ${!compacto && empContato ? `<div class="emp-sub">${esc(empContato)}</div>` : ''}
+                </div>
+            </div>` : '';
+        const pixBadge = `<span class="pixmark"><svg viewBox="0 0 32 32" width="14" height="14" aria-hidden="true"><path fill="#32BCAD" d="M16 2 30 16 16 30 2 16z"/><path fill="#fff" d="m11 11 5 5 5-5 3 3-8 8-8-8z" opacity=".92"/></svg>Pix</span>`;
+        const pagadorLinhas = `${esc(paciente)}${cpfPag ? ` · CPF ${fmtCpf(cpfPag)}` : ''}${endPag ? `<br><span class="end">${esc(endPag)}</span>` : ''}`;
+
+        // ---- CAPA ----
+        const linhasTabela = rows.map(r => `
+            <tr>
+                <td>${r.parcela}/${r.parcelas_total}</td>
+                <td>${dt(r.vencimento)}</td>
+                <td class="num">${brl(r.valor_centavos)}</td>
+                <td>${r.status === 'pago' ? `<span class="tag pago">Pago${r.pago_em ? ' ' + dt(r.pago_em) : ''}</span>` : `<span class="tag aberto">Em aberto</span>`}</td>
+            </tr>`).join('');
+        const capa = `
+            <section class="capa parc" data-idx="capa">
+                <button class="btn-uma no-print" onclick="imprimirUma('capa')" title="Imprimir só a capa">⎙ esta folha</button>
+                ${cabecalhoEmpresa(false)}
+                <div class="titulo">Carnê de pagamento</div>
+                <div class="capa-meta">Referência ${planoRef} · Emitido em ${emissao}</div>
+                <div class="cols">
+                    <div class="campo"><span class="k">Beneficiário</span><span class="v">${esc(empNome || '—')}</span>${emp && emp.cnpj ? `<span class="end">CNPJ ${fmtCnpj(emp.cnpj)}</span>` : ''}</div>
+                    <div class="campo"><span class="k">Pagador</span><span class="v">${pagadorLinhas}</span></div>
+                </div>
+                <div class="cols">
+                    <div class="campo"><span class="k">Referente a</span><span class="v">${esc(descricao)}</span></div>
+                    <div class="campo"><span class="k">Plano</span><span class="v">${nParc}× de ${brl(rows[0].valor_centavos)} · ${formaLbl}</span></div>
+                    <div class="campo"><span class="k">1º vencimento</span><span class="v">${dt(primeiroVenc)}</span></div>
+                    <div class="campo"><span class="k">Parcelas pagas</span><span class="v">${pagas} de ${rows.length}</span></div>
+                </div>
+                <table class="tab">
+                    <thead><tr><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th><th>Situação</th></tr></thead>
+                    <tbody>${linhasTabela}</tbody>
+                </table>
+                <div class="resumo">
+                    <div><span class="k">Total do plano</span><b>${brl(total)}</b></div>
+                    <div><span class="k">Pago até aqui</span><b>${brl(totalPago)}</b></div>
+                    <div class="saldo"><span class="k">Saldo devedor</span><b>${brl(saldo)}</b></div>
+                </div>
+                <div class="rodape">Documento de cobrança gerado por ${esc(empNome || 'sistema')}${emp && emp.cnpj ? ' — CNPJ ' + fmtCnpj(emp.cnpj) : ''} em ${emissao}. Em caso de dúvida, contate a clínica${emp && emp.telefone ? ' (' + esc(emp.telefone) + ')' : ''}.</div>
+            </section>`;
+
+        // ---- FICHAS (layout tipo boleto: cabeçalho + Beneficiário/Pagador + detalhamento + pagamento) ----
+        const contatoEmp = emp ? [emp.telefone, emp.email].filter(Boolean).join(' / ') : '';
+        const contatoPag = [telPag, emailPag].filter(Boolean).join(' / ');
+        const blocos = [];
+        let idx = 0;
+        for (const r of rows) {
+            const i = idx++;
+            const isPix = r.psp_metodo === 'pix' && r.psp_qrcode;
+            const isBol = r.psp_metodo === 'boleto';
+            let pagoArea = '';
+            if (isPix) {
+                const img = r.psp_qrcode_img || await QRCode.toDataURL(r.psp_qrcode, { width: 340, margin: 1 }).catch(() => null);
+                pagoArea = `<div class="pay">
+                    ${img ? `<img class="qr" src="${img}" alt="QR Pix">` : ''}
+                    <div class="pay-txt">
+                        <div class="rot">${pixBadge} Copia e Cola — abra o app do banco, toque em Pix e cole o código:</div>
+                        <div class="mono">${esc(r.psp_qrcode)}</div>
+                        <div class="local">Pague via Pix por qualquer banco ou carteira digital.</div>
+                    </div>
+                </div>`;
+            } else if (isBol) {
+                pagoArea = `<div class="pay pay-col">
+                    <div class="rot">Linha digitável</div>
+                    <div class="mono big">${esc(r.psp_linha_digitavel || 'cobrança não gerada')}</div>
+                    ${r.psp_url ? `<a class="link" href="${esc(r.psp_url)}">Abrir boleto oficial (PDF com código de barras)</a>` : ''}
+                    <div class="local">Pagável em qualquer banco, lotérica ou app até o vencimento.</div>
+                </div>`;
+            } else {
+                pagoArea = `<div class="aviso">Cobrança ainda não gerada para esta parcela. Gere o Pix/boleto no Financeiro e reemita o carnê.</div>`;
+            }
+            const pagoTag = r.status === 'pago' ? `<span class="tag pago">PAGO ${r.pago_em ? 'em ' + dt(r.pago_em) : ''}</span>` : `<span class="tag aberto">Em aberto</span>`;
+            blocos.push(`
+                <section class="parc doc" data-idx="${i}">
+                    <button class="btn-uma no-print" onclick="imprimirUma(${i})" title="Imprimir só esta folha">⎙ esta folha</button>
+
+                    <div class="doc-head">
+                        ${emp && emp.logo ? `<img class="doc-logo" src="${esc(emp.logo)}" alt="">` : `<div class="doc-logo-txt">${esc(empNome || '')}</div>`}
+                        <div class="doc-venc">
+                            <div><span class="k">Vencimento</span><span class="vv">${dt(r.vencimento)}</span></div>
+                            <div><span class="k">Valor</span><span class="vv val-red">${brl(r.valor_centavos)}</span></div>
+                        </div>
+                    </div>
+                    <div class="doc-meta">Parcela ${r.parcela}/${r.parcelas_total} · Doc. nº ${docNum(r)} · Emissão ${emissao} · Data do documento ${dt(r.created_at)} · ${pagoTag}</div>
+
+                    <div class="bp">
+                        <div class="bp-col">
+                            <div class="sec-h">Beneficiário</div>
+                            <div class="bp-l"><b>Nome:</b> ${esc(empNome || '—')}</div>
+                            ${emp && emp.cnpj ? `<div class="bp-l"><b>CPF/CNPJ:</b> ${fmtCnpj(emp.cnpj)}</div>` : ''}
+                            ${emp && emp.endereco ? `<div class="bp-l"><b>Endereço:</b> ${esc(emp.endereco)}</div>` : ''}
+                            ${contatoEmp ? `<div class="bp-l"><b>Contato:</b> ${esc(contatoEmp)}</div>` : ''}
+                        </div>
+                        <div class="bp-col">
+                            <div class="sec-h">Pagador</div>
+                            <div class="bp-l"><b>Nome:</b> ${esc(paciente)}</div>
+                            ${cpfPag ? `<div class="bp-l"><b>CPF/CNPJ:</b> ${fmtCpf(cpfPag)}</div>` : ''}
+                            ${endPag ? `<div class="bp-l"><b>Endereço:</b> ${esc(endPag)}</div>` : ''}
+                            ${contatoPag ? `<div class="bp-l"><b>Contato:</b> ${esc(contatoPag)}</div>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="sec-h">Detalhamento <span>Valor</span></div>
+                    <div class="det-l"><span>${esc(descricao)} — parcela ${r.parcela} de ${r.parcelas_total}</span><span class="num">${brl(r.valor_centavos)}</span></div>
+
+                    <div class="sec-h">Forma de pagamento <span>Valor final</span></div>
+                    <div class="det-l forma"><span>${isPix ? 'Pix' : isBol ? 'Boleto bancário' : (formaLbl || '—')}</span><span class="num big2">${brl(r.valor_centavos)}</span></div>
+
+                    <div class="sec-h">Informações adicionais</div>
+                    <div class="info">Após o vencimento, sujeito a multa e juros conforme contrato. Doc. nº ${docNum(r)}.</div>
+
+                    <div class="corte"><span>&#9986; pague aqui</span></div>
+                    ${pagoArea}
+
+                    <div class="rodape">Documento de cobrança de ${esc(empNome || 'sistema')}${emp && emp.cnpj ? ' — CNPJ ' + fmtCnpj(emp.cnpj) : ''}, emitido em ${emissao}. Não substitui a nota fiscal. Dúvidas: contate a clínica${emp && emp.telefone ? ' (' + esc(emp.telefone) + ')' : ''}.</div>
+                </section>`);
+        }
+
+        res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><html lang="pt-BR"><head>
+<meta charset="utf-8"><title>Carnê ${esc(paciente)} — ${esc(descricao)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 14px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif; color: #1a1a1a; margin: 0; background: #eef0f3; }
+  .top { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid #dcdce0; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .top h1 { font-size: 14px; font-weight: 600; margin: 0; color: #333; }
+  .top button { font: inherit; font-weight: 600; padding: 9px 18px; border: 0; border-radius: 9px; background: #2563eb; color: #fff; cursor: pointer; }
+  .wrap { max-width: 760px; margin: 24px auto 40px; padding: 0 16px; }
+
+  .parc { position: relative; background: #fff; border: 1px solid #d8d8dd; border-radius: 14px; padding: 26px 28px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+  .btn-uma { position: absolute; top: 14px; right: 16px; font: inherit; font-size: 12px; padding: 5px 10px; border: 1px solid #d0d0d6; border-radius: 7px; background: #fafafa; color: #444; cursor: pointer; }
+  .btn-uma:hover { background: #f0f0f2; }
+
+  .emp { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 2px solid #1a1a1a; margin-bottom: 14px; }
+  .emp.emp-min { padding-bottom: 10px; margin-bottom: 10px; border-bottom-width: 1px; }
+  .emp-logo { max-height: 46px; max-width: 150px; object-fit: contain; }
+  .emp.emp-min .emp-logo { max-height: 34px; }
+  .emp-nome { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+  .emp.emp-min .emp-nome { font-size: 14px; }
+  .emp-sub { font-size: 11.5px; color: #555; }
+
+  .titulo { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #2563eb; margin-bottom: 4px; }
+  .capa-meta { font-size: 11px; color: #888; margin-bottom: 16px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; margin-bottom: 12px; }
+  .campo { display: flex; flex-direction: column; gap: 2px; }
+  .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+  .v { font-size: 14px; font-weight: 600; }
+  .end { font-size: 11px; color: #666; font-weight: 400; }
+  .local { font-size: 11.5px; color: #555; margin-bottom: 12px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+  .tag.pago { background: #dcfce7; color: #15803d; }
+  .tag.aberto { background: #fef9c3; color: #a16207; }
+
+  .tab { width: 100%; border-collapse: collapse; margin: 6px 0 16px; font-size: 12.5px; }
+  .tab th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #888; border-bottom: 1.5px solid #333; padding: 6px 8px; }
+  .tab td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+  .tab .num, .tab th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .resumo { display: flex; gap: 10px; }
+  .resumo > div { flex: 1; background: #f7f8fa; border: 1px solid #e6e6ea; border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+  .resumo b { font-size: 16px; }
+  .resumo .saldo { background: #eef4ff; border-color: #cfe0ff; }
+  .resumo .saldo b { color: #1d4ed8; }
+
+  .valor-box { display: flex; justify-content: space-between; align-items: center; background: #f7f8fa; border: 1px solid #e6e6ea; border-radius: 10px; padding: 12px 18px; margin-bottom: 18px; }
+  .valor { font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+
+  .canhoto { border: 1px dashed #b9b9c0; border-radius: 8px; padding: 10px 14px; }
+  .canhoto-t { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: #999; margin-bottom: 6px; }
+  .canhoto-g { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 16px; font-size: 11.5px; }
+  .corte { text-align: center; color: #9a9aa2; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin: 18px 0 14px; border-top: 1.5px dashed #b9b9c0; }
+  .corte span { display: inline-block; background: #fff; padding: 0 10px; transform: translateY(-50%); }
+
+  /* Layout "boleto" da ficha */
+  .doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #e2e2e6; margin-bottom: 4px; }
+  .doc-logo { max-height: 44px; max-width: 170px; object-fit: contain; }
+  .doc-logo-txt { font-size: 18px; font-weight: 800; }
+  .doc-venc { display: flex; gap: 22px; text-align: right; }
+  .doc-venc > div { display: flex; flex-direction: column; gap: 1px; }
+  .doc-venc .vv { font-size: 15px; font-weight: 700; }
+  .val-red { color: #dc2626; font-size: 18px !important; }
+  .doc-meta { font-size: 10.5px; color: #888; margin-bottom: 14px; }
+  .bp { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 6px; }
+  .bp-l { font-size: 12.5px; margin: 3px 0; }
+  .bp-l b { font-weight: 600; color: #555; }
+  .sec-h { display: flex; justify-content: space-between; align-items: center; background: #eef0f3; font-weight: 700; font-size: 13px; padding: 7px 12px; border-radius: 4px; margin: 16px 0 8px; }
+  .sec-h span { font-weight: 600; font-size: 11px; color: #666; }
+  .det-l { display: flex; justify-content: space-between; align-items: center; padding: 4px 12px; font-size: 13px; }
+  .det-l .num { font-variant-numeric: tabular-nums; }
+  .det-l.forma { border-top: 1px solid #eee; padding-top: 10px; margin-top: 2px; }
+  .big2 { font-size: 20px; font-weight: 800; }
+  .info { font-size: 12px; color: #555; padding: 2px 12px 4px; }
+
+  .pixmark { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: #0b7a6e; }
+  .pixmark svg { vertical-align: middle; }
+
+  .pay { display: flex; gap: 20px; align-items: flex-start; }
+  .pay-col { flex-direction: column; align-items: stretch; }
+  .qr { width: 190px; height: 190px; flex-shrink: 0; border: 1px solid #e6e6ea; border-radius: 8px; }
+  .pay-txt { min-width: 0; flex: 1; }
+  .rot { font-size: 11px; color: #666; margin-bottom: 6px; }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11px; word-break: break-all; background: #f6f6f8; border: 1px dashed #c9c9cf; border-radius: 7px; padding: 10px; }
+  .mono.big { font-size: 15px; letter-spacing: .02em; text-align: center; word-break: break-all; }
+  .link { display: inline-block; margin-top: 8px; font-size: 12.5px; color: #2563eb; text-decoration: none; font-weight: 600; }
+  .aviso { color: #92400e; background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px; padding: 12px; font-size: 13px; }
+  .rodape { margin-top: 18px; padding-top: 12px; border-top: 1px solid #eee; font-size: 10.5px; color: #999; }
+
+  @media print {
+    body { background: #fff; }
+    .top, .no-print { display: none !important; }
+    .wrap { margin: 0; max-width: none; padding: 0; }
+    .parc { border: 0; border-radius: 0; box-shadow: none; margin: 0; padding: 18mm 16mm; page-break-after: always; }
+    .parc:last-child { page-break-after: auto; }
+    .qr { width: 44mm; height: 44mm; }
+  }
+</style></head><body>
+<div class="top">
+  <h1>${esc(paciente)} · ${esc(descricao)} · ${pagas}/${rows.length} pagas · total ${brl(total)}</h1>
+  <button onclick="window.print()">Imprimir tudo / Salvar PDF</button>
+</div>
+<div class="wrap">${capa}${blocos.join('')}</div>
+<script>
+  function imprimirUma(alvo){
+    var secs = document.querySelectorAll('.parc');
+    secs.forEach(function(el){ el.style.display = (String(el.dataset.idx) === String(alvo) ? '' : 'none'); });
+    window.print();
+  }
+  window.addEventListener('afterprint', function(){
+    document.querySelectorAll('.parc').forEach(function(el){ el.style.display = ''; });
+  });
+</script>
+</body></html>`);
+    } catch (e) {
+        console.error('[carne]', e.message);
+        res.status(500).send('Erro ao montar o carnê.');
+    }
+});
+
+// Webhook do PSP (rota pública). Marca a parcela como paga quando o dinheiro
+// entra. Sempre responde 200 pro PSP não ficar reenviando.
+app.post('/api/webhooks/psp', async (req, res) => {
+    try {
+        const ev = await pspParseWebhook(req);
+        if (!ev || !ev.chargeId) return res.json({ ok: true, ignored: true });
+
+        const rows = await queryD1('SELECT * FROM crm_pagamentos WHERE psp_charge_id = ? LIMIT 1', [ev.chargeId]);
+        const pg = rows && rows[0];
+        if (!pg) return res.json({ ok: true, unknown: true });
+
+        if (ev.status === 'pago' && pg.status !== 'pago') {
+            await queryD1(
+                "UPDATE crm_pagamentos SET status = 'pago', pago_em = ?, psp_status = 'pago' WHERE id = ?",
+                [ev.pagoEm || todayISO(), pg.id]
+            );
+            if (pg.lead_id) {
+                // A confirmação veio de fonte externa e confiável — reflete no card.
+                markLeadPagDirty(pg.lead_id);
+                await syncLeadPagamento(pg.lead_id, 'psp-webhook').catch(() => {});
+                broadcastLeadsUpdate('updated', pg.lead_id);
+            }
+            console.log(`[psp] parcela ${pg.id} paga via webhook (${ev.chargeId}).`);
+        } else if (ev.status === 'cancelado') {
+            await queryD1("UPDATE crm_pagamentos SET psp_status = 'cancelado' WHERE id = ?", [pg.id]);
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        console.warn('[psp] webhook:', e.message);
+        // 200 mesmo em erro de assinatura — logamos e seguimos; retry do PSP não ajuda.
+        res.json({ ok: false, error: e.message });
+    }
+});
+
 // Contas a receber: pendentes agrupados por faixa de atraso/vencimento (aging).
 app.get('/api/contas-a-receber', async (req, res) => {
     try {
@@ -7058,6 +8193,28 @@ app.get('/api/financeiro/resumo', async (req, res) => {
         });
     } catch (e) {
         console.error('Erro no resumo financeiro:', e);
+        res.status(500).json({ error: e.message || 'Erro interno.' });
+    }
+});
+
+// Contador enxuto de parcelas vencidas — pro badge da aba Financeiro.
+// Agregado com WHERE que casa com idx_pag_status_venc: lê só as linhas vencidas.
+app.get('/api/financeiro/vencido', async (req, res) => {
+    try {
+        const hoje = todayISO();
+        const rows = await queryD1(
+            `SELECT COUNT(*) AS n, COALESCE(SUM(valor_centavos), 0) AS c
+               FROM crm_pagamentos
+              WHERE status = 'pendente' AND tipo = 'recebimento'
+                AND vencimento IS NOT NULL AND vencimento < ?`,
+            [hoje]
+        );
+        const r = rows && rows[0] || {};
+        const count = Number(r.n) || 0;
+        const cents = Number(r.c) || 0;
+        res.json({ count, total_centavos: cents, total: centsToBRL(cents) });
+    } catch (e) {
+        console.error('Erro no contador de vencidos:', e);
         res.status(500).json({ error: e.message || 'Erro interno.' });
     }
 });
@@ -7469,6 +8626,7 @@ if (!process.env.VERCEL) {
                         'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, ?)',
                         [Date.now().toString() + Math.random(), msg, att.start_date || new Date().toISOString()]
                     );
+                    sendPushToAll('Atendimento finalizado', msg).catch(() => {});
                 }
             }
         } catch (e) {
@@ -7601,9 +8759,11 @@ async function flowExecNode(node, run, ctx, opts) {
             logAcao({ motivo });
             if (!sim) {
                 await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [run.lead_id]);
+                const handoffMsg = `🤝 Fluxo de atendimento: ${motivo} — ${ctx.nome || run.phone}`;
                 try {
                     await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-                        [`flow-${run.id}-${Date.now()}`, `🤝 Fluxo de atendimento: ${motivo} — ${ctx.nome || run.phone}`]);
+                        [`flow-${run.id}-${Date.now()}`, handoffMsg]);
+                    sendPushToAll('Fluxo pediu atendimento humano', handoffMsg, { phone: run.phone }).catch(() => {});
                 } catch (e) {}
             }
             return { end: true };
@@ -8144,13 +9304,19 @@ async function followupTick() {
             }
 
             if (within24 && texto.trim()) {
-                try { await sendWhatsappTextInternal(lead.telefone, texto, 'followup'); }
+                try {
+                    await sendWhatsappTextInternal(lead.telefone, texto, 'followup');
+                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length}`);
+                }
                 catch (e) { console.error('follow-up: envio falhou:', e.message); }
             } else if (stepTemplate) {
                 // Fora da janela de 24h (ou passo só com template): texto livre não
                 // passa na API oficial — manda o template aprovado. O nome do lead
                 // vai como única variável de corpo, se o template tiver uma.
-                try { await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: safeLeadFirstName(lead.nome) || 'Cliente', sentBy: 'followup' }); }
+                try {
+                    await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: safeLeadFirstName(lead.nome) || 'Cliente', sentBy: 'followup' });
+                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length} (template)`);
+                }
                 catch (e) { console.error('follow-up: template falhou:', e.message); }
             }
             // senão (fora da janela e sem template configurado): passo pulado.
@@ -8382,6 +9548,7 @@ Seja RIGOROSO: se a conversa já foi bem encaminhada, se o lead só agradeceu/de
                 "INSERT OR IGNORE INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)",
                 [nid, msg, p.lead.telefone || null]
             );
+            sendPushToAll('Oportunidade detectada 💰', msg, { phone: p.lead.telefone || null }).catch(() => {});
             await tagLeadAsOpportunity(p.lead.id);
             dbg.sinalizados++;
         } catch (e) { console.error('opps: gravar sinal falhou:', e.message); }
@@ -8616,6 +9783,66 @@ Se a pergunta pedir algo que não está nos dados acima, diga isso claramente em
     } catch (e) {
         console.error('ai-agent/ask:', e.message);
         res.status(502).json({ error: e.message || 'Falha ao consultar o agente de IA.' });
+    }
+});
+
+// Linha do tempo estruturada do lead (quem iniciou/finalizou atendimento,
+// abriu orçamento, mudou de etapa, recontatou, etc.) — separado das notas
+// manuais, que continuam em leads.notas.
+app.get('/api/leads/:id/events', async (req, res) => {
+    try {
+        const rows = await queryD1(
+            'SELECT id, tipo, actor, detalhe, created_at FROM crm_lead_events WHERE lead_id = ? ORDER BY created_at DESC LIMIT 100',
+            [req.params.id]
+        );
+        res.json({ events: rows || [] });
+    } catch (e) {
+        console.error('leads/:id/events:', e.message);
+        res.status(500).json({ error: 'Erro interno.' });
+    }
+});
+
+// Comentário manual do atendente na linha do tempo do lead (tipo='comentario').
+app.post('/api/leads/:id/events', async (req, res) => {
+    try {
+        const texto = String((req.body && req.body.texto) || '').trim();
+        if (!texto) return res.status(400).json({ error: 'Comentário vazio.' });
+        if (texto.length > 2000) return res.status(400).json({ error: 'Comentário muito longo (máx. 2000 caracteres).' });
+        const id = 'ev-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        const actor = req.user?.username || null;
+        await queryD1(
+            'INSERT INTO crm_lead_events (id, lead_id, tipo, actor, detalhe) VALUES (?, ?, ?, ?, ?)',
+            [id, req.params.id, 'comentario', actor, texto]
+        );
+        res.status(201).json({
+            event: { id, tipo: 'comentario', actor, detalhe: texto, created_at: new Date().toISOString().slice(0, 19).replace('T', ' ') }
+        });
+    } catch (e) {
+        console.error('POST leads/:id/events:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar comentário.' });
+    }
+});
+
+// Remove um comentário. Só comentários (nunca eventos do sistema) e só o autor
+// ou um admin.
+app.delete('/api/leads/:id/events/:eventId', async (req, res) => {
+    try {
+        const rows = await queryD1(
+            'SELECT actor, tipo FROM crm_lead_events WHERE id = ? AND lead_id = ?',
+            [req.params.eventId, req.params.id]
+        );
+        const ev = rows && rows[0];
+        if (!ev) return res.status(404).json({ error: 'Comentário não encontrado.' });
+        if (ev.tipo !== 'comentario') return res.status(400).json({ error: 'Só comentários podem ser removidos.' });
+        const isAdmin = req.user?.role === 'admin';
+        if (!isAdmin && ev.actor !== req.user?.username) {
+            return res.status(403).json({ error: 'Só o autor ou um admin pode remover.' });
+        }
+        await queryD1('DELETE FROM crm_lead_events WHERE id = ?', [req.params.eventId]);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('DELETE leads/:id/events:', e.message);
+        res.status(500).json({ error: 'Erro ao remover comentário.' });
     }
 });
 

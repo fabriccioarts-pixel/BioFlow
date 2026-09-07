@@ -40,3 +40,6 @@ create_table.js
 test_put.js
 test_wa.js
 scratch_*.mjs
+
+# Windows: config de pasta
+desktop.ini

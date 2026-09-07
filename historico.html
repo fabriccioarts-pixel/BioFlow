@@ -18,8 +18,8 @@
     <link rel="icon" type="image/svg+xml" href="Favicon.svg">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
-        .sb-logo-full { height: 26px; width: auto; max-width: 190px; object-fit: contain; display: block; flex-shrink: 0; }
-        .sb-logo-mark { height: 28px; width: 28px; object-fit: contain; display: none; flex-shrink: 0; }
+        .sb-logo-full { height: 42px; width: auto; max-width: 230px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-mark { height: 36px; width: 36px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
 
@@ -97,15 +97,15 @@
                 onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">
-            <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;">
+            <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;" title="CRM Vendas">
                 <i class="fa-solid fa-briefcase"></i> CRM Vendas
                 <span id="kanban-entrada-badge"
                     style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
             </button>
-            <button class="tab-btn" onclick="switchTab('agenda')" id="tab-agenda">
+            <button class="tab-btn" onclick="switchTab('agenda')" id="tab-agenda" title="Agenda Completa">
                 <i class="fa-regular fa-calendar-days"></i> Agenda Completa
             </button>
-            <button class="tab-btn" onclick="switchTab('chat')" id="tab-chat" style="position: relative;">
+            <button class="tab-btn" onclick="switchTab('chat')" id="tab-chat" style="position: relative;" title="Atendimento">
                 <i class="fa-regular fa-comment-dots"></i> Atendimento
                 <span id="chat-unread-badge"
                     style="display: none; background: var(--sb-danger); color: #fff; font-size: 0.65rem; font-weight: 800; border-radius: 99px; padding: 0.1rem 0.45rem; margin-left: 0.4rem; min-width: 18px; text-align: center; vertical-align: middle; line-height: 1.5;">1</span>
@@ -113,30 +113,78 @@
             <button class="tab-btn" onclick="switchTab('contatos')" id="tab-contatos" title="Base de contatos do WhatsApp">
                 <i class="fa-solid fa-address-book"></i> Contatos
             </button>
-            <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard">
+            <button class="tab-btn" onclick="switchTab('dashboard')" id="tab-dashboard" title="Dashboard">
                 <i class="fa-solid fa-chart-line"></i> Dashboard
             </button>
-            <button class="tab-btn" onclick="switchTab('campanhas')" id="tab-campanhas">
-                <i class="fa-solid fa-bullhorn"></i> Campanhas
+            <button class="tab-btn" onclick="switchTab('fluxos')" id="tab-fluxos" title="Fluxos automáticos de atendimento no WhatsApp">
+                <i class="fa-solid fa-diagram-project"></i> Fluxos
             </button>
+            <button class="tab-btn" onclick="switchTab('midias')" id="tab-midias" title="Biblioteca de mídia para enviar aos leads">
+                <i class="fa-solid fa-photo-film"></i> Mídias
+            </button>
+            <div class="dropdown" onmouseenter="openCampanhasFlyout()" onmouseleave="scheduleCloseCampanhasFlyout()">
+                <button class="tab-btn" id="tab-campanhas-main">
+                    <i class="fa-solid fa-bullhorn"></i> Campanhas
+                    <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; margin-left: auto; opacity: 0.6;"></i>
+                </button>
+                <div id="campanhas-flyout" class="dropdown-content sb-flyout" onmouseenter="cancelCloseCampanhasFlyout()" onmouseleave="scheduleCloseCampanhasFlyout()">
+                    <button class="sb-flyout-item" onclick="switchTab('campanhas')" id="tab-campanhas">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-paper-plane"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Disparo de Mensagens</div>
+                            <div class="sb-flyout-item-desc">Envie campanhas de WhatsApp em massa pra colunas do Kanban</div>
+                        </span>
+                    </button>
+                    <button class="sb-flyout-item" onclick="switchTab('origem-leads')" id="tab-origem-leads">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-bullseye"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">UTMs</div>
+                            <div class="sb-flyout-item-desc">Rastreie a origem dos leads por campanha e canal</div>
+                        </span>
+                    </button>
+                    <button class="sb-flyout-item" onclick="switchTab('marketing')" id="tab-marketing">
+                        <span class="sb-flyout-item-icon"><i class="fa-brands fa-facebook"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">ROI de Anúncios</div>
+                            <div class="sb-flyout-item-desc">Gasto do Meta Ads x consultas geradas, por campanha</div>
+                        </span>
+                    </button>
+                </div>
+            </div>
 
-            <div class="dropdown">
+            <div class="dropdown" onmouseenter="openRelacionamentoFlyout()" onmouseleave="scheduleCloseRelacionamentoFlyout()">
                 <button class="tab-btn" id="tab-relacionamento-main">
                     <i class="fa-regular fa-heart"></i> Relacionamento
-                    <i class="fa-solid fa-chevron-down" style="font-size: 0.7rem; margin-left: auto; opacity: 0.6;"></i>
+                    <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; margin-left: auto; opacity: 0.6;"></i>
                 </button>
-                <div class="dropdown-content">
-                    <button class="tab-btn" onclick="switchTab('posvenda')" id="tab-posvenda">
-                        <i class="fa-solid fa-star"></i> Pós-Venda
+                <div id="relacionamento-flyout" class="dropdown-content sb-flyout" onmouseenter="cancelCloseRelacionamentoFlyout()" onmouseleave="scheduleCloseRelacionamentoFlyout()">
+                    <button class="sb-flyout-item" onclick="switchTab('posvenda')" id="tab-posvenda">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-star"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Pós-Venda</div>
+                            <div class="sb-flyout-item-desc">Leads que fecharam e aguardam acompanhamento</div>
+                        </span>
                     </button>
-                    <button class="tab-btn" onclick="switchTab('faltantes')" id="tab-faltantes">
-                        <i class="fa-solid fa-user-xmark"></i> Faltantes
+                    <button class="sb-flyout-item" onclick="switchTab('faltantes')" id="tab-faltantes">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-user-xmark"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Faltantes</div>
+                            <div class="sb-flyout-item-desc">Pacientes que faltaram ao agendamento</div>
+                        </span>
                     </button>
-                    <button class="tab-btn" onclick="switchTab('sumidos')" id="tab-sumidos">
-                        <i class="fa-solid fa-user-clock"></i> Sumidos
+                    <button class="sb-flyout-item" onclick="switchTab('sumidos')" id="tab-sumidos">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-user-clock"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Sumidos</div>
+                            <div class="sb-flyout-item-desc">Leads sem resposta há um tempo</div>
+                        </span>
                     </button>
-                    <button class="tab-btn" onclick="switchTab('aniversariantes')" id="tab-aniversariantes">
-                        <i class="fa-solid fa-cake-candles"></i> Aniversariantes
+                    <button class="sb-flyout-item" onclick="switchTab('aniversariantes')" id="tab-aniversariantes">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-cake-candles"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Aniversariantes</div>
+                            <div class="sb-flyout-item-desc">Pacientes fazendo aniversário no período</div>
+                        </span>
                     </button>
                 </div>
             </div>
@@ -156,8 +204,10 @@
             <button class="sb-tool-btn" onclick="window.location.href='index.html'" title="Configurações do CRM">
                 <i class="fa-solid fa-gear"></i> Configurações
             </button>
+            <button class="sb-tool-btn" id="sb-tool-ai-agent" onclick="window.location.href='index.html'" title="Configurar o agente de IA do WhatsApp" style="display: none;">
+                <span class="lqa" data-liquid aria-hidden="true"></span> Agente de IA
+            </button>
         </div>
-
     </header>
 
     <div class="app-content">
@@ -227,9 +277,14 @@
     <div class="table-container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
             <h2><i class="fa-solid fa-sack-dollar" style="color: var(--accent-primary); margin-right: 0.5rem;"></i> Financeiro</h2>
-            <button class="btn-secondary" id="fin-refresh-btn" onclick="refreshFinTab()" title="Atualizar">
-                <i class="fa-solid fa-rotate-right"></i> Atualizar
-            </button>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-secondary" onclick="openEmpresasManager()" title="Dados da empresa que entram no cabeçalho do orçamento impresso">
+                    <i class="fa-solid fa-building"></i> Empresas / Emitentes
+                </button>
+                <button class="btn-secondary" id="fin-refresh-btn" onclick="refreshFinTab()" title="Atualizar">
+                    <i class="fa-solid fa-rotate-right"></i> Atualizar
+                </button>
+            </div>
         </div>
 
         <div class="utm-tabs" role="tablist" style="margin-bottom: 1.25rem;">
@@ -241,6 +296,8 @@
             </button>
             <button type="button" class="utm-tab" data-utm-tab="receber" role="tab" onclick="switchFinTab('receber')">
                 <i class="fa-solid fa-clock"></i> Contas a receber
+                <span id="fin-venc-badge" hidden title="Parcelas vencidas"
+                      style="margin-left:0.4rem;background:#ef4444;color:#fff;font-size:0.7rem;font-weight:700;line-height:1;padding:0.15rem 0.4rem;border-radius:999px;vertical-align:middle;"></span>
             </button>
         </div>
 
@@ -411,6 +468,7 @@
                         <th>Data</th>
                         <th>Descrição</th>
                         <th>Paciente</th>
+                        <th>Registrado por</th>
                         <th>Parcela</th>
                         <th>Forma</th>
                         <th style="text-align: right;">Valor</th>
@@ -420,7 +478,7 @@
                     </tr>
                 </thead>
                 <tbody id="pagamentos-tbody">
-                    <tr><td colspan="9" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
+                    <tr><td colspan="10" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
                 </tbody>
             </table>
         </div><!-- /tabpanel recebimentos -->
@@ -435,13 +493,14 @@
                         <th>Atraso</th>
                         <th>Descrição</th>
                         <th>Paciente</th>
+                        <th>Registrado por</th>
                         <th>Parcela</th>
                         <th style="text-align: right;">Valor</th>
                         <th style="text-align: center; width: 130px;">Ações</th>
                     </tr>
                 </thead>
                 <tbody id="ar-tbody">
-                    <tr><td colspan="7" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
+                    <tr><td colspan="8" style="text-align: center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>
                 </tbody>
             </table>
         </div><!-- /tabpanel receber -->
@@ -550,6 +609,129 @@
         </div>
     </div>
 
+    <!-- Cobrança Pix / boleto de uma parcela -->
+    <div class="modal-overlay" id="modalCobranca">
+        <div class="modal" style="max-width: 420px; width: 92%; text-align: center;">
+            <h2 style="justify-content:center;"><i class="fa-solid fa-barcode" style="color: var(--accent-primary)"></i> Cobrança</h2>
+            <p class="modal-subtitle" id="cob-info" style="margin-top:0.25rem;">—</p>
+            <div id="cob-body" style="margin-top:1rem; min-height:120px; display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
+                <span class="amicro-loader"><span></span><span></span><span></span></span>
+            </div>
+            <div class="modal-actions" style="margin-top: 1.25rem; justify-content:center;">
+                <button class="btn-cancel" onclick="document.getElementById('modalCobranca').classList.remove('active')">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Empresas / Emitentes (dados do cabeçalho do orçamento impresso) -->
+    <div class="modal-overlay" id="modalOrcamentoEmpresa">
+        <div class="modal aix-modal emp-manager-modal">
+            <div class="aix-head">
+                <span class="aix-head-icon"><i class="fa-solid fa-building"></i></span>
+                <div>
+                    <h2>Empresas / Emitentes</h2>
+                    <p class="aix-sub">Dados que entram no cabeçalho do orçamento impresso. Pode cadastrar mais de uma. Só administradores editam.</p>
+                </div>
+            </div>
+
+            <!-- VISÃO: LISTA -->
+            <div class="aix-body" id="emp-list-view">
+                <div id="emp-list" class="emp-list"></div>
+                <button type="button" class="btn-save emp-novo-btn" onclick="empNovo()">
+                    <i class="fa-solid fa-plus"></i> Nova empresa
+                </button>
+            </div>
+
+            <!-- VISÃO: EDITOR -->
+            <div class="aix-body" id="emp-editor-view" style="display: none;">
+                <input type="hidden" id="emp-editing-id">
+                <div class="aix-block">
+                    <div class="aix-block-label">Logo da empresa</div>
+                    <div class="emp-logo-row">
+                        <div class="emp-logo-preview" id="emp-logo-preview">
+                            <i class="fa-regular fa-image"></i>
+                        </div>
+                        <div class="emp-logo-actions">
+                            <input type="file" id="emp-logo-input" accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                                style="display: none;" onchange="orcEmpresaLogoPick(this)">
+                            <button type="button" class="btn-cancel" onclick="document.getElementById('emp-logo-input').click()">
+                                <i class="fa-solid fa-upload"></i> Escolher imagem
+                            </button>
+                            <button type="button" class="btn-cancel" id="emp-logo-remove" onclick="orcEmpresaLogoRemove()"
+                                style="display: none;"><i class="fa-solid fa-trash"></i> Remover</button>
+                            <div class="aix-hint">PNG, JPG, WebP ou SVG. Aparece no topo do orçamento impresso.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Razão social *</div>
+                    <input type="text" id="emp-razao" class="form-control" placeholder="Nome da empresa / clínica">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Nome fantasia</div>
+                    <input type="text" id="emp-fantasia" class="form-control" placeholder="Como a clínica é conhecida">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">CNPJ</div>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="emp-cnpj" class="form-control" inputmode="numeric"
+                            placeholder="00.000.000/0000-00" oninput="orcMaskCnpj(this)">
+                        <button type="button" class="btn-cancel" id="emp-cnpj-lookup" onclick="empBuscarCnpj()"
+                            title="Buscar dados na Receita" style="white-space: nowrap;"><i class="fa-solid fa-magnifying-glass"></i> Buscar</button>
+                    </div>
+                </div>
+                <div class="aix-block" style="flex-direction: row; gap: 0.8rem;">
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">Inscrição estadual</div>
+                        <input type="text" id="emp-ie" class="form-control" placeholder="Isento / número">
+                    </div>
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">Inscrição municipal</div>
+                        <input type="text" id="emp-im" class="form-control" placeholder="Número">
+                    </div>
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Endereço</div>
+                    <input type="text" id="emp-endereco" class="form-control" placeholder="Rua, nº, bairro, cidade - UF">
+                </div>
+                <div class="aix-block" style="flex-direction: row; gap: 0.8rem;">
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">Telefone</div>
+                        <input type="text" id="emp-telefone" class="form-control" placeholder="(00) 0000-0000">
+                    </div>
+                    <div style="flex: 1;">
+                        <div class="aix-block-label">E-mail</div>
+                        <input type="email" id="emp-email" class="form-control" placeholder="contato@empresa.com">
+                    </div>
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Site</div>
+                    <input type="text" id="emp-site" class="form-control" placeholder="https://...">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Responsável técnico</div>
+                    <input type="text" id="emp-resp" class="form-control" placeholder="Ex: Dra. Fulana — CRO/DF 12345">
+                </div>
+                <div class="aix-block">
+                    <div class="aix-block-label">Dados de pagamento (rodapé do orçamento)</div>
+                    <textarea id="emp-pagamento" class="form-control"
+                        placeholder="Ex: PIX 00.000.000/0001-00 — Banco 000 Ag 0000 CC 00000-0"></textarea>
+                </div>
+                <label class="emp-default-toggle">
+                    <input type="checkbox" id="emp-default"> Usar como empresa padrão
+                </label>
+            </div>
+
+            <div class="modal-actions aix-footer" id="emp-list-actions">
+                <button class="btn-cancel" onclick="closeEmpresasManager()">Fechar</button>
+            </div>
+            <div class="modal-actions aix-footer" id="emp-editor-actions" style="display: none;">
+                <button class="btn-cancel" onclick="empVoltarLista()">Voltar</button>
+                <button class="btn-save" onclick="empSalvar()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts compartilhados -->
     <script src="app.js"></script>
     
@@ -559,6 +741,7 @@
             if (loggedUser) {
                 atualizarVisibilidadeAdmin();
                 carregarHistorico();
+                atualizarBadgeVencido();
             } else {
                 // Se não estiver logado, o login-overlay aparece por causa do CSS default ativo.
                 // Mas quando logar (performLogin() no app.js), a gente precisa carregar os dados.
@@ -569,6 +752,7 @@
                     if(loggedUser) {
                         atualizarVisibilidadeAdmin();
                         carregarHistorico();
+                        atualizarBadgeVencido();
                     }
                 };
             }
@@ -745,22 +929,11 @@
             const colspanVal = isAdmin ? 11 : 10;
             
             if(!dataToRender || dataToRender.length === 0) {
-                let emptyRows = '';
-                for(let i=0; i<15; i++) {
-                    emptyRows += `<tr>
-                        <td style="color: var(--text-muted); opacity: 0.3;">--/--/----</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">R$ 0.00</td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">R$ 0.00</td>
-                        <td><span class="badge-status" style="background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3);">-</span></td>
-                        <td style="color: var(--text-muted); opacity: 0.3;">-</td>
-                        ${isAdmin ? `<td style="color: var(--text-muted); opacity: 0.3;">-</td>` : ''}
-                    </tr>`;
-                }
-                tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); padding: 1.5rem;">Nenhum agendamento encontrado para os filtros selecionados.</td></tr>` + emptyRows;
+                tbody.innerHTML = `<tr><td colspan="${colspanVal}" style="text-align: center; color: var(--text-muted); padding: 3rem 1.5rem;">
+                    <i class="fa-solid fa-calendar-xmark" style="font-size: 1.6rem; opacity: 0.5; display: block; margin-bottom: 0.6rem;"></i>
+                    Nenhum agendamento encontrado para os filtros selecionados.
+                    <div style="font-size: 0.8rem; opacity: 0.7; margin-top: 0.35rem;">Ajuste o período ou os filtros acima.</div>
+                </td></tr>`;
                 return;
             }
             
@@ -977,9 +1150,26 @@
         }
 
         function refreshFinTab() {
+            atualizarBadgeVencido();
             if (finCurrentTab === 'agendamentos') return carregarHistorico();
             if (finCurrentTab === 'recebimentos') { carregarResumoFin(); return carregarPagamentos(); }
             if (finCurrentTab === 'receber') return carregarContasReceber();
+        }
+
+        // Badge vermelho na aba "Contas a receber" com o nº de parcelas vencidas.
+        function setBadgeVencido(count) {
+            const el = document.getElementById('fin-venc-badge');
+            if (!el) return;
+            const n = Number(count) || 0;
+            el.textContent = n > 999 ? '999+' : String(n);
+            el.hidden = n === 0;
+        }
+        async function atualizarBadgeVencido() {
+            try {
+                const r = await fetch('/api/financeiro/vencido');
+                const j = await r.json();
+                if (r.ok) setBadgeVencido(j.count);
+            } catch (e) { /* badge é só um indicador — falha silenciosa */ }
         }
 
         async function carregarResumoFin() {
@@ -1025,41 +1215,94 @@
         async function carregarPagamentos() {
             const tbody = document.getElementById('pagamentos-tbody');
             const status = document.getElementById('pg-filtro-status').value;
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
             try {
                 const r = await fetch('/api/pagamentos' + (status ? `?status=${status}` : ''));
                 const j = await r.json();
                 if (!r.ok) throw new Error(j.error || 'Erro');
                 const rows = j.data || [];
                 if (!rows.length) {
-                    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nenhum lançamento ainda.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nenhum lançamento ainda.</td></tr>`;
                     return;
                 }
                 const isAdmin = loggedUser && loggedUser.role === 'admin';
-                tbody.innerHTML = rows.map(p => {
+
+                // "Registrado por": username de quem lançou/orçou. 'kanban' é o
+                // marcador legado de espelho ainda não re-sincronizado -> oculta.
+                const regPor = p => {
+                    const v = (p.criado_por || '').trim();
+                    return (!v || v === 'kanban') ? '' : v;
+                };
+                const regChip = p => {
+                    const n = regPor(p);
+                    return n
+                        ? `<span style="background:rgba(255,255,255,0.1);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.8rem;">${escapeHtml(n)}</span>`
+                        : '—';
+                };
+
+                const linhaPagamento = (p, planoId) => {
                     const isEstorno = p.tipo === 'estorno';
+                    const filho = !!planoId;
                     const dataRef = p.pago_em || p.created_at;
-                    const acoes = [];
-                    if (!isEstorno && p.status === 'pendente')
-                        acoes.push(`<button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="marcarPagamento(${p.id},'pago')" title="Marcar como pago"><i class="fa-solid fa-check"></i></button>`);
-                    if (!isEstorno && p.status === 'pago')
-                        acoes.push(`<button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="estornarPagamento(${p.id})" title="Estornar"><i class="fa-solid fa-rotate-left"></i></button>`);
-                    if (isAdmin)
-                        acoes.push(`<button class="btn-danger" style="padding:0.25rem 0.5rem;font-size:0.75rem;border:none;" onclick="excluirPagamento(${p.id})" title="Excluir"><i class="fa-solid fa-trash"></i></button>`);
-                    return `<tr style="${p.status === 'cancelado' ? 'opacity:0.55;' : ''}">
-                        <td>${finFmtDate(dataRef)}</td>
+                    const temAcao = !isEstorno && (p.status === 'pendente' || p.status === 'pago' || isAdmin);
+                    const acaoBtn = temAcao
+                        ? `<button class="btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.8rem;" title="Ações"
+                             onclick='abrirAcoesPg(event, ${JSON.stringify({ id: p.id, status: p.status, admin: !!isAdmin })})'><i class="fa-solid fa-ellipsis-vertical"></i></button>`
+                        : '—';
+                    const pspTag = p.psp_charge_id ? ` <i class="fa-solid fa-qrcode" title="Cobrança ${p.psp_metodo || ''} gerada" style="color:var(--accent-primary);font-size:0.7rem;"></i>` : '';
+                    return `<tr${filho ? ` data-plano="${planoId}" hidden` : ''} style="${p.status === 'cancelado' ? 'opacity:0.55;' : ''}">
+                        <td style="${filho ? 'padding-left:2.2rem;color:var(--text-muted);' : ''}">${finFmtDate(dataRef)}</td>
                         <td>${escapeHtml(p.descricao || '—')}</td>
                         <td>${escapeHtml(p.paciente || '—')}</td>
+                        <td>${regChip(p)}</td>
                         <td>${p.parcelas_total > 1 ? `${p.parcela}/${p.parcelas_total}` : '—'}</td>
                         <td>${FIN_FORMAS[p.forma_pagamento] || '—'}</td>
-                        <td style="text-align:right;font-weight:600;${isEstorno ? 'color:#ef4444;' : ''}">R$ ${p.valor}</td>
+                        <td style="text-align:right;font-weight:600;${isEstorno ? 'color:#ef4444;' : ''}">R$ ${p.valor}${pspTag}</td>
                         <td>${finFmtDate(p.vencimento)}</td>
                         <td>${finStatusBadge(p.status)}</td>
-                        <td style="text-align:center;"><div style="display:flex;gap:0.3rem;justify-content:center;">${acoes.join('') || '—'}</div></td>
+                        <td style="text-align:center;">${acaoBtn}</td>
                     </tr>`;
-                }).join('');
+                };
+
+                // Agrupa parcelamentos (parcelas_total > 1) numa linha-pai recolhível.
+                // Recebimento avulso (1 parcela) e estornos ficam soltos.
+                const grupos = new Map();
+                const soltos = [];
+                for (const p of rows) {
+                    if (p.tipo !== 'estorno' && Number(p.parcelas_total) > 1) {
+                        const k = (p.lead_id || 'x') + '|' + (p.descricao || '') + '|' + p.parcelas_total;
+                        if (!grupos.has(k)) grupos.set(k, []);
+                        grupos.get(k).push(p);
+                    } else soltos.push(p);
+                }
+
+                let html = '';
+                for (const [k, ps] of grupos) {
+                    ps.sort((a, b) => (a.parcela || 0) - (b.parcela || 0));
+                    const pagas = ps.filter(x => x.status === 'pago').length;
+                    const totalReais = ps.reduce((s, x) => s + (x.valor_reais || 0), 0);
+                    const receberReais = ps.filter(x => x.status === 'pendente').reduce((s, x) => s + (x.valor_reais || 0), 0);
+                    const prox = ps.filter(x => x.status === 'pendente').map(x => x.vencimento).filter(Boolean).sort()[0];
+                    const gid = 'g' + k.replace(/[^a-z0-9]/gi, '');
+                    const idsPlano = ps.map(x => x.id).join(',');
+                    html += `<tr class="pg-grupo" style="cursor:pointer;background:rgba(255,255,255,0.02);" onclick="togglePlano('${gid}', this)">
+                        <td><i class="fa-solid fa-chevron-right pg-chev" style="transition:transform .15s;font-size:0.7rem;margin-right:0.4rem;"></i>${finFmtDate(ps[0].created_at)}</td>
+                        <td style="font-weight:600;">${escapeHtml(ps[0].descricao || '—')}</td>
+                        <td>${escapeHtml(ps[0].paciente || '—')}</td>
+                        <td>${regChip(ps[0])}</td>
+                        <td>${pagas}/${ps[0].parcelas_total} pagas</td>
+                        <td>${FIN_FORMAS[ps[0].forma_pagamento] || '—'}</td>
+                        <td style="text-align:right;font-weight:700;">R$ ${totalReais.toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+                        <td>${prox ? 'próx. ' + finFmtDate(prox) : '—'}</td>
+                        <td>${receberReais > 0 ? `<span style="font-size:0.72rem;color:var(--accent-warning);">R$ ${receberReais.toLocaleString('pt-BR',{minimumFractionDigits:2})} a receber</span>` : finStatusBadge('pago')}</td>
+                        <td style="text-align:center;"><button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="event.stopPropagation();window.open('/api/pagamentos/carne?ids=${idsPlano}','_blank')" title="Baixar carnê (todas as parcelas num PDF)"><i class="fa-solid fa-file-arrow-down"></i></button></td>
+                    </tr>`;
+                    html += ps.map(p => linhaPagamento(p, gid)).join('');
+                }
+                html += soltos.map(p => linhaPagamento(p, null)).join('');
+                tbody.innerHTML = html;
             } catch (e) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
 
@@ -1108,7 +1351,234 @@
                 showToast('Atualizado!', 'success');
                 carregarResumoFin(); carregarPagamentos();
                 if (finCurrentTab === 'receber' || FIN_LOADED.receber) carregarContasReceber();
+                else atualizarBadgeVencido();
             } catch (e) { showToast(e.message, 'danger'); }
+        }
+
+        // Menu "Ações" único por linha de recebimento (kebab ⋮).
+        function _pgMenuEl() {
+            let el = document.getElementById('pg-acoes-menu');
+            if (el) return el;
+            el = document.createElement('div');
+            el.id = 'pg-acoes-menu';
+            el.style.cssText = 'position:fixed;display:none;z-index:4000;min-width:190px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:10px;padding:0.3rem;box-shadow:0 8px 24px rgba(0,0,0,0.3);';
+            document.body.appendChild(el);
+            document.addEventListener('click', e => { if (!el.contains(e.target)) el.style.display = 'none'; });
+            window.addEventListener('scroll', () => el.style.display = 'none', true);
+            document.addEventListener('keydown', e => { if (e.key === 'Escape') el.style.display = 'none'; });
+            return el;
+        }
+        function abrirAcoesPg(event, pg) {
+            event.stopPropagation();
+            const el = _pgMenuEl();
+            const item = (icon, label, fn, danger) =>
+                `<button style="display:flex;align-items:center;gap:0.6rem;width:100%;text-align:left;border:0;background:transparent;color:${danger ? 'var(--accent-danger)' : 'var(--text-main)'};font:inherit;font-size:0.85rem;padding:0.5rem 0.7rem;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'" onclick="document.getElementById('pg-acoes-menu').style.display='none';${fn}"><i class="fa-solid ${icon}" style="width:16px;text-align:center;opacity:0.8;"></i>${label}</button>`;
+            const itens = [];
+            if (pg.status === 'pendente') {
+                itens.push(item('fa-barcode', 'Gerar Pix / boleto', `abrirCobranca(${pg.id})`));
+                itens.push(item('fa-check', 'Pagamento confirmado', `marcarPagamento(${pg.id},'pago')`));
+            }
+            if (pg.status === 'pago') itens.push(item('fa-rotate-left', 'Estornar', `estornarPagamento(${pg.id})`));
+            if (pg.admin) itens.push(item('fa-trash', 'Excluir', `excluirPagamento(${pg.id})`, true));
+            el.innerHTML = itens.join('') || `<div style="padding:0.5rem 0.7rem;color:var(--text-muted);font-size:0.82rem;">Sem ações</div>`;
+            const r = event.currentTarget.getBoundingClientRect();
+            el.style.display = 'block';
+            const w = el.offsetWidth, h = el.offsetHeight;
+            let left = r.right - w; if (left < 8) left = 8;
+            let top = r.bottom + 4; if (top + h > window.innerHeight - 8) top = r.top - h - 4;
+            el.style.left = left + 'px';
+            el.style.top = top + 'px';
+        }
+
+        // Recolhe/expande as parcelas de um plano.
+        function togglePlano(gid, trPai) {
+            const parcelas = document.querySelectorAll(`tr[data-plano="${gid}"]`);
+            const abrindo = parcelas.length && parcelas[0].hidden;
+            parcelas.forEach(tr => tr.hidden = !abrindo);
+            const chev = trPai && trPai.querySelector('.pg-chev');
+            if (chev) chev.style.transform = abrindo ? 'rotate(90deg)' : '';
+        }
+
+        // Copia um campo da cobrança atual (evita passar a string pelo atributo
+        // onclick, onde aspas do payload quebrariam o HTML).
+        function copiarCampo(campo, btn) {
+            const v = (window._cobAtual || {})[campo];
+            if (!v || !navigator.clipboard) return;
+            navigator.clipboard.writeText(v).then(() => {
+                if (btn) { const o = btn.textContent; btn.textContent = 'Copiado!'; setTimeout(() => btn.textContent = o, 1400); }
+            }).catch(() => {});
+        }
+
+        // Abre o modal e busca/gera a cobrança Pix|boleto da parcela.
+        async function abrirCobranca(id) {
+            const modal = document.getElementById('modalCobranca');
+            const body = document.getElementById('cob-body');
+            const info = document.getElementById('cob-info');
+            modal.classList.add('active');
+            info.textContent = 'Parcela #' + id;
+            body.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span>';
+            // Já existe cobrança gerada?
+            let cob = null;
+            try {
+                const r = await fetch(`/api/pagamentos/${id}/cobranca`);
+                if (r.ok) cob = (await r.json()).cobranca;
+            } catch (e) {}
+            if (cob) return renderCobranca(cob);
+            body.innerHTML = `
+                <p style="color:var(--text-muted);font-size:0.85rem;margin:0;">Nenhuma cobrança gerada ainda.</p>
+                <div style="display:flex;gap:0.5rem;">
+                    <button class="btn-save" onclick="gerarCobranca(${id},'pix')"><i class="fa-solid fa-qrcode"></i> Gerar Pix</button>
+                    <button class="btn-secondary" onclick="gerarCobranca(${id},'boleto')"><i class="fa-solid fa-barcode"></i> Boleto</button>
+                </div>`;
+        }
+
+        async function gerarCobranca(id, metodo) {
+            const body = document.getElementById('cob-body');
+            body.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span>';
+            try {
+                const r = await fetch(`/api/pagamentos/${id}/cobranca`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ metodo })
+                });
+                const j = await r.json();
+                if (r.status === 422 && j.code === 'DADOS_INCOMPLETOS') {
+                    return formCompletarCobranca(id, metodo, j);
+                }
+                if (!r.ok) throw new Error(j.error || 'Erro');
+                renderCobranca(j.cobranca);
+                carregarPagamentos();
+            } catch (e) {
+                body.innerHTML = `<p style="color:var(--accent-danger);font-size:0.85rem;">${escapeHtml(e.message)}</p>`;
+            }
+        }
+
+        // Valida CPF (mesmo algoritmo do servidor).
+        function cpfValidoCli(v) {
+            const c = String(v || '').replace(/\D/g, '');
+            if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+            const dv = (base, pesoIni) => {
+                let s = 0; for (let i = 0; i < base.length; i++) s += Number(base[i]) * (pesoIni - i);
+                const r = (s * 10) % 11; return r === 10 ? 0 : r;
+            };
+            return dv(c.slice(0, 9), 10) === Number(c[9]) && dv(c.slice(0, 10), 11) === Number(c[10]);
+        }
+        function _mascaraCpf(el) {
+            let d = el.value.replace(/\D/g, '').slice(0, 11);
+            el.value = d
+                .replace(/^(\d{3})(\d)/, '$1.$2')
+                .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+                .replace(/\.(\d{3})(\d)/, '.$1-$2');
+        }
+        function _mascaraCep(el) {
+            let d = el.value.replace(/\D/g, '').slice(0, 8);
+            el.value = d.replace(/^(\d{5})(\d)/, '$1-$2');
+        }
+
+        // Formulário "completar dados de cobrança" — aparece quando o POST /cobranca
+        // devolve 422 DADOS_INCOMPLETOS. Só mostra os campos que faltam (+ CPF sempre).
+        function formCompletarCobranca(pgId, metodo, data) {
+            const body = document.getElementById('cob-body');
+            const falta = new Set(data.faltando || []);
+            const at = data.atual || {};
+            const leadId = data.lead_id;
+            const precisaEndereco = ['cep', 'numero', 'logradouro', 'cidade', 'uf'].some(k => falta.has(k));
+            const campoEnd = (id, label, val, extra = '') =>
+                `<label style="display:block;text-align:left;font-size:0.72rem;color:var(--text-muted);margin-bottom:0.6rem;">${label}
+                    <input id="dc-${id}" value="${escapeHtml(val || '')}" ${extra} style="width:100%;margin-top:0.2rem;padding:0.4rem 0.5rem;font-size:0.85rem;background:var(--bg-main);border:1px solid var(--border-color);border-radius:6px;color:var(--text-main);"></label>`;
+            body.innerHTML = `
+                <p style="color:var(--text-muted);font-size:0.82rem;margin:0 0 0.5rem;text-align:left;">
+                    Faltam dados do paciente pra emitir ${metodo === 'boleto' ? 'o boleto' : 'a cobrança'}. Preencha abaixo — fica salvo no lead.
+                </p>
+                <div style="width:100%;">
+                    ${campoEnd('cpf', 'CPF *', at.cpf, 'oninput="_mascaraCpf(this)" inputmode="numeric" placeholder="000.000.000-00"')}
+                    ${precisaEndereco ? `
+                        ${campoEnd('cep', 'CEP *', at.cep, 'oninput="_mascaraCep(this)" onblur="_viaCep(this.value)" inputmode="numeric" placeholder="00000-000"')}
+                        ${campoEnd('logradouro', 'Logradouro *', at.logradouro)}
+                        <div style="display:flex;gap:0.5rem;">
+                            <div style="flex:1;">${campoEnd('numero', 'Número *', at.numero, 'inputmode="numeric"')}</div>
+                            <div style="flex:1.4;">${campoEnd('complemento', 'Complemento', at.complemento)}</div>
+                        </div>
+                        ${campoEnd('bairro', 'Bairro', at.bairro)}
+                        <div style="display:flex;gap:0.5rem;">
+                            <div style="flex:2;">${campoEnd('cidade', 'Cidade *', at.cidade)}</div>
+                            <div style="flex:0.7;">${campoEnd('uf', 'UF *', at.uf, 'maxlength="2" style="text-transform:uppercase"')}</div>
+                        </div>` : ''}
+                </div>
+                <p id="dc-erro" style="color:var(--accent-danger);font-size:0.78rem;min-height:1rem;margin:0.2rem 0;text-align:left;"></p>
+                <button class="btn-save" style="width:100%;" onclick="salvarDadosCobranca(${pgId}, '${metodo}', ${leadId}, ${precisaEndereco})">
+                    <i class="fa-solid fa-check"></i> Salvar e gerar
+                </button>`;
+        }
+
+        async function _viaCep(cep) {
+            const d = String(cep || '').replace(/\D/g, '');
+            if (d.length !== 8) return;
+            try {
+                const r = await fetch(`https://viacep.com.br/ws/${d}/json/`);
+                const j = await r.json();
+                if (j.erro) return;
+                const set = (id, v) => { const el = document.getElementById('dc-' + id); if (el && !el.value && v) el.value = v; };
+                set('logradouro', j.logradouro);
+                set('bairro', j.bairro);
+                set('cidade', j.localidade);
+                set('uf', j.uf);
+            } catch (e) {}
+        }
+
+        async function salvarDadosCobranca(pgId, metodo, leadId, precisaEndereco) {
+            const erro = document.getElementById('dc-erro');
+            const val = id => (document.getElementById('dc-' + id) || {}).value || '';
+            const cpf = val('cpf');
+            if (!cpfValidoCli(cpf)) { erro.textContent = 'CPF inválido.'; return; }
+            const payload = { cpf };
+            if (precisaEndereco) {
+                payload.cep = val('cep');
+                payload.logradouro = val('logradouro').trim();
+                payload.numero = val('numero').trim();
+                payload.complemento = val('complemento').trim();
+                payload.bairro = val('bairro').trim();
+                payload.cidade = val('cidade').trim();
+                payload.uf = val('uf').trim().toUpperCase();
+                if (String(payload.cep).replace(/\D/g, '').length !== 8) { erro.textContent = 'CEP inválido.'; return; }
+                if (!payload.logradouro || !payload.numero || !payload.cidade || payload.uf.length !== 2) {
+                    erro.textContent = 'Preencha logradouro, número, cidade e UF.'; return;
+                }
+            }
+            erro.textContent = '';
+            const body = document.getElementById('cob-body');
+            body.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span>';
+            try {
+                const r = await fetch(`/api/leads/${leadId}/dados-cobranca`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'Erro ao salvar');
+                await gerarCobranca(pgId, metodo);
+            } catch (e) {
+                body.innerHTML = `<p style="color:var(--accent-danger);font-size:0.85rem;">${escapeHtml(e.message)}</p>
+                    <button class="btn-secondary" style="margin-top:0.5rem;" onclick="gerarCobranca(${pgId},'${metodo}')">Tentar de novo</button>`;
+            }
+        }
+
+        function renderCobranca(c) {
+            window._cobAtual = c;
+            const body = document.getElementById('cob-body');
+            const parts = [];
+            if (c.qrcodeImg) parts.push(`<img src="${c.qrcodeImg}" alt="QR Pix" style="width:220px;height:220px;border-radius:8px;background:#fff;padding:6px;">`);
+            if (c.qrcode) parts.push(`
+                <div style="width:100%;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.25rem;">Pix copia e cola</div>
+                    <textarea readonly style="width:100%;height:64px;font-size:0.72rem;font-family:monospace;background:var(--bg-main);border:1px solid var(--border-color);border-radius:6px;color:var(--text-main);padding:0.5rem;">${escapeHtml(c.qrcode)}</textarea>
+                    <button class="btn-secondary" style="margin-top:0.3rem;font-size:0.78rem;padding:0.3rem 0.7rem;" onclick="copiarCampo('qrcode', this)">Copiar</button>
+                </div>`);
+            if (c.linhaDigitavel) parts.push(`
+                <div style="width:100%;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.25rem;">Linha digitável</div>
+                    <div style="font-family:monospace;font-size:0.78rem;word-break:break-all;">${escapeHtml(c.linhaDigitavel)}</div>
+                    <button class="btn-secondary" style="margin-top:0.3rem;font-size:0.78rem;padding:0.3rem 0.7rem;" onclick="copiarCampo('linhaDigitavel', this)">Copiar</button>
+                </div>`);
+            if (c.url) parts.push(`<a href="${c.url}" target="_blank" rel="noopener" class="btn-secondary" style="font-size:0.82rem;padding:0.35rem 0.8rem;"><i class="fa-solid fa-up-right-from-square"></i> Abrir fatura</a>`);
+            if (!parts.length) parts.push('<p style="color:var(--text-muted);font-size:0.85rem;">Cobrança criada, mas sem QR/boleto retornado.</p>');
+            body.innerHTML = parts.join('');
         }
 
         async function estornarPagamento(id) {
@@ -1136,7 +1606,13 @@
         async function carregarContasReceber() {
             const box = document.getElementById('ar-buckets');
             const tbody = document.getElementById('ar-tbody');
-            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando...</td></tr>`;
+            const regChip = p => {
+                const v = (p.criado_por || '').trim();
+                return (!v || v === 'kanban')
+                    ? '—'
+                    : `<span style="background:rgba(255,255,255,0.1);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.8rem;">${escapeHtml(v)}</span>`;
+            };
             try {
                 const r = await fetch('/api/contas-a-receber');
                 const j = await r.json();
@@ -1156,27 +1632,76 @@
                     chip('30+ / sem data', brl((bc.d30_mais || 0) + (bc.sem_venc || 0)));
 
                 const itens = j.itens || [];
+                setBadgeVencido(itens.filter(p => p.dias_atraso > 0).length);
                 if (!itens.length) {
-                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nada a receber. 🎉</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Nada a receber. 🎉</td></tr>`;
                     return;
                 }
-                tbody.innerHTML = itens.map(p => `
-                    <tr style="${p.dias_atraso > 0 ? 'background:rgba(239,68,68,0.06);' : ''}">
-                        <td>${finFmtDate(p.vencimento) }</td>
+
+                const linhaAR = (p, planoId) => {
+                    const filho = !!planoId;
+                    return `<tr${filho ? ` data-plano="${planoId}" hidden` : ''} style="${p.dias_atraso > 0 ? 'background:rgba(239,68,68,0.06);' : ''}">
+                        <td style="${filho ? 'padding-left:2.2rem;color:var(--text-muted);' : ''}">${finFmtDate(p.vencimento)}</td>
                         <td>${p.dias_atraso > 0 ? `<span style="color:#ef4444;font-weight:600;">${p.dias_atraso}d</span>` : (p.vencimento ? 'em dia' : '—')}</td>
                         <td>${escapeHtml(p.descricao || '—')}</td>
                         <td>${escapeHtml(p.paciente || '—')}</td>
+                        <td>${regChip(p)}</td>
                         <td>${p.parcelas_total > 1 ? `${p.parcela}/${p.parcelas_total}` : '—'}</td>
                         <td style="text-align:right;font-weight:600;">R$ ${p.valor}</td>
                         <td style="text-align:center;">
                             <button class="btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="marcarPagamento(${p.id},'pago')"><i class="fa-solid fa-check"></i> Baixar</button>
                         </td>
-                    </tr>`).join('');
+                    </tr>`;
+                };
+
+                // Agrupa parcelamentos (parcelas_total > 1) do mesmo lead/plano numa
+                // linha-pai recolhível; parcela avulsa fica solta.
+                const grupos = new Map();
+                const soltos = [];
+                for (const p of itens) {
+                    if (Number(p.parcelas_total) > 1) {
+                        const k = (p.lead_id || 'x') + '|' + (p.descricao || '') + '|' + p.parcelas_total;
+                        if (!grupos.has(k)) grupos.set(k, []);
+                        grupos.get(k).push(p);
+                    } else soltos.push(p);
+                }
+
+                let html = '';
+                for (const [k, ps] of grupos) {
+                    ps.sort((a, b) => (a.parcela || 0) - (b.parcela || 0));
+                    const gid = 'ar' + k.replace(/[^a-z0-9]/gi, '');
+                    const totalReais = ps.reduce((s, x) => s + (x.valor_reais || 0), 0);
+                    const prox = ps.map(x => x.vencimento).filter(Boolean).sort()[0];
+                    const atrasoMax = ps.reduce((m, x) => Math.max(m, x.dias_atraso || 0), 0);
+                    const idsPlano = ps.map(x => x.id).join(',');
+                    html += `<tr class="pg-grupo" style="cursor:pointer;background:rgba(255,255,255,0.02);${atrasoMax > 0 ? 'box-shadow:inset 3px 0 0 #ef4444;' : ''}" onclick="togglePlano('${gid}', this)">
+                        <td><i class="fa-solid fa-chevron-right pg-chev" style="transition:transform .15s;font-size:0.7rem;margin-right:0.4rem;"></i>${prox ? 'próx. ' + finFmtDate(prox) : '—'}</td>
+                        <td>${atrasoMax > 0 ? `<span style="color:#ef4444;font-weight:600;">${atrasoMax}d</span>` : 'em dia'}</td>
+                        <td style="font-weight:600;">${escapeHtml(ps[0].descricao || '—')}</td>
+                        <td>${escapeHtml(ps[0].paciente || '—')}</td>
+                        <td>${regChip(ps[0])}</td>
+                        <td>${ps.length}/${ps[0].parcelas_total} em aberto</td>
+                        <td style="text-align:right;font-weight:700;">R$ ${totalReais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        <td style="text-align:center;"><button class="btn-secondary" style="padding:0.25rem 0.5rem;font-size:0.75rem;" onclick="event.stopPropagation();window.open('/api/pagamentos/carne?ids=${idsPlano}','_blank')" title="Baixar carnê (todas as parcelas num PDF)"><i class="fa-solid fa-file-arrow-down"></i></button></td>
+                    </tr>`;
+                    html += ps.map(p => linhaAR(p, gid)).join('');
+                }
+                html += soltos.map(p => linhaAR(p, null)).join('');
+                tbody.innerHTML = html;
             } catch (e) {
                 box.innerHTML = '';
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--accent-danger);">Erro: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
+    </script>
+
+    <!-- Preenchimento "liquid gradient" nos avatares .lqa (ex.: botão "Agente de IA") -->
+    <script type="module">
+        import { initLiquid, LIQUID_BLUE } from './liquid-gradient.js';
+        document.querySelectorAll('.lqa[data-liquid]').forEach((el) => {
+            try { initLiquid(el, { colors: LIQUID_BLUE }); }
+            catch (e) { console.warn('liquid-gradient indisponível:', e); }
+        });
     </script>
 </body>
 </html>

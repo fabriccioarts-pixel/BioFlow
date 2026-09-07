@@ -351,6 +351,12 @@ function initApp() {
             const cleanUrl = window.location.pathname;
             window.history.replaceState({}, document.title, cleanUrl);
         }
+        // Veio de outra página (ex.: Financeiro) clicando num item do menu.
+        const gotoTab = deepLinkParams.get('goto');
+        if (gotoTab && !openChatPhone && typeof switchTab === 'function') {
+            switchTab(gotoTab);
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
     } else {
         const overlay = document.getElementById('login-overlay');
         if (overlay) {
@@ -368,6 +374,74 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApp);
 } else {
     initApp();
+}
+
+// PWA: registra o Service Worker (instalabilidade + fallback offline do app
+// shell). Falha em silêncio se o navegador não suportar — não é crítico.
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then((reg) => { window._swRegistration = reg; })
+            .catch((e) => console.warn('SW não registrado:', e));
+    });
+}
+
+// === WEB PUSH: notificação nativa do Windows/Android para leads quentes e
+// avisos gerais do CRM (mesma tabela crm_notifications que já alimenta o
+// sininho — isso só "espelha" pro sistema operacional). ===
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+async function enableWebPush() {
+    try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') return false;
+
+        const reg = window._swRegistration || await navigator.serviceWorker.ready;
+        const keyRes = await fetch('/api/push/vapid-public-key');
+        const { publicKey } = await keyRes.json();
+        if (!publicKey) { console.warn('Push: VAPID_PUBLIC_KEY não configurada no servidor.'); return false; }
+
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+            sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(publicKey)
+            });
+        }
+        await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription: sub })
+        });
+        localStorage.setItem('crm_push_enabled', '1');
+        return true;
+    } catch (e) {
+        console.warn('Não foi possível ativar notificações:', e);
+        return false;
+    }
+}
+
+// Oferece 1x por navegador (não fica insistindo a cada login). Se a pessoa já
+// tinha aceitado antes (permission === 'granted'), reinscreve em silêncio —
+// cobre o caso de trocar de PC/navegador ou limpar o Service Worker.
+async function maybeOfferWebPush() {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+    if (Notification.permission === 'granted') { enableWebPush(); return; }
+    if (Notification.permission === 'denied') return;
+    if (localStorage.getItem('crm_push_prompt_dismissed') === '1') return;
+
+    const ok = await customConfirm(
+        'Quer receber um aviso do Windows/navegador sempre que um lead ficar <b>quente</b> ou tiver uma notificação importante — mesmo com o CRM em segundo plano?',
+        'Ativar notificações'
+    );
+    localStorage.setItem('crm_push_prompt_dismissed', '1');
+    if (ok) enableWebPush();
 }
 
 // Chuva de confete comemorando um agendamento novo. Canvas próprio, sem
@@ -854,7 +928,7 @@ function updateKanbanEntradaBadge() {
         : 0;
     if (count > 0) {
         badge.style.display = 'inline-block';
-        badge.innerText = count > 99 ? '99+' : String(count);
+        badge.innerText = count > 999 ? '999+' : String(count);
     } else {
         badge.style.display = 'none';
     }
@@ -1010,7 +1084,12 @@ sortedLeads.forEach(lead => {
 const col = document.getElementById(lead.column);
 if (col) {
 const card = document.createElement('div');
-card.className = 'card';
+// Dentro de "Follow Up" (col-perdido), diferencia visualmente quem foi
+// descartado de vez (tag "descartado") de quem ainda está na cadência
+// automática ativa — sem isso os dois pareciam exatamente iguais no board.
+const leadTagList = (typeof parseLeadTags === 'function') ? parseLeadTags(lead.tags) : [];
+const isDiscarded = lead.column === 'col-perdido' && leadTagList.includes('descartado');
+card.className = 'card' + (isDiscarded ? ' card--discarded' : '');
 card.draggable = false;
 card.id = `card-${lead.id}`;
 card.addEventListener('pointerdown', (e) => startKanbanCardDrag(e, lead.id, card));
@@ -1068,7 +1147,7 @@ metadataIconsHTML += `<i class="fa-regular fa-calendar-check" style="color: #2dd
             if (count > 0) {
                 unreadBadge = `<div style="position: relative; display: inline-flex; align-items: center; justify-content: center; margin-right: 6px; cursor: pointer;" onclick="openChatForLead('${lead.telefone}', '${lead.id}')" title="${count} mensagem(ns) não lida(s)">
                     <i class="fa-brands fa-whatsapp" style="color: #25D366; font-size: 1.05rem;"></i>
-                    <span style="position: absolute; top: -5px; right: -6px; background: #ef4444; color: white; font-size: 0.6rem; font-weight: 700; width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--bg-card);">${count > 99 ? '99+' : count}</span>
+                    <span style="position: absolute; top: -5px; right: -6px; background: #ef4444; color: white; font-size: 0.6rem; font-weight: 700; width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--bg-card);">${count > 999 ? '999+' : count}</span>
                 </div>`;
             }
         }
@@ -1739,8 +1818,54 @@ function openNotesModal(id) {
     document.getElementById('ln-lead-fb-click').value = lead.fb_click_id || '';
     document.getElementById('ln-lead-origem').value = lead.origem || 'Meta Ads';
     document.getElementById('ln-notas').value = lead.notas || '';
-    document.getElementById('ln-lead-valor').value = lead.valor_recebido ? formatCurrencyBRLValue(lead.valor_recebido) : '';
+    renderResumoOrcamentoLead(lead);
     document.getElementById('modalLeadNotes').classList.add('active');
+}
+
+// Nº de parcelas lido do texto livre do orçamento (espelha _parcelasOrc do servidor).
+function parcelasDoOrcamento(itens) {
+    let n = 1;
+    for (const it of itens || []) {
+        const txt = [it && it.condicoes, it && it.formaPagamento, it && it.valor]
+            .filter(Boolean).join(' ').toLowerCase();
+        const m = txt.match(/(\d{1,2})\s*(?:x\b|vezes|parcelas?|parc\b)/);
+        if (m) n = Math.max(n, parseInt(m[1], 10) || 1);
+    }
+    return Math.max(1, Math.min(48, n));
+}
+
+// Resumo read-only do orçamento na ficha do lead. O valor em si é editado no
+// modal de orçamento (openOrcamentoModal), não aqui.
+function renderResumoOrcamentoLead(lead) {
+    const itens = parseOrcamentoArray(lead.orcamento);
+    const totalOrc = itens.reduce((s, it) => s + (parseFloat(it.valor) || 0), 0);
+    const recebido = parseFloat(lead.valor_recebido) || 0;
+    const n = parcelasDoOrcamento(itens);
+    // Quem montou: created_by do item mais recente que tiver; senão o dono do lead.
+    const criador = itens.map(it => it && it.created_by).filter(Boolean).pop() || lead.owner_id || '';
+    const elTotal = document.getElementById('ln-orc-total');
+    const elParc = document.getElementById('ln-orc-parc');
+    const elReceb = document.getElementById('ln-orc-recebido');
+    const elCriador = document.getElementById('ln-orc-criador');
+    if (elTotal) elTotal.textContent = totalOrc > 0
+        ? 'R$ ' + formatCurrencyBRLValue(totalOrc)
+        : (itens.length ? 'R$ 0,00' : 'Sem orçamento');
+    if (elParc) elParc.textContent = (totalOrc > 0 && n > 1) ? ` em ${n}x` : '';
+    if (elReceb) elReceb.textContent = 'R$ ' + formatCurrencyBRLValue(recebido);
+    if (elCriador) {
+        const mostrar = itens.length && criador;
+        elCriador.hidden = !mostrar;
+        if (mostrar) elCriador.querySelector('strong').textContent =
+            (typeof resolveDisplayName === 'function' ? resolveDisplayName(criador) : criador);
+    }
+}
+
+// Botão "Editar orçamento" da ficha: grava as edições pendentes do lead
+// (nome/notas/etc) e abre o modal de orçamento estruturado.
+async function editarOrcamentoDoLead() {
+    const id = document.getElementById('ln-lead-id').value;
+    await saveLeadNotes();
+    if (typeof openOrcamentoModal === 'function') openOrcamentoModal(id);
 }
 
 async function saveLeadNotes() {
@@ -1752,9 +1877,6 @@ async function saveLeadNotes() {
     const fb_click_id = document.getElementById('ln-lead-fb-click').value;
     const origem = document.getElementById('ln-lead-origem').value;
     const notas = document.getElementById('ln-notas').value;
-    // O campo mostra "1.000,00" (máscara BRL), mas é armazenado como número puro
-    // ("1000.00") pra continuar compatível com todo lugar que faz parseFloat(valor_recebido).
-    const valor_recebido = parseCurrencyBRLInput(document.getElementById('ln-lead-valor').value);
 
     const lead = leads.find(l => l.id === id);
     if (lead) {
@@ -1765,14 +1887,13 @@ async function saveLeadNotes() {
         lead.fb_click_id = fb_click_id;
         lead.origem = origem;
         lead.notas = notas;
-        lead.valor_recebido = valor_recebido ? parseFloat(valor_recebido) : null;
         renderBoard(); // atualiza a cor do icone de notas e os dados no card
-        
+
         try {
             await fetch(`/api/leads/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nome: lead.nome, telefone, born, email, notas, valor_recebido: lead.valor_recebido })
+                body: JSON.stringify({ nome: lead.nome, telefone, born, email, notas })
             });
         } catch (e) {
             console.error('Erro ao salvar edições', e);
@@ -1842,7 +1963,8 @@ function renderOrcamentoItemsList(id) {
         const valorFmt = item.valor ? formatCurrencyBRLValue(item.valor) : '0,00';
         const descontoTxt = item.desconto ? ` &middot; <span class="orcx-disc">${item.desconto}% desconto</span>` : '';
         const formaTxt = item.formaPagamento ? ` &middot; ${escapeHtml(item.formaPagamento)}` : '';
-        const whenTxt = item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : '';
+        // created_at vem em UTC; lppFormatDateTime converte pra America/Sao_Paulo.
+        const whenTxt = item.created_at ? (lppFormatDateTime(item.created_at) || '') : '';
         const creatorHTML = item.created_by ? `
             <div style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-muted); opacity: 0.9; margin-top: 0.35rem;">
                 ${typeof renderAvatarHTML === 'function' ? renderAvatarHTML(resolveDisplayName(item.created_by), avatarMap[item.created_by] || null, null, 16) : ''}
@@ -2294,10 +2416,13 @@ async function empSalvar() {
         empRenderLista();
         empVoltarLista();
         showToast('Empresa salva.', 'success');
-        // Reflete no seletor do orçamento, se estiver aberto.
-        const leadId = document.getElementById('orc-lead-id').value;
-        const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadId);
-        orcPopularEmpresaSelect(lead ? lead.empresa_id : null);
+        // Reflete no seletor do orçamento, se estiver aberto (não existe fora do
+        // modal de orçamento — ex.: quando gerenciado pela aba Financeiro).
+        const leadIdEl = document.getElementById('orc-lead-id');
+        if (leadIdEl) {
+            const lead = (Array.isArray(leads) ? leads : []).find(l => l.id === leadIdEl.value);
+            orcPopularEmpresaSelect(lead ? lead.empresa_id : null);
+        }
     } catch (e) {
         console.error('Erro ao salvar empresa', e);
         showToast('Erro ao salvar empresa.', 'danger');
@@ -2597,6 +2722,7 @@ async function addOrcamentoItem() {
         renderBoard();
         cancelEditOrcamentoItem();
         renderOrcamentoItemsList(id);
+        lppRefreshOrcamentos(id);
     } catch (e) {
         console.error('Erro ao salvar orcamento', e);
         alert(e.message || 'Erro ao adicionar orçamento');
@@ -2630,6 +2756,7 @@ async function updateOrcamentoItem() {
         renderBoard();
         cancelEditOrcamentoItem();
         renderOrcamentoItemsList(id);
+        lppRefreshOrcamentos(id);
     } catch (e) {
         console.error('Erro ao editar orcamento', e);
         alert(e.message || 'Erro ao editar orçamento');
@@ -2652,6 +2779,7 @@ async function deleteOrcamentoItem(orcId) {
         renderBoard();
         cancelEditOrcamentoItem();
         renderOrcamentoItemsList(id);
+        lppRefreshOrcamentos(id);
     } catch (e) {
         console.error('Erro ao excluir orcamento', e);
         alert(e.message || 'Erro ao excluir orçamento');
@@ -3209,7 +3337,7 @@ function switchTab(tabId) {
     }
     
     if (window.location.pathname.includes('historico.html')) {
-        window.location.href = 'index.html';
+        window.location.href = 'index.html?goto=' + encodeURIComponent(tabId);
         return;
     }
 
@@ -3319,6 +3447,7 @@ function switchTab(tabId) {
         if (view) view.style.display = 'flex';
         if (typeof switchUtmTab === 'function') switchUtmTab('overview');
         if (typeof loadCampaigns === 'function') loadCampaigns();
+        if (typeof loadMetaAdsReport === 'function') loadMetaAdsReport();
     } else if (tabId === 'marketing') {
         const view = document.getElementById('view-marketing');
         if (view) view.style.display = 'flex';
@@ -4299,8 +4428,11 @@ function jumpToDate(dateString) {
 async function renderAgendaGrid() {
     const gridLayout = document.getElementById('agenda-grid-layout');
     const gridBody = document.getElementById('agenda-grid-body');
+    // Chamada sempre por fetchApiOptions() no boot, em toda página — mas o grid
+    // da agenda só existe no index.html (ex.: historico.html não tem).
+    if (!gridLayout || !gridBody) return;
     const loader = document.querySelector('.agenda-loader');
-    
+
     if (loader) loader.style.display = 'flex';
     gridBody.innerHTML = '';
     
@@ -4782,6 +4914,8 @@ function finishLogin(user) {
     loadUnidades();
     startHeartbeat();
     startHotLeadsBadgeClock();
+    // Pequeno delay: não competir com o resto da tela carregando logo após o login.
+    setTimeout(() => { if (typeof maybeOfferWebPush === 'function') maybeOfferWebPush(); }, 4000);
 }
 
 // === BADGE DE LEADS QUENTES (qualificados pela IA, esperando atendimento) ===
@@ -5552,7 +5686,7 @@ async function fetchNotifications() {
                     unreadNotifications++;
                     const badge = document.getElementById('nav-notification-badge');
                     if (badge) {
-                        badge.innerText = unreadNotifications;
+                        badge.innerText = unreadNotifications > 999 ? '999+' : unreadNotifications;
                         badge.style.display = 'flex';
                         badge.classList.remove('badge-popping');
                         void badge.offsetWidth;
@@ -8441,6 +8575,46 @@ function lppParseOrcamento(raw) {
     return [];
 }
 
+// Renderiza a lista de procedimentos orçados no painel da ficha do lead.
+// Reutilizada ao abrir a ficha e após adicionar/editar/excluir um item.
+function lppRefreshOrcamentos(leadId) {
+    const orcEl = document.getElementById('lpp-orcamentos');
+    if (!orcEl) return;
+    const lead = leads.find(l => l.id === leadId);
+    const orcamentos = lead ? lppParseOrcamento(lead.orcamento) : [];
+    if (!orcamentos.length) {
+        orcEl.innerHTML = '<span class="lpp-empty">Nenhum orçamento registrado.</span>';
+        return;
+    }
+    const total = orcamentos.reduce((s, o) => s + (parseFloat(o.valor) || 0), 0);
+    orcEl.innerHTML = orcamentos.map(o => {
+        const quando = o.created_at ? (lppFormatDateTime(o.created_at) || '') : '';
+        const autor = o.created_by ? resolveDisplayName(o.created_by) : '';
+        const avatar = (autor && typeof renderAvatarHTML === 'function')
+            ? renderAvatarHTML(autor, (typeof avatarMap !== 'undefined' && avatarMap[o.created_by]) || null, null, 14)
+            : '';
+        const metaLinha = autor
+            ? `${avatar}<span>${escapeHtml(autor)}${quando ? ` · ${quando}` : ''}</span>`
+            : (quando ? `<span>${quando}</span>` : '');
+        return `
+        <div class="lpp-orc-item">
+            <div style="display:flex;flex-direction:column;gap:0.2rem;">
+                <span class="lpp-orc-proc">${o.procedimento || '—'}</span>
+                ${metaLinha ? `<span style="display:flex;align-items:center;gap:0.3rem;font-size:0.72rem;color:var(--text-muted);">${metaLinha}</span>` : ''}
+            </div>
+            <span class="lpp-orc-valor">${lppFormatMoney(o.valor)}</span>
+        </div>`;
+    }).join('') + (orcamentos.length > 1 ? `<div class="lpp-orc-total"><span>Total</span><span>${lppFormatMoney(total)}</span></div>` : '');
+}
+
+// Botão "Adicionar procedimento" da ficha: abre o editor de orçamento completo
+// (autocomplete de procedimento, empresa, desconto, impressão). As mutações lá
+// chamam lppRefreshOrcamentos, então a lista da ficha atualiza sozinha.
+function lppNovoOrcamento() {
+    if (!_lppCurrentLeadId || typeof openOrcamentoModal !== 'function') return;
+    openOrcamentoModal(_lppCurrentLeadId);
+}
+
 async function openLeadProfile(leadId) {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
@@ -8604,22 +8778,7 @@ async function openLeadProfile(leadId) {
     lppSwitchTab('orc');
 
     // Orçamentos
-    const orcEl = document.getElementById('lpp-orcamentos');
-    const orcamentos = lppParseOrcamento(lead.orcamento);
-    if (orcamentos.length) {
-        const total = orcamentos.reduce((s, o) => s + (parseFloat(o.valor) || 0), 0);
-        orcEl.innerHTML = orcamentos.map(o => `
-            <div class="lpp-orc-item">
-                <div style="display:flex;flex-direction:column;gap:0.15rem;">
-                    <span class="lpp-orc-proc">${o.procedimento || '—'}</span>
-                    ${o.created_at ? `<span style="font-size:0.72rem;color:var(--text-muted);">${lppFormatDateTime(o.created_at)}</span>` : ''}
-                </div>
-                <span class="lpp-orc-valor">${lppFormatMoney(o.valor)}</span>
-            </div>
-        `).join('') + (orcamentos.length > 1 ? `<div class="lpp-orc-total"><span>Total</span><span>${lppFormatMoney(total)}</span></div>` : '');
-    } else {
-        orcEl.innerHTML = '<span class="lpp-empty">Nenhum orçamento registrado.</span>';
-    }
+    lppRefreshOrcamentos(leadId);
 
     // Histórico de agendamentos (async)
     const histEl = document.getElementById('lpp-historico');
@@ -8648,6 +8807,11 @@ async function openLeadProfile(leadId) {
         histEl.innerHTML = '<span class="lpp-empty">Erro ao carregar histórico.</span>';
     }
 
+    // Atividade (linha do tempo estruturada + comentários — separada das Notas)
+    const comentInput = document.getElementById('lpp-coment-input');
+    if (comentInput) comentInput.value = '';
+    await lppCarregarAtividade(leadId);
+
     // Abre como página dedicada (ocupa a tela toda).
     if (overlay) overlay.style.display = 'none';
     panel.classList.add('active');
@@ -8672,10 +8836,130 @@ document.addEventListener('keydown', (e) => {
     closeLeadProfile();
 });
 
-// Alterna entre as abas "Orçamentos" e "Histórico de agendamentos" na ficha do lead.
+// Traduz um evento de crm_lead_events (tipo/actor/detalhe/created_at) num item
+// legível da timeline da aba "Atividade" da ficha do lead.
+const LPP_EVENT_META = {
+    atendimento_iniciado:   { icon: 'fa-play',                  texto: 'iniciou o atendimento' },
+    atendimento_finalizado: { icon: 'fa-check',                 texto: 'finalizou o atendimento' },
+    orcamento_aberto:       { icon: 'fa-file-invoice-dollar',   texto: 'abriu orçamento' },
+    mudanca_coluna:         { icon: 'fa-arrow-right-arrow-left', texto: 'moveu de etapa' },
+    recontato:              { icon: 'fa-rotate-left',            texto: 'recontatou o lead' },
+    follow_up_automatico:   { icon: 'fa-robot',                  texto: 'follow-up automático enviado' },
+    lead_qualificado_ia:    { icon: 'fa-sparkles',               texto: 'a IA qualificou o lead' },
+    lead_descartado:        { icon: 'fa-ban',                    texto: 'descartou o lead' },
+    devolvido_para_ia:      { icon: 'fa-robot',                  texto: 'devolveu a conversa pra IA' },
+    comentario:             { icon: 'fa-comment',                texto: 'comentou' },
+};
+
+function lppEventActorLabel(actor) {
+    if (!actor) return 'Sistema';
+    if (actor === 'ia' || actor === 'sistema') return actor === 'ia' ? 'IA' : 'Sistema';
+    return (typeof resolveDisplayName === 'function') ? resolveDisplayName(actor) : actor;
+}
+
+function lppEventDetailLabel(tipo, detalhe) {
+    if (!detalhe) return '';
+    if (tipo === 'mudanca_coluna') {
+        try {
+            const { de, para } = JSON.parse(detalhe);
+            const label = (colId) => (typeof KANBAN_COLUMNS !== 'undefined' && KANBAN_COLUMNS[colId]) ? KANBAN_COLUMNS[colId].label : (colId || '—');
+            return `${label(de)} → ${label(para)}`;
+        } catch (e) { return ''; }
+    }
+    return detalhe;
+}
+
+function lppRenderAtividadeItem(ev) {
+    const meta = LPP_EVENT_META[ev.tipo] || { icon: 'fa-circle-dot', texto: ev.tipo };
+    const quando = ev.created_at ? lppFormatDateTime(ev.created_at) : '';
+    const quem = escapeHtml(lppEventActorLabel(ev.actor));
+
+    if (ev.tipo === 'comentario') {
+        const podeExcluir = ev.id && typeof loggedUser !== 'undefined' && loggedUser &&
+            (loggedUser.role === 'admin' || loggedUser.username === ev.actor);
+        const btnDel = podeExcluir
+            ? `<button type="button" title="Remover comentário" onclick="lppExcluirComentario('${ev.id}')"
+                 style="background:none;border:0;color:var(--text-muted);cursor:pointer;font-size:0.95rem;line-height:1;padding:0 0.2rem;">&times;</button>`
+            : '';
+        return `
+        <div class="lpp-hist-item">
+            <div class="lpp-hist-icon"><i class="fa-solid fa-comment"></i></div>
+            <div class="lpp-hist-info">
+                <div class="lpp-hist-proc" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                    <span><b>${quem}</b> comentou</span>${btnDel}
+                </div>
+                <div class="lpp-hist-meta">${quando}</div>
+                <div style="margin-top:0.35rem;white-space:pre-wrap;color:var(--text-main);font-size:0.86rem;">${escapeHtml(ev.detalhe || '')}</div>
+            </div>
+        </div>`;
+    }
+
+    const detalhe = escapeHtml(lppEventDetailLabel(ev.tipo, ev.detalhe));
+    return `
+    <div class="lpp-hist-item">
+        <div class="lpp-hist-icon"><i class="fa-solid ${meta.icon}"></i></div>
+        <div class="lpp-hist-info">
+            <div class="lpp-hist-proc"><b>${quem}</b> ${meta.texto}</div>
+            <div class="lpp-hist-meta">${quando}${detalhe ? ' · ' + detalhe : ''}</div>
+        </div>
+    </div>`;
+}
+
+// Recarrega a lista da aba Atividade (eventos + comentários).
+async function lppCarregarAtividade(leadId) {
+    const ativEl = document.getElementById('lpp-atividade');
+    if (!ativEl) return;
+    ativEl.innerHTML = `<span class="amicro-loader"><span></span><span></span><span></span></span>`;
+    try {
+        const json = await fetch(`/api/leads/${leadId}/events`).then(r => r.json());
+        const events = json.events || [];
+        ativEl.innerHTML = events.length
+            ? events.map(lppRenderAtividadeItem).join('')
+            : '<span class="lpp-empty">Sem atividade registrada ainda.</span>';
+    } catch (_) {
+        ativEl.innerHTML = '<span class="lpp-empty">Erro ao carregar atividade.</span>';
+    }
+}
+
+async function lppEnviarComentario() {
+    const input = document.getElementById('lpp-coment-input');
+    const btn = document.querySelector('#lpp-ativ-section .lpp-coment-box .btn-save');
+    const texto = (input && input.value || '').trim();
+    if (!texto || !_lppCurrentLeadId) return;
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch(`/api/leads/${_lppCurrentLeadId}/events`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ texto })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Erro ao comentar');
+        input.value = '';
+        await lppCarregarAtividade(_lppCurrentLeadId);
+    } catch (e) {
+        showToast(e.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function lppExcluirComentario(eventId) {
+    if (!_lppCurrentLeadId || !eventId) return;
+    if (!await customConfirm('Remover este comentário?', 'Remover')) return;
+    try {
+        const r = await fetch(`/api/leads/${_lppCurrentLeadId}/events/${eventId}`, { method: 'DELETE' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Erro ao remover');
+        await lppCarregarAtividade(_lppCurrentLeadId);
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+}
+
+// Alterna entre as abas "Orçamentos", "Histórico de agendamentos" e "Atividade" na ficha do lead.
 function lppSwitchTab(name) {
-    const tabs = { orc: 'lpp-tab-orc', hist: 'lpp-tab-hist' };
-    const panels = { orc: 'lpp-panel-orc', hist: 'lpp-panel-hist' };
+    const tabs = { orc: 'lpp-tab-orc', hist: 'lpp-tab-hist', ativ: 'lpp-tab-ativ' };
+    const panels = { orc: 'lpp-panel-orc', hist: 'lpp-panel-hist', ativ: 'lpp-panel-ativ' };
     Object.keys(tabs).forEach(key => {
         const tabEl = document.getElementById(tabs[key]);
         const panelEl = document.getElementById(panels[key]);
@@ -9601,7 +9885,7 @@ function mktRoasHtml(v, hasRevenue) {
     return '<span style="font-weight:700; color:' + color + ';">' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '×</span>';
 }
 
-// Período: presets (30 / 90 / 365 dias) ou intervalo custom via AirDatepicker,
+// Período: presets (7 / 30 / 90 dias) ou intervalo custom via AirDatepicker,
 // no mesmo padrão do Dashboard. Fonte da verdade: window._mktRange.
 function mktDefaultRange() {
     return {

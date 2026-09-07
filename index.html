@@ -15,6 +15,14 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
     <link rel="stylesheet" href="style.css?v=6">
     <link rel="icon" type="image/svg+xml" href="Favicon.svg">
+
+    <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <meta name="theme-color" content="#12141c">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Clínica CRM">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
         .sb-logo-full { height: 42px; width: auto; max-width: 230px; object-fit: contain; display: block; flex-shrink: 0; }
@@ -119,43 +127,6 @@
         #modalOrcamento .orc-pac-status[data-s="saving"] { color: var(--text-muted, #999); }
         #modalOrcamento .orc-pac-status[data-s="saved"] { color: #4caf7d; }
 
-        /* Dados da Empresa — seletor de logo */
-        #modalOrcamentoEmpresa .emp-logo-row {
-            display: flex;
-            gap: 0.9rem;
-            align-items: flex-start;
-        }
-        #modalOrcamentoEmpresa .emp-logo-preview {
-            width: 96px;
-            height: 96px;
-            flex-shrink: 0;
-            border-radius: 10px;
-            border: 1px dashed var(--border-color, rgba(255,255,255,0.18));
-            background: var(--bg-dark, rgba(0,0,0,0.15));
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted, #888);
-            font-size: 1.4rem;
-            overflow: hidden;
-        }
-        #modalOrcamentoEmpresa .emp-logo-preview img {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-        }
-        #modalOrcamentoEmpresa .emp-logo-actions {
-            display: flex;
-            flex-direction: column;
-            gap: 0.45rem;
-            align-items: flex-start;
-        }
-        #modalOrcamentoEmpresa .emp-logo-actions .aix-hint {
-            font-size: 0.72rem;
-            color: var(--text-muted, #888);
-            line-height: 1.35;
-        }
-
         /* Orçamento — seletor de empresa emitente */
         #modalOrcamento .orcx-empresa-pick {
             display: flex;
@@ -185,88 +156,8 @@
         }
         #modalOrcamento .orcx-empresa-manage:hover { color: var(--text-main, #eee); }
 
-        /* Gerenciador de Empresas — lista */
-        #modalOrcamentoEmpresa .emp-manager-modal { max-width: 560px; width: 92%; }
-        #modalOrcamentoEmpresa .emp-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.55rem;
-            max-height: 340px;
-            overflow-y: auto;
-            margin-bottom: 0.9rem;
-        }
-        #modalOrcamentoEmpresa .emp-card {
-            display: flex;
-            align-items: center;
-            gap: 0.8rem;
-            padding: 0.7rem 0.8rem;
-            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
-            border-radius: 10px;
-            background: var(--bg-dark, rgba(0,0,0,0.15));
-        }
-        #modalOrcamentoEmpresa .emp-card-logo {
-            width: 44px;
-            height: 44px;
-            flex-shrink: 0;
-            border-radius: 8px;
-            background: var(--bg-card, #222);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            color: var(--text-muted, #888);
-        }
-        #modalOrcamentoEmpresa .emp-card-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
-        #modalOrcamentoEmpresa .emp-card-info { flex: 1; min-width: 0; }
-        #modalOrcamentoEmpresa .emp-card-name {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-main, #eee);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        #modalOrcamentoEmpresa .emp-card-sub { font-size: 0.76rem; color: var(--text-muted, #999); }
-        #modalOrcamentoEmpresa .emp-badge {
-            font-size: 0.62rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: #4caf7d;
-            border: 1px solid currentColor;
-            border-radius: 999px;
-            padding: 0.05rem 0.4rem;
-            margin-left: 0.4rem;
-        }
-        #modalOrcamentoEmpresa .emp-card-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
-        #modalOrcamentoEmpresa .emp-card-actions button {
-            width: 30px;
-            height: 30px;
-            border-radius: 7px;
-            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
-            background: transparent;
-            color: var(--text-muted, #999);
-            cursor: pointer;
-            font-size: 0.78rem;
-        }
-        #modalOrcamentoEmpresa .emp-card-actions button:hover { color: var(--text-main, #eee); }
-        #modalOrcamentoEmpresa .emp-card-actions button.danger:hover { color: #e5484d; }
-        #modalOrcamentoEmpresa .emp-novo-btn { width: 100%; justify-content: center; }
-        #modalOrcamentoEmpresa .emp-empty {
-            font-size: 0.83rem;
-            color: var(--text-muted, #999);
-            text-align: center;
-            padding: 1.5rem 0;
-        }
-        #modalOrcamentoEmpresa .emp-default-toggle {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.83rem;
-            color: var(--text-main, #eee);
-            cursor: pointer;
-        }
-        #modalOrcamentoEmpresa #emp-editor-view { max-height: 60vh; overflow-y: auto; }
+        /* Gerenciador de Empresas — lista: CSS mudou pro style.css compartilhado
+           (era só daqui, quebrava em qualquer outra página que abrisse o mesmo modal). */
 
         /* ===== FLUXOS DE ATENDIMENTO — editor visual de nodes ===== */
         #view-fluxos { flex-direction: column; padding: 1rem clamp(0.75rem, 3vw, 1.5rem); overflow: hidden; height: 100%; }
@@ -1146,12 +1037,30 @@
             <button type="button" class="utm-tab" data-utm-tab="integration" role="tab" onclick="switchUtmTab('integration')">
                 <i class="fa-solid fa-code"></i> Integração
             </button>
+            <button type="button" class="utm-tab" data-utm-tab="metaads" role="tab" onclick="switchUtmTab('metaads')">
+                <i class="fa-brands fa-meta"></i> Anúncios Meta
+            </button>
         </div>
 
         <!-- ETAPA 1: Visão geral -->
         <div class="utm-tabpanel active" data-utm-panel="overview">
             <div class="utm-kpi-row" id="utm-kpi-row"></div>
             <div id="campaigns-top-ranking" style="display: none;"></div>
+        </div>
+
+        <!-- Anúncios Meta (Click-to-WhatsApp): leads com ctwa_clid, agrupados pelo
+             título do anúncio, comparado com o que a Meta viu (leitura direta dos
+             mesmos dados que alimentam a CAPI). -->
+        <div class="utm-tabpanel" data-utm-panel="metaads">
+            <div class="utm-panel">
+                <h3 class="utm-panel-title"><i class="fa-brands fa-meta" style="color: #38bdf8;"></i> Anúncios Meta (Click-to-WhatsApp)</h3>
+                <p class="utm-hint" style="margin: -0.5rem 0 1rem;">
+                    Leads que vieram de um clique real rastreado (têm ID de clique). Compare com o Gerenciador de Anúncios pra conferir se a atribuição está batendo, e veja se os eventos de conversão (CAPI) estão mesmo sendo enviados de volta pro Meta.
+                </p>
+                <div id="meta-ads-report-list">
+                    <div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;">Carregando...</div>
+                </div>
+            </div>
         </div>
 
         <!-- ETAPA 2: Nova campanha -->
@@ -1285,20 +1194,20 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
         <style>
             #view-marketing .mkt-toolbar { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
-            #view-marketing .mkt-toolbar > * { display: inline-flex; align-items: center; }
+            #view-marketing .mkt-toolbar > * { display: inline-flex; align-items: center; height: 36px; box-sizing: border-box; }
 
-            #view-marketing .mkt-btn { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--border-color); padding: 0.44rem 0.75rem; border-radius: 8px; background: var(--bg-card); color: var(--text-muted); cursor: pointer; font-size: 0.8rem; font-family: inherit; transition: color 0.15s, border-color 0.15s; }
+            #view-marketing .mkt-btn { display: inline-flex; align-items: center; height: 36px; box-sizing: border-box; gap: 0.4rem; border: 1px solid var(--border-color); padding: 0 0.75rem; border-radius: 8px; background: var(--bg-card); color: var(--text-muted); cursor: pointer; font-size: 0.8rem; font-family: inherit; transition: color 0.15s, border-color 0.15s; }
             #view-marketing .mkt-btn:hover { color: var(--text-main); border-color: var(--text-muted); }
             #view-marketing .mkt-btn:disabled { opacity: 0.55; cursor: default; }
-            #view-marketing .mkt-btn.mkt-icon { padding: 0.44rem 0.58rem; }
+            #view-marketing .mkt-btn.mkt-icon { padding: 0 0.58rem; }
 
             #view-marketing .mkt-segment { display: inline-flex; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); overflow: hidden; }
-            #view-marketing .mkt-segment button { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.8rem; padding: 0.44rem 0.85rem; cursor: pointer; transition: color 0.15s, background 0.15s; }
+            #view-marketing .mkt-segment button { display: inline-flex; align-items: center; height: 100%; box-sizing: border-box; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.8rem; padding: 0 0.85rem; cursor: pointer; transition: color 0.15s, background 0.15s; }
             #view-marketing .mkt-segment button + button { border-left: 1px solid var(--border-color); }
             #view-marketing .mkt-segment button:hover { color: var(--text-main); }
             #view-marketing .mkt-segment button.is-active { background: var(--bg-hover); color: var(--text-main); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent-primary); }
 
-            #view-marketing .mkt-daterange { gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.7rem; }
+            #view-marketing .mkt-daterange { gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0 0.7rem; }
             #view-marketing .mkt-daterange > i { color: var(--text-muted); font-size: 0.8rem; }
             #view-marketing .mkt-daterange input { border: 0; background: transparent; outline: none; color: var(--text-main); font: inherit; font-size: 0.8rem; width: 158px; cursor: pointer; }
             #view-marketing .mkt-daterange input::placeholder { color: var(--text-muted); }
@@ -1343,9 +1252,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
             <div class="mkt-toolbar">
                 <div class="mkt-segment" role="group" aria-label="Período">
+                    <button type="button" data-mkt-range="7" onclick="mktSetRange(7)">7 dias</button>
                     <button type="button" data-mkt-range="30" onclick="mktSetRange(30)">30 dias</button>
                     <button type="button" data-mkt-range="90" onclick="mktSetRange(90)">90 dias</button>
-                    <button type="button" data-mkt-range="365" onclick="mktSetRange(365)">1 ano</button>
                 </div>
                 <div class="mkt-daterange" id="mkt-daterange-wrap">
                     <i class="fa-regular fa-calendar"></i>
@@ -3823,7 +3732,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="display: none; position: absolute; bottom: 100%; left: 0; right: 0; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; max-height: 220px; overflow-y: auto; z-index: 1000; margin-bottom: 8px;">
                         </div>
                         <textarea id="chat-input-text" rows="1"
-                            placeholder="Mensagem, ou / para respostas rápidas"
+                            placeholder="Mensagem"
                             oninput="autoExpandChatInput(this); if(typeof handleQuickRepliesInput==='function') handleQuickRepliesInput(this); if(typeof saveChatDraftFromInput==='function') saveChatDraftFromInput();"
                             onkeydown="handleChatInputKeyDown(event)"
                             style="width: 100%; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.75rem 1.2rem; border-radius: 22px; outline: none; resize: none; min-height: 44px; max-height: 140px; font-family: inherit; font-size: 0.95rem; line-height: 1.4; box-sizing: border-box;"></textarea>
@@ -4235,10 +4144,18 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </div>
                     </div>
                     <div class="lnx-field full">
-                        <label for="ln-lead-valor">Valor de orçamento (R$)</label>
-                        <input type="text" inputmode="numeric" id="ln-lead-valor" class="form-control" placeholder="0,00"
-                            oninput="maskCurrencyInput(this)">
-                        <span class="lnx-hint">Deixe em branco se ainda não houver venda.</span>
+                        <label>Orçamento</label>
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;background:rgba(255,255,255,0.03);border:1px solid var(--border-color,#333);border-radius:8px;padding:0.7rem 0.85rem;">
+                            <div style="display:flex;flex-direction:column;gap:0.15rem;font-size:0.9rem;">
+                                <span><strong id="ln-orc-total">—</strong><span id="ln-orc-parc" style="color:var(--text-muted,#999);"></span></span>
+                                <span style="font-size:0.8rem;color:var(--text-muted,#999);">Recebido: <strong id="ln-orc-recebido">R$ 0,00</strong></span>
+                                <span id="ln-orc-criador" style="font-size:0.8rem;color:var(--text-muted,#999);" hidden>Criado por <strong></strong></span>
+                            </div>
+                            <button type="button" class="btn-secondary" style="white-space:nowrap;" onclick="editarOrcamentoDoLead()">
+                                <i class="fa-solid fa-file-invoice-dollar"></i> Editar orçamento
+                            </button>
+                        </div>
+                        <span class="lnx-hint">Procedimentos, valores e parcelas são montados no editor de orçamento.</span>
                     </div>
                 </section>
 
@@ -5338,10 +5255,19 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     id="lpp-tab-hist" aria-controls="lpp-panel-hist" onclick="lppSwitchTab('hist')">
                     <i class="fa-solid fa-calendar-check"></i> Histórico de agendamentos
                 </button>
+                <button type="button" class="lpp-tab" role="tab" aria-selected="false"
+                    id="lpp-tab-ativ" aria-controls="lpp-panel-ativ" onclick="lppSwitchTab('ativ')">
+                    <i class="fa-solid fa-clock-rotate-left"></i> Atividade
+                </button>
             </div>
 
             <div class="lpp-tabpanel" id="lpp-panel-orc" role="tabpanel" aria-labelledby="lpp-tab-orc">
                 <div id="lpp-orc-section">
+                    <div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem;">
+                        <button type="button" class="btn-save" style="padding:0.35rem 0.9rem;font-size:0.82rem;" onclick="lppNovoOrcamento()">
+                            <i class="fa-solid fa-file-invoice-dollar"></i> Novo orçamento
+                        </button>
+                    </div>
                     <div id="lpp-orcamentos" class="lpp-section-content"></div>
                 </div>
             </div>
@@ -5349,6 +5275,23 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="lpp-tabpanel" id="lpp-panel-hist" role="tabpanel" aria-labelledby="lpp-tab-hist" hidden>
                 <div id="lpp-hist-section">
                     <div id="lpp-historico" class="lpp-section-content"></div>
+                </div>
+            </div>
+
+            <!-- Linha do tempo: quem iniciou/finalizou atendimento, abriu orçamento,
+                 mudou de etapa, recontatou, etc. — separado das Notas (texto livre). -->
+            <div class="lpp-tabpanel" id="lpp-panel-ativ" role="tabpanel" aria-labelledby="lpp-tab-ativ" hidden>
+                <div id="lpp-ativ-section">
+                    <div class="lpp-coment-box" style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:0.9rem;">
+                        <textarea id="lpp-coment-input" rows="2" maxlength="2000" placeholder="Escreva um comentário…"
+                            style="width:100%;resize:vertical;background:var(--bg-main);border:1px solid var(--border-color);border-radius:8px;color:var(--text-main);padding:0.55rem 0.7rem;font:inherit;font-size:0.86rem;"></textarea>
+                        <div style="display:flex;justify-content:flex-end;">
+                            <button type="button" class="btn-save" style="padding:0.35rem 0.9rem;font-size:0.82rem;" onclick="lppEnviarComentario()">
+                                <i class="fa-solid fa-comment"></i> Comentar
+                            </button>
+                        </div>
+                    </div>
+                    <div id="lpp-atividade" class="lpp-section-content"></div>
                 </div>
             </div>
         </div>

@@ -1,5 +1,205 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-07 — Loader: sem trilho cinza, só o traço animado
+
+### Alterado
+* `.amicro-loader` (o loader "infinito" usado em todo lugar — "Carregando
+  conversas…", tabelas, botões, etc.): removido o trilho de fundo esmaecido
+  (`.mi-track`, era `opacity: 0.16`) e o segmento animado passou de `currentColor`
+  (cinza) pra `var(--text-main)` — branco no tema escuro, escuro no claro. Uma
+  regra só, cobre todos os pontos de carregamento.
+
+## 2026-09-07 — Chat: placeholder do input simplificado
+
+### Alterado
+* Placeholder da caixa de mensagem: "Mensagem, ou / para respostas rápidas" →
+  "Mensagem".
+
+## 2026-09-07 — Chat: removido "Encerrar atendimento" do menu Ferramentas
+
+### Removido
+* Item **"Encerrar atendimento"** do menu Ferramentas do chat (e a função
+  `endLeadService`, agora sem uso). O botão vermelho **"Finalizar atendimento"**
+  do cabeçalho continua. A rota `POST /api/leads/:id/end-service` foi mantida.
+
+## 2026-09-07 — Chat: bolinha de não lidas reaparecia após abrir a conversa
+
+### Corrigido
+* **`unread_count` voltava a >0 num reload depois de abrir a conversa.**
+  `mark-read` gravava `status='read'` em `wa_messages`, mas a lista de conversas
+  é servida de um cache (`crm_settings.wa_chats_cache`, TTL 5 min) que não era
+  remendado — então até o cache expirar, `GET /api/whatsapp/chats` devolvia a
+  contagem antiga e a bolinha reaparecia. Agora `mark-read` também zera o
+  `unread_count` (e ajusta o `status` da última mensagem) das linhas do telefone
+  no blob do cache, sem forçar a reconstrução da consulta cara.
+
+## 2026-09-07 — Ficha do lead: comentários na Atividade + criar orçamento no painel
+
+### Adicionado
+* **Botão "Novo orçamento" na aba Orçamentos da ficha do lead.** Abre o editor de
+  orçamento completo (`openOrcamentoModal`) já apontado pro lead. A lista da ficha
+  (`lppRefreshOrcamentos`) atualiza sozinha após adicionar/editar/excluir item —
+  sem precisar reabrir a ficha.
+* **Comentários na aba "Atividade" da ficha do lead.** Campo de texto + botão
+  "Comentar" acima da timeline. Vira um evento `tipo='comentario'` em
+  `crm_lead_events` (mesmo lugar dos eventos do sistema), com autor e data,
+  renderizado como bloco de texto na linha do tempo.
+  * `POST /api/leads/:id/events` (cria, máx. 2000 chars), `DELETE
+    /api/leads/:id/events/:eventId` (só comentário, só autor ou admin).
+  * `GET /api/leads/:id/events` agora devolve o `id` de cada evento.
+
+## 2026-09-07 — Ficha do lead: campo de valor vira resumo do orçamento
+
+### Alterado
+* **"Editar Lead" não tem mais o campo digitável "Valor de orçamento (R$)".**
+  No lugar, um resumo read-only: **`R$ X em Nx` · `Recebido: R$ Y`** (puxado do
+  orçamento estruturado + `valor_recebido`) e um botão **"Editar orçamento"** que
+  salva as edições pendentes da ficha e abre o editor de procedimentos
+  (`openOrcamentoModal`). O `nº de parcelas` sai do mesmo parser de texto livre
+  do servidor (`10x`, `em 12 vezes`, ...). Mostra também **"Criado por"** — o
+  `created_by` do item mais recente do orçamento (fallback: dono do lead),
+  resolvido pra nome de exibição. (O editor de procedimentos já mostrava o autor
+  por item.)
+* **Ficha completa do lead (lead-profile-panel), aba Orçamentos:** cada item
+  agora mostra **avatar + nome do autor · data** (mesmo estilo do editor de
+  procedimentos), em vez de só a data. Sem `created_by` no item, cai pra só a data.
+
+### Corrigido
+* **Hora do orçamento 3h adiantada no editor de procedimentos.** `whenTxt`
+  fatiava o `created_at` (UTC) cru; agora passa por `lppFormatDateTime`, que
+  converte pra `America/Sao_Paulo`. Ex.: "2026-09-07 19:41" → "07/09/2026, 16:41".
+* `saveLeadNotes` parou de enviar `valor_recebido` no `PUT /api/leads/:id` — a
+  ficha deixou de ser um segundo caminho de entrada de valor. `valor_recebido`
+  agora só muda pelo fluxo estruturado (marcar parcela paga, mudança de coluna,
+  webhook do PSP).
+
+## 2026-09-07 — Espelho Kanban→Financeiro: parcelamento + vencimento
+
+### Adicionado
+* **Orçamento parcelado vira carnê no Financeiro.** `syncLeadPagamento` lê o nº
+  de parcelas do texto livre do orçamento (`condições` / `forma` / `valor`:
+  "10x", "em 12 vezes", "6 parcelas"; sem indicação = 1x, teto 48) e espelha o
+  card como **N linhas** em `crm_pagamentos` (`origem_sync='kanban'`, parcela
+  1..N), divididas em centavos sem perder resto.
+* **Vencimento no espelho.** Base = data do orçamento (`data_valor`, fallback
+  hoje); parcela *i* vence `data_valor + i meses`. Com isso o orçamento pendente
+  passa a contar no aging de "Contas a receber" e no badge de vencidas — antes
+  entrava sem data e nunca vencia.
+* **Status por parcela.** `valor_recebido` marca como pagas as primeiras
+  parcelas que ele cobre (na ordem). Card em **Ganho** sem `valor_recebido`:
+  1x = pago (como antes); parcelado = todas **pendentes** (carnê ativo, não
+  quita sozinho). Sair de Ganho reverte pra pendente.
+* **Forma de pagamento** inferida do orçamento (pix / boleto / cartão / débito /
+  transferência / dinheiro), best-effort.
+* **"Registrado por" no Financeiro.** O espelho grava em `criado_por` o
+  `created_by` do item mais recente do orçamento (quem montou), com fallback pro
+  atendente dono do lead — antes ia o literal `'kanban'`. Nova coluna
+  "Registrado por" nas abas **Recebimentos** e **Contas a receber** (linha-pai e
+  parcelas). Linha antiga ainda marcada `'kanban'` aparece como "—" até o
+  próximo sync.
+* Índice `idx_pag_kanban_unico` passou de `(lead_id)` para `(lead_id, parcela)`;
+  dedup de corrida agora é por `(lead, parcela)`.
+
+### Atenção
+* Um orçamento em **col-orcado** (ainda não fechado) já gerava recebível
+  pendente; agora gera **N parcelas datadas** e, com o tempo, elas **vencem** no
+  aging. Se não quiser isso, tire `col-orcado` de `COLUNAS_COM_VALOR`.
+
+## 2026-09-07 — Financeiro: agrupamento de parcelas + esqueleto de cobrança PSP
+
+### Adicionado
+* **Recebimentos agrupa parcelamentos.** Plano de N parcelas vira uma linha-pai
+  recolhível (paciente · descrição · "X/N pagas" · total · próx. vencimento ·
+  quanto falta receber) que expande nas parcelas. Recebimento avulso e estorno
+  seguem soltos.
+* **Contas a receber também agrupa.** Mesma linha-pai recolhível na aba de aging
+  (próx. vencimento · pior atraso em vermelho · "X/N em aberto" · total pendente ·
+  carnê). Parcela avulsa fica solta.
+* **Badge de parcelas vencidas.** Pílula vermelha com a contagem na aba "Contas a
+  receber", carregada ao abrir o Financeiro — dá pra ver que tem coisa vencida
+  sem entrar na aba. `GET /api/financeiro/vencido` (agregado `COUNT`/`SUM`) +
+  índice `idx_pag_status_venc` pra ler só as linhas vencidas, sem varrer a
+  tabela. Atualiza ao baixar/excluir parcela e no botão "Atualizar".
+* **Cobrança Pix / boleto por parcela — pronto pra ligar a Efí ou Asaas.**
+  * `.env`: bloco `PSP_*` (provider, env, webhook token) + credenciais de cada
+    PSP, tudo vazio. Com `PSP_PROVIDER` em branco, os endpoints respondem 501 e
+    nada mais muda.
+  * `crm_pagamentos`: colunas `psp_*` (charge_id, metodo, qrcode, imagem, url,
+    linha digitável, status, raw).
+  * Adaptador único (`pspCreateCharge` / `pspParseWebhook`) com implementação
+    real pra **Asaas** (só precisa da API key) e **Efí Pix** (precisa do
+    certificado mTLS + `npm i undici`; boleto pela Efí fica pra depois).
+  * `POST /api/pagamentos/:id/cobranca` (gera), `GET` (reabre o QR),
+    `POST /api/webhooks/psp` (rota pública — marca a parcela paga quando o
+    dinheiro entra e reflete no card do Kanban).
+  * Front: botão "gerar cobrança" nas parcelas pendentes + modal com QR,
+    copia-e-cola e link da fatura.
+* **"Completar dados de cobrança" sob demanda.** Em vez de inchar o formulário
+  do lead, quando falta CPF/endereço na hora de gerar a cobrança:
+  * `leads`: colunas de endereço estruturado (`cep, logradouro, numero,
+    complemento, bairro, cidade, uf`) — o boleto do PSP exige endereço; o Pix
+    só o CPF. `endereco` (texto livre) segue populado como string de exibição.
+  * `POST /api/leads/:id/dados-cobranca` valida o CPF (dígito verificador),
+    formata o CEP e recompõe o `endereco` de exibição.
+  * `POST /api/pagamentos/:id/cobranca` responde `422 DADOS_INCOMPLETOS` com a
+    lista do que falta (`cpf` sempre; `cep/numero/logradouro/cidade/uf` só no
+    boleto) antes de bater no PSP.
+  * Front: o modal de cobrança troca pro formulário só com os campos que
+    faltam — máscara de CPF, validação no cliente, CEP faz lookup no ViaCEP e
+    preenche o resto. Salva no lead e volta a gerar a cobrança automaticamente.
+  * Dados repassados ao PSP: Asaas recebe `postalCode/address/addressNumber/
+    complement/province` no customer; Efí Pix só usa CPF + nome (o `/v2/cob`
+    não aceita endereço no devedor).
+* **Ações da linha num menu só.** Os botões soltos (cobrança / confirmar pago /
+  estornar / excluir) viraram um **⋮** que abre um menu: "Gerar Pix / boleto",
+  "Pagamento confirmado", "Estornar", "Excluir" — conforme o status e o papel.
+* **Carnê do plano** — botão na linha-pai do parcelamento abre
+  `GET /api/pagamentos/carne?ids=...`.
+  * **Capa**: beneficiário + pagador (nome/CPF/endereço), resumo do plano
+    (`Nx de R$ Y · forma`, 1º vencimento), **tabela** `Parcela | Vencimento |
+    Valor | Situação` e **resumo** `Total · Pago · Saldo devedor`.
+  * **Ficha por parcela** no layout de boleto: cabeçalho com logo + Vencimento e
+    Valor (em vermelho), blocos **Beneficiário / Pagador** com barra de seção,
+    **Detalhamento**, **Forma de pagamento** (valor final destacado),
+    **Informações adicionais**, linha de corte "✂ pague aqui", e então o QR do
+    Pix ou a linha digitável + link do boleto oficial.
+  * Nº do documento por parcela (`REF-PP/NN`), datas de emissão e do documento,
+    local de pagamento por método.
+  * Botão **"⎙ esta folha"** por página (capa incluída); "Imprimir tudo" no topo.
+  * Empresa vem de `crm_empresas` (`resolveEmpresaParaLead`). Sem dependência
+    nova. A **ficha de compensação bancária + código de barras + nosso número**
+    continuam vindo do PDF que a Efí/Asaas emite (link "Abrir boleto oficial").
+
+## 2026-09-07 — Sincronia Kanban → Financeiro: confiável e reversível (Fase 1)
+
+### Corrigido
+* **O espelho `crm_pagamentos` só "subia" — nunca voltava.** Card saía de Ganho
+  (ou perdia o `valor_recebido`) e a linha ficava `pago` pra sempre, com
+  `pago_em` gravado, entrando no fluxo de caixa. Agora `syncLeadPagamento` faz a
+  transição reversa `pago → pendente` (só nas linhas geridas pelo Kanban).
+* **Sync não disparava em toda ação do card.** Só rodava ao *entrar* numa coluna
+  de valor. Sair de Ganho/Agendado, **descartar** (`discard`) ou **encerrar
+  atendimento** (`end-service`) deixavam pagamento fantasma. Agora dispara em
+  qualquer mudança de coluna + nesses dois endpoints.
+* **`pago_em` era a data do orçamento, não do recebimento** — receita caía no mês
+  errado. Nova coluna `leads.data_pagamento`, carimbada na transição que torna o
+  card pago; o espelho usa ela.
+* **Corrida podia criar linha-espelho duplicada** (soma dobrava). Dedup-on-read
+  + índice único parcial best-effort + mesclagem das duplicatas legadas no boot.
+
+### Adicionado
+* `crm_pagamentos.origem_sync` (`kanban` | `kanban-detached` | `manual`) —
+  discrimina quem gerencia a linha. Só `kanban` é revertida pelo sync.
+* `crm_sync_log` (ring ~800) + `logSyncPag` — trilha de "por que esse número
+  mudou". Guard: valor > R$ 1M num lead aborta o sync e registra.
+* Fila de retry (`_dirtyLeadPag` + worker de 25s, só `!VERCEL`).
+* Descrição do espelho junta procedimentos (`"Botox + Preenchimento (+1)"`).
+
+### Fora desta fase (de propósito)
+* Back-sync Financeiro → Kanban; mover card por pagamento (trava do AGENTS.md);
+  unificar métrica de receita (muda histórico — precisa de preview); backfill
+  dos ganhos legados; regra "estorno manual zera o card".
+
 ## 2026-09-07 — Menu mobile: submenu "Campanhas"/"Relacionamento" não sai da tela
 
 ### Corrigido
@@ -8,6 +208,28 @@
   `≤768px` agora abrem como um painel **dentro do drawer**, logo abaixo do
   item, com largura = drawer − margem e scroll próprio se não couber.
   `openSidebarFlyout` ganhou o ramo mobile; o desktop segue igual.
+
+## 2026-09-07 — Financeiro: sidebar sincronizada com o app
+
+### Corrigido
+* A `historico.html` tinha uma **cópia velha da sidebar**: faltava Fluxos e
+  Mídias, "Campanhas" era um botão solto (sem o submenu Disparo / UTMs / ROI de
+  Anúncios), "Relacionamento" usava a estrutura antiga de dropdown, e não tinha
+  "Agente de IA". Agora o `<header>` é idêntico ao do `index.html`.
+* Clicar num item do menu na tela Financeiro passava pra `index.html` e caía na
+  view padrão — agora leva `?goto=<tab>` e abre a tela certa (`initApp` lê o
+  parâmetro, no mesmo esquema do `?open_chat`).
+* **Logo menor** na `historico.html` (`.sb-logo-full` 26px → 42px, igual ao
+  principal) e o **botão "Agente de IA"** aparecia como um círculo preto liso —
+  faltava o módulo `liquid-gradient.js` que anima o avatar `.lqa`. Adicionado.
+
+## 2026-09-07 — Financeiro: estado vazio limpo
+
+### Corrigido
+* A aba "Agendamentos" mostrava, abaixo do "Nenhum agendamento encontrado",
+  **15 linhas fantasma** (`--/--/----`, `R$ 0.00`, badge `-`) — parecia erro de
+  carregamento. Agora é só a mensagem centralizada, com ícone e a dica "ajuste
+  o período ou os filtros".
 
 ## 2026-09-07 — Kanban no celular: filtros colapsáveis
 
@@ -42,6 +264,15 @@
   texto. Coluna do textarea ganhou `min-width: 0` (encolhe direito no flex),
   placeholder encurtado, e no celular os ícones caem pra 34px com gaps menores
   pra sobrar largura pro campo.
+
+## 2026-09-07 — Biblioteca de Mídia: sem vão à direita e no rodapé
+
+### Alterado
+* `.midx-wrap` agora é **centralizada** (`margin-inline: auto`) — o `max-width`
+  de 1200px deixava um vão só do lado direito em telas largas.
+* A grade de arquivos cresce pra preencher a altura da view (`flex: 1` +
+  `overflow-y: auto`), então o espaço vazio fica **dentro** da caixa
+  delimitada ("espaço pra mais arquivos") em vez de um vão preto embaixo.
 
 ## 2026-09-07 — Biblioteca de Mídia: menos vazio (Impeccable)
 
