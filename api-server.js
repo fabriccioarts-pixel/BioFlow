@@ -1626,13 +1626,35 @@ Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano 
 // mundo (whatsapp_custom_tags, se vazia, vira só a lista que a gente salvar).
 const WHATSAPP_DEFAULT_TAGS_SEED = [
     { id: 'urgente', label: '🔥 Urgente', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' },
-    { id: 'vip', label: '⭐ VIP', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '#f59e0b' },
+    { id: 'vip', label: '⭐ VIP', bg: 'rgba(236, 72, 153, 0.15)', color: '#f472b6', border: '#ec4899' },
     { id: 'aguardando', label: '⏳ Aguardando Resposta', bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '#3b82f6' },
     { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(45, 212, 191, 0.15)', color: '#5eead4', border: '#2dd4bf' },
     { id: 'orcamento', label: '📄 Orçamento Enviado', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' },
     { id: 'retorno', label: '🔄 Retorno', bg: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '#f97316' }
 ];
 const WHATSAPP_AI_QUALIFIED_TAG_ID = 'ia-qualificado';
+
+// Migração 1x no boot: quem já tinha a lista de etiquetas salva (não é mais o
+// primeiro acesso) fica com a cor antiga do VIP mesmo depois da mudança acima
+// — a seed só entra em jogo quando a lista está vazia. Corrige em cima do que
+// já existe, idempotente (não faz nada se já estiver na cor nova).
+(async () => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+        if (!rows || !rows[0] || !rows[0].value) return;
+        const tags = JSON.parse(rows[0].value);
+        if (!Array.isArray(tags)) return;
+        const vip = tags.find(t => t.id === 'vip');
+        if (vip && vip.color === '#fbbf24') {
+            vip.bg = 'rgba(236, 72, 153, 0.15)'; vip.color = '#f472b6'; vip.border = '#ec4899';
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [JSON.stringify(tags)]
+            );
+            console.log('[tags] cor da etiqueta VIP migrada de âmbar pra magenta (evitar colisão com Oportunidade).');
+        }
+    } catch (e) { /* tabela ainda não existe nesse boot específico — sem problema */ }
+})();
 
 // Garante que a etiqueta "Qualificado (IA)" existe na lista compartilhada de
 // etiquetas (crm_settings.whatsapp_custom_tags), criando-a (e semeando as
@@ -1646,8 +1668,21 @@ async function ensureQualifiedTagExists() {
     if (!Array.isArray(tags) || tags.length === 0) {
         tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
     }
-    if (!tags.some(t => t.id === WHATSAPP_AI_QUALIFIED_TAG_ID)) {
-        tags.push({ id: WHATSAPP_AI_QUALIFIED_TAG_ID, label: '🎯 Qualificado (IA)', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' });
+    // Roxo — mesma cor que "IA" já significa no resto do sistema (Resumir, Agente
+    // de IA). Antes era verde-esmeralda, idêntico à etiqueta "Orçamento Enviado" —
+    // duas etiquetas diferentes ficavam visualmente idênticas no card do lead.
+    const QUALIFIED_TAG_DEF = { id: WHATSAPP_AI_QUALIFIED_TAG_ID, label: '🎯 Qualificado (IA)', bg: 'rgba(167, 139, 250, 0.15)', color: '#a78bfa', border: '#8b5cf6' };
+    const existingQualified = tags.find(t => t.id === WHATSAPP_AI_QUALIFIED_TAG_ID);
+    if (!existingQualified) {
+        tags.push(QUALIFIED_TAG_DEF);
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify(tags)]
+        );
+    } else if (existingQualified.color !== QUALIFIED_TAG_DEF.color) {
+        // Auto-cura: lead qualificado antes da correção de cor fica com a etiqueta
+        // antiga salva em crm_settings — atualiza pra todo mundo ver a cor nova.
+        Object.assign(existingQualified, QUALIFIED_TAG_DEF);
         await queryD1(
             "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [JSON.stringify(tags)]
@@ -9400,8 +9435,15 @@ async function ensureOpportunityTagExists() {
     let tags = [];
     if (rows && rows[0] && rows[0].value) { try { tags = JSON.parse(rows[0].value); } catch (e) {} }
     if (!Array.isArray(tags) || tags.length === 0) tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
-    if (!tags.some(t => t.id === OPPS_TAG_ID)) {
-        tags.push({ id: OPPS_TAG_ID, label: '💰 Oportunidade', bg: 'rgba(234, 179, 8, 0.15)', color: '#fbbf24', border: '#eab308' });
+    // Índigo — a cor antiga (âmbar) era idêntica à etiqueta "VIP", as duas
+    // ficavam indistinguíveis lado a lado no card do lead.
+    const OPPS_TAG_DEF = { id: OPPS_TAG_ID, label: '💰 Oportunidade', bg: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: '#6366f1' };
+    const existingOpp = tags.find(t => t.id === OPPS_TAG_ID);
+    if (!existingOpp) {
+        tags.push(OPPS_TAG_DEF);
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(tags)]);
+    } else if (existingOpp.color !== OPPS_TAG_DEF.color) {
+        Object.assign(existingOpp, OPPS_TAG_DEF);
         await queryD1("INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(tags)]);
     }
     return OPPS_TAG_ID;

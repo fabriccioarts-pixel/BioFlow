@@ -1929,7 +1929,7 @@ function updateChatStageUI(columnId) {
     const badgeEl = document.getElementById('chat-current-stage-badge');
     
     const stageMap = {
-        'col-entrada': { name: '📥 Entrada', border: 'rgba(52, 211, 153, 0.35)', color: '#34d399' },
+        'col-entrada': { name: '📥 Entrada', border: 'rgba(100, 116, 139, 0.4)', color: '#94a3b8' },
         'col-contatado': { name: '💬 Contatado', border: 'rgba(251, 191, 36, 0.35)', color: '#fbbf24' },
         'col-orcado': { name: '📄 Orçado', border: 'rgba(56, 189, 248, 0.35)', color: '#38bdf8' },
         'col-agendado': { name: '📅 Agendado', border: 'rgba(45, 212, 191, 0.35)', color: '#2dd4bf' },
@@ -1963,7 +1963,7 @@ function selectStageOption(columnId) {
 
 const DEFAULT_TAGS = [
     { id: 'urgente', label: '🔥 Urgente', bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '#ef4444' },
-    { id: 'vip', label: '⭐ VIP', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '#f59e0b' },
+    { id: 'vip', label: '⭐ VIP', bg: 'rgba(236, 72, 153, 0.15)', color: '#f472b6', border: '#ec4899' },
     { id: 'aguardando', label: '⏳ Aguardando Resposta', bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '#3b82f6' },
     { id: 'interessado', label: '💉 Interesse em Procedimento', bg: 'rgba(45, 212, 191, 0.15)', color: '#5eead4', border: '#2dd4bf' },
     { id: 'orcamento', label: '📄 Orçamento Enviado', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '#10b981' },

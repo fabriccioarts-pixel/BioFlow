@@ -8438,14 +8438,20 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // === LEAD PROFILE PANEL ===
+// Cores alinhadas com o Kanban (index.html/style.css) e o badge de estágio do
+// chat (wa_chat_logic.js stageMap) — antes esse mapa tinha valores próprios,
+// divergentes dos outros 3 lugares, e a ficha completa do lead (openLeadProfile)
+// mostrava uma cor de etapa diferente da que aparecia no board e no chat.
+// "Entrada" saiu do verde (idêntico ao "Ganho") pra um neutro — a etapa de
+// chegada não deveria visualmente "roubar" a cor reservada pra sucesso.
 const KANBAN_COLUMNS = {
-    'col-entrada':     { label: 'Novo Lead',    color: 'var(--accent-primary)', icon: 'fa-star' },
-    'col-contatado':   { label: 'Contatado',    color: '#60a5fa',               icon: 'fa-phone' },
-    'col-orcado':      { label: 'Orçado',       color: 'var(--accent-warning)', icon: 'fa-file-invoice-dollar' },
-    'col-agendado':    { label: 'Agendado',     color: 'var(--accent-success)', icon: 'fa-calendar-check' },
-    'col-ganho':       { label: 'Ganho',        color: '#34d399',               icon: 'fa-trophy' },
-    'col-perdido':     { label: 'Follow Up',    color: '#fb923c',               icon: 'fa-arrow-rotate-left' },
-    'col-atendimento': { label: 'Em Atendimento', color: '#2dd4bf',             icon: 'fa-headset' },
+    'col-entrada':     { label: 'Novo Lead',    color: '#64748b',  icon: 'fa-inbox' },
+    'col-contatado':   { label: 'Contatado',    color: '#fbbf24',  icon: 'fa-phone' },
+    'col-orcado':      { label: 'Orçado',       color: '#38bdf8',  icon: 'fa-file-invoice-dollar' },
+    'col-agendado':    { label: 'Agendado',     color: '#2dd4bf',  icon: 'fa-calendar-check' },
+    'col-ganho':       { label: 'Ganho',        color: '#10b981',  icon: 'fa-trophy' },
+    'col-perdido':     { label: 'Follow Up',    color: '#fb923c',  icon: 'fa-arrow-rotate-left' },
+    'col-atendimento': { label: 'Em Atendimento', color: '#2dd4bf', icon: 'fa-headset' },
 };
 
 let _lppCurrentLeadId = null;

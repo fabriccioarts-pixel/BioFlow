@@ -332,10 +332,12 @@
     --accent-warning: #fbbf24;
     --accent-danger: #f87171;
     --accent-info: #38bdf8;
+    --accent-purple: #a78bfa;
     --accent-success-tint: rgba(16, 185, 129, 0.12);
     --accent-warning-tint: rgba(251, 191, 36, 0.12);
     --accent-danger-tint: rgba(248, 113, 113, 0.12);
     --accent-info-tint: rgba(56, 189, 248, 0.12);
+    --accent-purple-tint: rgba(167, 139, 250, 0.12);
     --bg-main: hsl(230, 12%, 10%);
     --bg-hover: hsl(230, 9%, 16%);
     --border-color: hsl(var(--border));
@@ -2519,7 +2521,7 @@ select.form-control option,
     border-color: var(--text-muted);
 }
 .agenda-prof-count {
-    background: var(--accent-primary, #c8a04a);
+    background: var(--accent-primary);
     color: #fff;
     font-size: 0.68rem;
     font-weight: 700;
@@ -2559,7 +2561,7 @@ select.form-control option,
     cursor: pointer;
 }
 .agenda-prof-panel-actions button:hover {
-    background: var(--accent-primary-soft, rgba(200, 160, 74, 0.16));
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
 }
 .agenda-prof-list {
     overflow-y: auto;
@@ -2578,10 +2580,10 @@ select.form-control option,
     cursor: pointer;
 }
 .agenda-prof-item:hover {
-    background: var(--accent-primary-soft, rgba(200, 160, 74, 0.14));
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
 }
 .agenda-prof-item input {
-    accent-color: var(--accent-primary, #c8a04a);
+    accent-color: var(--accent-primary);
     cursor: pointer;
 }
 .agenda-prof-empty {
@@ -3823,7 +3825,7 @@ select.form-control option,
 
 /* Column Top Border Accents */
 .col-entrada .card {
-    border-top: 3px solid #34d399 !important;
+    border-top: 3px solid #64748b !important;
 }
 
 .col-contatado .card {
