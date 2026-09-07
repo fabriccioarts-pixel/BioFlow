@@ -467,6 +467,12 @@ function toggleTheme() {
             icon.classList.add('fa-moon');
         }
     }
+
+    // Os gráficos do dashboard leem as cores do tema no momento em que são
+    // criados — sem isso, ficam com a paleta do tema anterior até um reload.
+    if (document.getElementById('view-dashboard')?.style.display !== 'none' && typeof renderDashboard === 'function') {
+        renderDashboard();
+    }
 }
 // === KANBAN SSE — sincronização em tempo real ===
 function initKanbanSSE() {
@@ -3276,7 +3282,9 @@ function switchTab(tabId) {
                 if (document.getElementById('view-dashboard')?.style.display !== 'none') {
                     await fetchLeadsFromServer(true);
                     await loadDashboardResponseMetrics();
-                    renderDashboard();
+                    // Refresh silencioso: sem re-animar os 3 gráficos a cada 60s.
+                    window._dashSilentRender = true;
+                    try { renderDashboard(); } finally { window._dashSilentRender = false; }
                 }
             }, 60000);
         }
@@ -3483,7 +3491,13 @@ function renderContatos() {
         const etapa = col
             ? `<span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:${col.color};"><i class="fa-solid ${col.icon}" style="font-size:0.7rem;"></i> ${col.label}</span>`
             : `<span style="color:var(--text-muted);">—</span>`;
-        const nomeSafe = escapeHtml(r.nome || 'Lead WhatsApp');
+        const nomeRaw = (r.nome || 'Lead WhatsApp').trim();
+        const nomeSafe = escapeHtml(nomeRaw);
+        const letter = nomeRaw.match(/[A-Za-zÀ-ÿ]/);
+        const avatar = letter
+            ? `<div class="ct-avatar">${escapeHtml(letter[0].toUpperCase())}</div>`
+            : `<div class="ct-avatar"><i class="fa-solid fa-user"></i></div>`;
+        const inbound = Number(r.inbound_count) || 0;
         const phoneJs = String(r.phone || '').replace(/'/g, "\\'");
         const nomeJs = nomeSafe.replace(/'/g, "\\'");
         const leadIdJs = r.leadId ? String(r.leadId).replace(/'/g, "\\'") : '';
@@ -3491,23 +3505,20 @@ function renderContatos() {
         return `
         <tr ${rowClickable ? `onclick="openLeadProfile('${leadIdJs}')" style="cursor:pointer;" title="Ver ficha completa do paciente"` : ''}>
             <td style="font-weight:500;">
-                <div style="display:flex; align-items:center; gap:0.75rem;">
-                    <div style="width:32px; height:32px; border-radius:50%; background:rgba(59,130,246,0.1); display:flex; align-items:center; justify-content:center; color:var(--accent-primary); flex-shrink:0;">
-                        <i class="fa-solid fa-user"></i>
-                    </div>
-                    ${nomeSafe}
+                <div style="display:flex; align-items:center; gap:0.7rem; min-width:0;">
+                    ${avatar}
+                    <span class="ct-name" title="${nomeSafe}">${nomeSafe}</span>
                 </div>
             </td>
             <td>${formatPhone(r.phone)}</td>
-            <td style="color:var(--text-muted);">${escapeHtml(r.origem || '—')}</td>
+            <td style="color:var(--text-muted);" title="${escapeHtml(r.origem || '')}">${escapeHtml(r.origem || '—')}</td>
             <td>${etapa}</td>
             <td>${fmtContatoDate(r.first_contact)}</td>
             <td>${fmtContatoDate(r.last_contact)}</td>
-            <td style="text-align:center;">${r.total_messages}<br><small style="color:var(--text-muted);">${r.inbound_count} recebidas</small></td>
-            <td style="text-align:center;">
-                <button class="btn-secondary" onclick="event.stopPropagation(); abrirConversaContato('${phoneJs}', '${nomeJs}')"
-                    style="width:100%; justify-content:center; background:rgba(16,185,129,0.15); color:var(--accent-success); border-color:rgba(16,185,129,0.3); padding:0.5rem;">
-                    <i class="fa-brands fa-whatsapp"></i> Abrir conversa
+            <td style="text-align:right;">${r.total_messages} <span style="color:var(--text-muted);">· ${inbound} ${inbound === 1 ? 'recebida' : 'recebidas'}</span></td>
+            <td style="text-align:right;">
+                <button class="ct-open" onclick="event.stopPropagation(); abrirConversaContato('${phoneJs}', '${nomeJs}')" title="Abrir conversa no chat">
+                    <i class="fa-brands fa-whatsapp"></i> Abrir
                 </button>
             </td>
         </tr>`;
@@ -5475,10 +5486,12 @@ async function fetchNotifications() {
                 
                 // Adiciona na lista do menu
                 if (listContainer) {
+                    // created_at vem em UTC do D1 (CURRENT_TIMESTAMP) — precisa converter
+                    // pro fuso do navegador, não só recortar a string (senão fica 3h adiantado).
                     let timeStr = '';
                     if (n.created_at) {
-                        if (n.created_at.includes('T')) timeStr = n.created_at.split('T')[1].slice(0,5);
-                        else timeStr = n.created_at.split(' ')[1].slice(0,5);
+                        const ms = (typeof parseD1TimestampMs === 'function') ? parseD1TimestampMs(n.created_at) : NaN;
+                        timeStr = ms ? new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
                     }
                     
                     // Tipo da notificação (só pra cor/ícone) — inferido da mensagem.
@@ -6873,6 +6886,19 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     const isDark = document.body.getAttribute('data-theme') !== 'light';
     const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
     const textColor = isDark ? '#a1a1aa' : '#71717a';
+    const cssVar = (name, fallback) => {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+    };
+    const accent = cssVar('--accent-primary', '#38bdf8');
+    const accentFill = isDark
+        ? ['rgba(56,189,248,0.38)', 'rgba(56,189,248,0.08)', 'rgba(56,189,248,0)']
+        : ['rgba(2,132,199,0.22)', 'rgba(2,132,199,0.05)', 'rgba(2,132,199,0)'];
+    // Alternativa textual dos gráficos <canvas> — leitor de tela não lê pixels.
+    const setChartAria = (id, label) => {
+        const c = document.getElementById(id);
+        if (c) { c.setAttribute('role', 'img'); c.setAttribute('aria-label', label); }
+    };
 
     // Leads Line Chart — respeita o período selecionado
     const days = [], counts = [];
@@ -6893,10 +6919,12 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     const ctxLeads = document.getElementById('leadsChart');
     if (ctxLeads) {
         if (leadsChartInst) leadsChartInst.destroy();
+        const totalNovos = counts.reduce((a, b) => a + b, 0);
+        setChartAria('leadsChart', `Gráfico de linha: novos leads por dia nos últimos 14 dias. Total ${totalNovos}.`);
         const leadsGrad = ctxLeads.getContext('2d').createLinearGradient(0, 0, 0, ctxLeads.offsetHeight || 220);
-        leadsGrad.addColorStop(0,   'rgba(56, 189, 248, 0.38)');
-        leadsGrad.addColorStop(0.65,'rgba(56, 189, 248, 0.08)');
-        leadsGrad.addColorStop(1,   'rgba(56, 189, 248, 0)');
+        leadsGrad.addColorStop(0,   accentFill[0]);
+        leadsGrad.addColorStop(0.65,accentFill[1]);
+        leadsGrad.addColorStop(1,   accentFill[2]);
         leadsChartInst = new Chart(ctxLeads, {
             type: 'line',
             data: {
@@ -6904,12 +6932,12 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 datasets: [{
                     label: 'Novos Leads',
                     data: counts,
-                    borderColor: '#38bdf8',
+                    borderColor: accent,
                     tension: 0.4,
                     fill: true,
                     backgroundColor: leadsGrad,
-                    pointBackgroundColor: '#38bdf8',
-                    pointBorderColor: '#ffffff',
+                    pointBackgroundColor: accent,
+                    pointBorderColor: cssVar('--bg-card', '#ffffff'),
                     pointBorderWidth: 2,
                     pointRadius: 0,
                     pointHoverRadius: 6,
@@ -6918,6 +6946,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
+                animation: window._dashSilentRender ? false : undefined,
                 interaction: {
                     mode: 'index',
                     intersect: false,
@@ -6940,22 +6969,22 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                     } 
                 },
                 scales: {
-                    x: { 
-                        grid: { display: false, drawBorder: false }, 
-                        ticks: { 
-                            color: 'rgba(255, 255, 255, 0.5)', 
+                    x: {
+                        grid: { display: false, drawBorder: false },
+                        ticks: {
+                            color: textColor,
                             font: { size: 11 },
                             maxTicksLimit: 5, // Sparse x-axis labels
                             maxRotation: 0
                         },
                         border: { display: false }
                     },
-                    y: { 
-                        grid: { 
-                            color: 'rgba(255, 255, 255, 0.05)', // Super subtle grid
+                    y: {
+                        grid: {
+                            color: gridColor, // subtle, theme-aware
                             drawBorder: false,
                             borderDash: [5, 5] // Dashed lines
-                        }, 
+                        },
                         ticks: { display: false }, // Hide Y-axis numbers completely
                         beginAtZero: true,
                         border: { display: false }
@@ -6985,7 +7014,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         funnelContainer.style.position = 'relative';
         funnelContainer.style.display = 'flex';
         funnelContainer.style.flexDirection = 'row';
-        
+
         const data = [
             { label: 'Entrada', value: colEnt },
             { label: 'Contatado', value: colCont },
@@ -6993,6 +7022,10 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
             { label: 'Agendado', value: colAgen },
             { label: 'Ganho', value: colGanho }
         ];
+
+        funnelContainer.setAttribute('role', 'img');
+        funnelContainer.setAttribute('aria-label',
+            'Funil de vendas: ' + data.map(d => `${d.label} ${d.value}`).join(', ') + '.');
 
         const n = data.length;
         const formatValue = (val) => val >= 1000 ? (val/1000).toFixed(1).replace('.0','') + 'k' : val.toString();
@@ -7076,7 +7109,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 </div>
                 
                 <!-- Center Badge (Pill) -->
-                <div style="position: absolute; top: 50%; left: ${x_c}%; transform: translate(-50%, -50%); background: #ffffff; color: #000000; font-size: 0.75rem; font-weight: 800; padding: 0.2rem 0.65rem; border-radius: 999px; box-shadow: none; animation: funnel-zoom-in 0.4s ease forwards; animation-delay: ${delay + 0.2}s; opacity: 0;">
+                <div style="position: absolute; top: 50%; left: ${x_c}%; transform: translate(-50%, -50%); background: var(--text-main); color: var(--bg-card); font-size: 0.75rem; font-weight: 800; padding: 0.2rem 0.65rem; border-radius: 999px; animation: funnel-zoom-in 0.4s ease forwards; animation-delay: ${delay + 0.2}s; opacity: 0;">
                     ${perc}
                 </div>
                 
@@ -7104,6 +7137,12 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         } else {
             ctxOrigem.style.display = '';
 
+            const origemTotal = origemValues.reduce((a, b) => a + b, 0);
+            const origemResumo = origemLabels
+                .map((l, i) => `${l} ${origemTotal ? Math.round(origemValues[i] / origemTotal * 100) : 0}%`)
+                .join(', ');
+            setChartAria('origemChart', `Gráfico de rosca: origem dos leads. ${origemResumo}.`);
+
             origemChartInst = new Chart(ctxOrigem, {
                 type: 'doughnut',
                 data: {
@@ -7120,6 +7159,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false,
+                    animation: window._dashSilentRender ? false : undefined,
                     cutout: '72%',
                     plugins: { legend: { display: false }, tooltip: { mode: 'index' } }
                 }
@@ -8244,6 +8284,17 @@ function lppCopyPhone(event, phone) {
     });
 }
 
+function lppCopyText(event, text) {
+    event.stopPropagation();
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(String(text || '')).then(() => {
+        const btn = event.currentTarget;
+        const prev = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        setTimeout(() => { btn.innerHTML = prev; }, 1400);
+    }).catch(() => {});
+}
+
 function lppInitials(name) {
     if (!name) return '?';
     const parts = name.trim().split(/\s+/);
@@ -8371,9 +8422,12 @@ async function openLeadProfile(leadId) {
             <i class="fa-${isMeta ? 'brands fa-meta' : 'solid fa-seedling'}"></i>
             ${lead.origem || 'Orgânico'}
         </span>
-        ${clickId ? `<div style="margin-top:0.5rem;">
-            <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:0.25rem;">${clickLabel}</div>
-            <span class="lpp-ad-id">${escapeHtml(String(clickId))}</span>
+        ${clickId ? `<div style="margin-top:0.6rem;">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem;">${clickLabel}</div>
+            <div class="lpp-ad-id-row">
+                <code class="lpp-ad-id" title="${escapeHtml(String(clickId))}">${escapeHtml(String(clickId))}</code>
+                <button type="button" class="lpp-ad-id-copy" title="Copiar" onclick="lppCopyText(event, this.previousElementSibling.textContent)"><i class="fa-regular fa-copy"></i></button>
+            </div>
         </div>` : ''}
     `;
 

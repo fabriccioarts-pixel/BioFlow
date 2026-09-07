@@ -1,5 +1,55 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-07 — Dashboard: correções do audit Impeccable (a11y, tema, perf)
+
+### Corrigido
+* **Gráficos `<canvas>` + funil SVG** agora expõem `role="img"` + `aria-label`
+  com o resumo dos dados — antes eram invisíveis pra leitor de tela (WCAG 1.1.1).
+* **Chart.js lia cor fixa de tema escuro:** `leadsChart` usava `#38bdf8`,
+  `rgba(255,255,255,0.5)` (ticks) e `rgba(255,255,255,0.05)` (grade) direto —
+  no tema claro os eixos sumiam. Agora lê `--accent-primary` e as cores de
+  texto/grade já calculadas por tema. `toggleTheme` re-renderiza o dashboard se
+  estiver aberto (Chart.js fixa as cores na criação).
+* **Botão de período ativo** era texto branco sobre `--accent-primary` (2.1:1,
+  falha AA). Virou fundo `--bg-hover` + sublinhado `--accent-primary`, igual ao
+  segmented control do ROI.
+* **Hierarquia de heading:** "Meta de Receita" era `<h3>` logo após o `<h1>` —
+  virou `<h2>`. Emoji do título com `aria-hidden`.
+* **Poll de 60s** deixou de re-animar os 3 gráficos a cada ciclo
+  (`window._dashSilentRender` → `animation: false` no Chart.js).
+* Pílula de % do funil (`#fff`/`#000` fixos) e ícone da meta (`#60a5fa`) →
+  tokens. `chart.js` do CDN pinado em `@4` (era `latest`).
+
+## 2026-09-07 — Ficha do lead: aproveita a largura, menos scroll (Impeccable)
+
+### Alterado
+* **`#lead-profile-panel`** deixou de ser uma coluna estreita (820px) centrada
+  numa tela larga com metros de vazio dos lados:
+  * conteúdo até 1060px; **Origem + Informações lado a lado** (grid 2 col a
+    partir de 880px), separador único sob o par em vez de um por card.
+  * `padding` das seções 1.75rem → 1.25rem e do header 3rem → 2rem — cabe tudo
+    com bem menos rolagem.
+* **"ID do Clique Meta"** (ctwa_clid, ~100 chars) parava de quebrar em 2 linhas
+  num bloco monospace: agora trunca com reticências (`title` mostra inteiro) +
+  botão de copiar (`lppCopyText`).
+
+## 2026-09-07 — Base de Contatos: densidade e larguras (Impeccable, modo Operate)
+
+### Alterado
+* **Tabela da Base de Contatos** (`#view-contatos`, scoped — não mexe no
+  `.crm-table` compartilhado das outras telas de relacionamento):
+  * `table-layout: fixed` + `<colgroup>` com larguras fixas nas colunas de dados
+    — acaba com a coluna "Contato" ocupando ~metade da tela e o resto espremido.
+  * Linhas mais densas (padding 1rem → 0.6rem) e cabeçalho 0.72rem maiúsculo;
+    cabem mais contatos na tela.
+  * Nome com avatar de **inicial** (letra) em vez de ícone genérico; trunca com
+    reticências (title no hover mostra o nome inteiro). Origem também trunca.
+  * "Msgs" alinhado à direita e em linha (`3 · 1 recebida`, singular correto).
+  * Ação "Abrir conversa" (pílula verde 100% da largura em toda linha) virou um
+    botão discreto "Abrir" com contorno, verde só no hover.
+  * `font-variant-numeric: tabular-nums`, hover de linha via `--bg-hover`, anel
+    de foco `--accent-primary`.
+
 ## 2026-09-07 — Meta Marketing API: gasto de anúncio + ROI por campanha (Fase 1)
 
 ### Adicionado

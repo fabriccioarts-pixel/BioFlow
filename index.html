@@ -1353,7 +1353,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         <div
             style="padding: 2rem 2rem 0 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
             <div>
-                <h1 style="font-size: 1.5rem; font-weight: 700; color: var(--text-main); margin: 0;">📊 Visão Geral</h1>
+                <h1 style="font-size: 1.5rem; font-weight: 700; color: var(--text-main); margin: 0;"><span aria-hidden="true">📊</span> Visão Geral</h1>
                 <p style="color: var(--text-muted); font-size: 0.875rem; margin: 0.3rem 0 0 0;" id="dash-subtitle">
                     Carregando dados...</p>
             </div>
@@ -1583,9 +1583,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); display: none;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.6rem;">
                     <div>
-                        <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
-                            <i class="fa-solid fa-bullseye" style="color: #60a5fa;"></i> Meta de Receita
-                        </h3>
+                        <h2 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fa-solid fa-bullseye" style="color: var(--accent-primary);" aria-hidden="true"></i> Meta de Receita
+                        </h2>
                         <p id="dash-goal-subtitle" style="font-size: 0.78rem; color: var(--text-muted); margin: 0.2rem 0 0 0;"></p>
                     </div>
                     <button id="dash-goal-edit-btn" onclick="openDashGoalEditor()" class="btn-secondary" style="display: none; font-size: 0.78rem; padding: 0.4rem 0.8rem;">
@@ -2356,6 +2356,19 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- ABA: CONTATOS (base de todo mundo que já falou com a clínica no WhatsApp) -->
     <main class="relacionamento" id="view-contatos"
         style="display: none; padding: 2rem; flex-grow: 1; flex-direction: column;">
+
+        <style>
+            #view-contatos .crm-table { table-layout: fixed; font-variant-numeric: tabular-nums; }
+            #view-contatos .crm-table th { padding: 0.7rem 1rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+            #view-contatos .crm-table td { padding: 0.6rem 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            #view-contatos .crm-table tbody tr:hover { background: var(--bg-hover); }
+            #view-contatos .ct-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-hover); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; flex-shrink: 0; }
+            #view-contatos .ct-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+            #view-contatos .ct-open { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); padding: 0.38rem 0.7rem; border-radius: 7px; font-size: 0.8rem; font-family: inherit; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+            #view-contatos .ct-open:hover { color: var(--accent-success); border-color: var(--accent-success); }
+            #view-contatos :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+        </style>
+
         <div style="margin-bottom: 1.5rem;">
             <h2 style="font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
                 <i class="fa-solid fa-address-book" style="color: var(--accent-primary)"></i> Base de Contatos
@@ -2382,6 +2395,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         </div>
         <div class="table-container">
             <table class="crm-table" id="contatos-table">
+                <colgroup>
+                    <col> <!-- Contato: resto do espaço -->
+                    <col style="width: 132px;"> <!-- Telefone -->
+                    <col style="width: 190px;"> <!-- Origem -->
+                    <col style="width: 128px;"> <!-- Etapa -->
+                    <col style="width: 122px;"> <!-- 1º contato -->
+                    <col style="width: 122px;"> <!-- Último contato -->
+                    <col style="width: 92px;"> <!-- Msgs -->
+                    <col style="width: 132px;"> <!-- Ações -->
+                </colgroup>
                 <thead>
                     <tr>
                         <th>Contato</th>
@@ -2390,8 +2413,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         <th>Etapa no funil</th>
                         <th>1º contato</th>
                         <th>Último contato</th>
-                        <th style="text-align: center;">Msgs</th>
-                        <th style="width: 170px; text-align: center;">Ações</th>
+                        <th style="text-align: right;">Msgs</th>
+                        <th style="text-align: right;">Ações</th>
                     </tr>
                 </thead>
                 <tbody id="list-contatos"></tbody>
@@ -4952,7 +4975,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     </div><!-- /.app-content -->
 
     <!-- Scripts da Aplicação -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js"></script>
     <script src="app.js"></script>
