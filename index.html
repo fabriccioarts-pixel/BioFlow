@@ -539,6 +539,13 @@
                             <div class="sb-flyout-item-desc">Rastreie a origem dos leads por campanha e canal</div>
                         </span>
                     </button>
+                    <button class="sb-flyout-item" onclick="switchTab('marketing')" id="tab-marketing">
+                        <span class="sb-flyout-item-icon"><i class="fa-brands fa-facebook"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">ROI de Anúncios</div>
+                            <div class="sb-flyout-item-desc">Gasto do Meta Ads x consultas geradas, por campanha</div>
+                        </span>
+                    </button>
                 </div>
             </div>
 
@@ -1230,6 +1237,112 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <button type="button" onclick="copyUtmSnippet()" class="btn-secondary" style="margin-top: 0.6rem;"><i class="fa-solid fa-copy"></i> Copiar código</button>
             </div>
         </div>
+    </div>
+
+    <!-- ABA: ROI DE ANÚNCIOS (Meta Marketing API) -->
+    <div class="view-section" id="view-marketing"
+        style="display: none; flex-direction: column; padding: 1.75rem 2rem; background: var(--bg-main); min-height: 0; overflow-y: auto; gap: 1.25rem;">
+
+        <style>
+            #view-marketing .mkt-toolbar { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+            #view-marketing .mkt-toolbar > * { display: inline-flex; align-items: center; }
+
+            #view-marketing .mkt-btn { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--border-color); padding: 0.44rem 0.75rem; border-radius: 8px; background: var(--bg-card); color: var(--text-muted); cursor: pointer; font-size: 0.8rem; font-family: inherit; transition: color 0.15s, border-color 0.15s; }
+            #view-marketing .mkt-btn:hover { color: var(--text-main); border-color: var(--text-muted); }
+            #view-marketing .mkt-btn:disabled { opacity: 0.55; cursor: default; }
+            #view-marketing .mkt-btn.mkt-icon { padding: 0.44rem 0.58rem; }
+
+            #view-marketing .mkt-segment { display: inline-flex; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); overflow: hidden; }
+            #view-marketing .mkt-segment button { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.8rem; padding: 0.44rem 0.85rem; cursor: pointer; transition: color 0.15s, background 0.15s; }
+            #view-marketing .mkt-segment button + button { border-left: 1px solid var(--border-color); }
+            #view-marketing .mkt-segment button:hover { color: var(--text-main); }
+            #view-marketing .mkt-segment button.is-active { background: var(--bg-hover); color: var(--text-main); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent-primary); }
+
+            #view-marketing .mkt-daterange { gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.7rem; }
+            #view-marketing .mkt-daterange > i { color: var(--text-muted); font-size: 0.8rem; }
+            #view-marketing .mkt-daterange input { border: 0; background: transparent; outline: none; color: var(--text-main); font: inherit; font-size: 0.8rem; width: 158px; cursor: pointer; }
+            #view-marketing .mkt-daterange input::placeholder { color: var(--text-muted); }
+            #view-marketing .mkt-daterange.is-active { border-color: var(--accent-primary); }
+            #view-marketing .mkt-daterange .mkt-dr-clear { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 0.15rem; font-size: 0.75rem; }
+            #view-marketing .mkt-daterange .mkt-dr-clear:hover { color: var(--text-main); }
+
+            #view-marketing :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+            #view-marketing .mkt-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 1.75rem; padding: 0.95rem 1.15rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; font-variant-numeric: tabular-nums; line-height: 1.35; }
+            #view-marketing .mkt-fig { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.15rem 0; }
+            #view-marketing .mkt-fig-l { font-size: 0.75rem; letter-spacing: 0.01em; color: var(--text-muted); }
+            #view-marketing .mkt-fig-v { font-size: 1rem; font-weight: 600; color: var(--text-muted); }
+            #view-marketing .mkt-fig.is-primary .mkt-fig-l { color: var(--text-main); }
+            #view-marketing .mkt-fig.is-primary .mkt-fig-v { font-size: 1.5rem; font-weight: 700; color: var(--text-main); letter-spacing: -0.02em; }
+
+            #view-marketing table { width: 100%; border-collapse: collapse; font-size: 0.84rem; min-width: 900px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+            #view-marketing thead th { padding: 0.6rem 0.7rem; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.01em; color: var(--text-muted); background: var(--bg-card); text-align: right; white-space: nowrap; cursor: pointer; user-select: none; position: sticky; top: 0; z-index: 1; }
+            #view-marketing thead th:first-child { text-align: left; }
+            #view-marketing thead th:hover { color: var(--text-main); }
+            #view-marketing thead th .mkt-caret { margin-left: 0.3rem; font-size: 0.7rem; opacity: 0; transition: opacity 0.12s; }
+            #view-marketing thead th:hover .mkt-caret { opacity: 0.45; }
+            #view-marketing thead th.is-sorted { color: var(--text-main); }
+            #view-marketing thead th.is-sorted .mkt-caret { opacity: 1; color: var(--accent-primary); }
+            #view-marketing tbody td { padding: 0.6rem 0.7rem; text-align: right; border-top: 1px solid var(--border-color); vertical-align: middle; color: var(--text-main); }
+            #view-marketing tbody td:first-child { text-align: left; }
+            #view-marketing tbody tr:hover td { background: var(--bg-hover); }
+            #view-marketing tbody tr.is-dim td { color: var(--text-muted); }
+            #view-marketing tfoot td { padding: 0.65rem 0.7rem; text-align: right; border-top: 2px solid var(--border-color); font-weight: 700; color: var(--text-main); background: var(--bg-card); }
+            #view-marketing tfoot td:first-child { text-align: left; }
+            #view-marketing .col-eff-start { border-left: 1px solid var(--border-color); }
+            #view-marketing .mkt-bar { height: 2px; border-radius: 1px; background: var(--accent-primary); opacity: 0.5; margin: 0.3rem 0 0 auto; }
+            #view-marketing .mkt-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.55rem; vertical-align: middle; }
+        </style>
+
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+            <div>
+                <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700; color: var(--text-main);"><i class="fa-brands fa-facebook" style="color: var(--accent-primary);"></i> ROI de Anúncios</h1>
+                <p style="margin: 0.35rem 0 0; color: var(--text-muted); font-size: 0.85rem;">
+                    Gasto do Meta Ads cruzado com os leads que viraram consulta, por campanha.
+                </p>
+            </div>
+            <div class="mkt-toolbar">
+                <div class="mkt-segment" role="group" aria-label="Período">
+                    <button type="button" data-mkt-range="30" onclick="mktSetRange(30)">30 dias</button>
+                    <button type="button" data-mkt-range="90" onclick="mktSetRange(90)">90 dias</button>
+                    <button type="button" data-mkt-range="365" onclick="mktSetRange(365)">1 ano</button>
+                </div>
+                <div class="mkt-daterange" id="mkt-daterange-wrap">
+                    <i class="fa-regular fa-calendar"></i>
+                    <input type="text" id="mkt-daterange" readonly placeholder="Datas personalizadas"
+                        onclick="mktOpenRangePicker(this)" aria-label="Intervalo de datas personalizado">
+                    <button type="button" class="mkt-dr-clear" id="mkt-dr-clear" onclick="mktClearRange()" title="Voltar ao preset" hidden>
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                <div style="gap: 0.4rem;">
+                    <button class="mkt-btn mkt-icon" onclick="loadMarketingView()" title="Recarregar"><i class="fa-solid fa-rotate"></i></button>
+                    <button class="mkt-btn" id="mkt-sync-btn" onclick="marketingSyncNow()" title="Buscar dados atualizados do Meta agora" style="display: none;">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> Sincronizar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="mkt-status" style="font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.45rem; min-height: 1rem;"></div>
+
+        <div id="mkt-summary" class="mkt-summary" style="display: none;"></div>
+
+        <div id="mkt-table-wrap" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 14px;">
+            <table id="mkt-table">
+                <thead><tr id="mkt-thead-row"></tr></thead>
+                <tbody id="mkt-tbody"></tbody>
+                <tfoot id="mkt-tfoot"></tfoot>
+            </table>
+        </div>
+
+        <div id="mkt-legend" style="display: none; font-size: 0.74rem; color: var(--text-muted); flex-wrap: wrap; gap: 0.35rem 1.25rem; align-items: center;">
+            <span><span class="mkt-dot" style="background: var(--accent-success);"></span>menor custo por consulta</span>
+            <span><span class="mkt-dot" style="background: var(--accent-danger);"></span>gasto sem nenhum lead</span>
+            <span id="mkt-legend-rev"></span>
+        </div>
+
+        <div id="mkt-empty" style="display: none; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; padding: 1.25rem; color: var(--text-muted); font-size: 0.88rem;"></div>
     </div>
 
     <!-- ABA: DASHBOARD -->

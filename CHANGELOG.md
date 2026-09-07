@@ -1,5 +1,64 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-07 — Meta Marketing API: gasto de anúncio + ROI por campanha (Fase 1)
+
+### Adicionado
+* **Integração com a Meta Marketing API** (complementa a CAPI, que já mandava
+  conversão *pro* Meta — agora a gente puxa *do* Meta quanto cada campanha
+  gastou). Single-tenant: conta e token vêm do `.env`.
+  * **`syncMetaMarketing({ days })`**: puxa campanhas, anúncios (com criativo,
+    que passa a alimentar o contexto de anúncio da IA) e insights diários por
+    anúncio (`spend`, `impressions`, `clicks`, `reach`, conversas iniciadas,
+    leads de formulário). Grava em 3 tabelas novas no D1: `ad_campaigns`,
+    `ad_ads`, `ad_insights_daily` (PK `(date, ad_id)`, upsert via
+    `INSERT OR REPLACE`, inserts em lote pra poupar cota do D1).
+  * **`marketingSyncTick()`**: roda dentro do `/api/flow-tick` com cadência
+    própria — só busca de verdade a cada `MARKETING_SYNC_HORAS` (default 6).
+  * **`GET /api/marketing/status`** — o que está configurado e quando rodou o
+    último sync.
+  * **`POST /api/marketing/sync?days=N`** (admin) — dispara o sync na hora;
+    `?days=30` pra backfill.
+  * **`GET /api/marketing/roi?since=&until=`** — cruza gasto por campanha com os
+    leads atribuídos (`ad_referral.source_id` → `ad_ads.campaign_id`, gravado
+    pelo webhook de Click-to-WhatsApp) e o estágio do Kanban: devolve leads,
+    qualificados, consultas (`col-agendado`/`col-ganho`), ganhos, receita e os
+    derivados custo por lead / por qualificado / por consulta / por ganho e
+    ROAS. Lead de anúncio sem `source_id` casável cai no balde "não atribuído a
+    campanha". Janela default: últimos 30 dias.
+* **`.env`**: `META_ADS_ACCOUNT_ID` (obrigatório), `META_ADS_TOKEN` (opcional —
+  cai pra `META_API_MARKETING` e depois `META_ACCESS_TOKEN`),
+  `MARKETING_SYNC_HORAS`.
+* `appsecret_proof` (HMAC do token com `META_APP_SECRET`) é anexado às chamadas
+  do Graph quando o segredo está no ambiente.
+* **Tela "ROI de Anúncios"** no menu Campanhas (`switchTab('marketing')` →
+  `#view-marketing`): tabela por campanha com custo por lead / qualificado /
+  consulta e ROAS (verde ≥ 1×, vermelho < 1×). Botão "Sincronizar" (só admin)
+  chama `POST /api/marketing/sync?days=30`. Estados de "não configurado" e "sem
+  dados no período" tratados. Funções em `app.js`: `loadMarketingView` /
+  `renderMarketingRoi` / `marketingSyncNow`.
+* **Coluna "Conversas"** na tabela de ROI: conversas de WhatsApp iniciadas pelo
+  anúncio (`msg_started`, número do Meta), entre Gasto e Leads. A diferença pra
+  Leads mostra perda de atribuição no CRM. `totais.msg_started` agregado no
+  `/api/marketing/roi`; `<th>` da tabela aceita `hint` → `title`.
+* **`getAdContextForPhone`** passou a usar o criativo completo do anúncio
+  (`ad_ads.creative_body`, sincronizado pela Marketing API) quando o
+  `referral.source_id` casa — cai pro trecho do webhook se o sync nunca rodou.
+* **Controles de período reformulados:** presets viraram um segmented control
+  (ativo com fundo `--bg-hover` + sublinhado `--accent-primary`, sem branco
+  sobre azul); as duas `input[type=date]` viraram um campo único que abre o
+  AirDatepicker em modo range (`dd/MM/yyyy`), no mesmo padrão do Dashboard, com
+  botão ✕ pra voltar ao preset. Estado em `window._mktRange` (`{since, until,
+  preset}`). Toolbar agrupada: período · datas · ações.
+* **Passe de acabamento (Impeccable, modo Operate):** a faixa de 6 KPI-cards
+  virou um resumo em linha única com "custo por consulta" como número de
+  decisão (hierarquia, não 6 caixas iguais). Presets de período 30d / 90d / 1
+  ano espelhando o Dashboard. Ordenação por clique em qualquer coluna (seta só
+  na coluna ativa / no hover). Numerais tabulares na tabela e no resumo. Foco
+  visível com anel `--accent-primary`. Cores semânticas via tokens
+  (`--accent-success` / `--accent-danger`), hover de linha via `--bg-hover`,
+  sem `color-mix`. Divisória de 1px separando o grupo "eficiência". Barra de
+  participação no gasto reduzida a 2px e só quando há gasto.
+
 ## 2026-09-05 — Botão "Finalizar atendimento" no chat
 
 ### Adicionado

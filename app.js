@@ -3167,6 +3167,7 @@ function switchTab(tabId) {
         dashboard: 'Dashboard',
         campanhas: 'Campanhas',
         'origem-leads': 'UTMs',
+        marketing: 'ROI de Anúncios',
         posvenda: 'Pós-Venda',
         faltantes: 'Faltantes',
         sumidos: 'Sumidos',
@@ -3205,8 +3206,8 @@ function switchTab(tabId) {
         const mainRelBtn = document.getElementById('tab-relacionamento-main');
         if (mainRelBtn) mainRelBtn.classList.add('active');
     }
-    // Idem pro dropdown "Campanhas" (Disparo de Mensagens / UTMs)
-    if (['campanhas', 'origem-leads'].includes(tabId)) {
+    // Idem pro dropdown "Campanhas" (Disparo de Mensagens / UTMs / ROI de Anúncios)
+    if (['campanhas', 'origem-leads', 'marketing'].includes(tabId)) {
         const mainCampBtn = document.getElementById('tab-campanhas-main');
         if (mainCampBtn) mainCampBtn.classList.add('active');
     }
@@ -3221,6 +3222,8 @@ function switchTab(tabId) {
     if(campView) campView.style.display = 'none';
     const origemView = document.getElementById('view-origem-leads');
     if(origemView) origemView.style.display = 'none';
+    const marketingView = document.getElementById('view-marketing');
+    if(marketingView) marketingView.style.display = 'none';
     const contatosView = document.getElementById('view-contatos');
     if(contatosView) contatosView.style.display = 'none';
     const fluxosView = document.getElementById('view-fluxos');
@@ -3292,6 +3295,10 @@ function switchTab(tabId) {
         if (view) view.style.display = 'flex';
         if (typeof switchUtmTab === 'function') switchUtmTab('overview');
         if (typeof loadCampaigns === 'function') loadCampaigns();
+    } else if (tabId === 'marketing') {
+        const view = document.getElementById('view-marketing');
+        if (view) view.style.display = 'flex';
+        if (typeof loadMarketingView === 'function') loadMarketingView();
     } else if (tabId === 'agenda') {
         document.getElementById('view-agenda').style.display = 'flex';
         renderAgendaGrid();
@@ -9449,4 +9456,301 @@ async function midxLibPick(id, legendaPadrao) {
         if (!res.ok || j.success === false) throw new Error(j.error || 'Falha no envio');
         if (typeof openChat === 'function') openChat(to, window.currentActiveChat.name, true);
     } catch (e) { showToast(e.message || 'Erro ao enviar.', 'danger'); }
+}
+
+// ========================================================================
+// ROI de Anúncios — consome /api/marketing/status | /roi | /sync
+// ========================================================================
+function mktBRL(n) { return n == null ? '—' : 'R$ ' + (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function mktInt(n) { return (Number(n) || 0).toLocaleString('pt-BR'); }
+function mktPct(v) { return v == null ? '—' : (v * 100).toFixed(v * 100 < 10 ? 1 : 0) + '%'; }
+function mktDateStr(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function mktBrDate(iso) { const p = String(iso).split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+function mktRoasHtml(v, hasRevenue) {
+    if (v == null || !hasRevenue) return '<span style="color:var(--text-muted);">—</span>';
+    const color = Number(v) >= 1 ? 'var(--accent-success)' : 'var(--accent-danger)';
+    return '<span style="font-weight:700; color:' + color + ';">' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '×</span>';
+}
+
+// Período: presets (30 / 90 / 365 dias) ou intervalo custom via AirDatepicker,
+// no mesmo padrão do Dashboard. Fonte da verdade: window._mktRange.
+function mktDefaultRange() {
+    return {
+        since: mktDateStr(new Date(Date.now() - 30 * 86400 * 1000)),
+        until: mktDateStr(new Date()),
+        preset: 30
+    };
+}
+
+function mktSetRange(days) {
+    window._mktRange = {
+        since: mktDateStr(new Date(Date.now() - days * 86400 * 1000)),
+        until: mktDateStr(new Date()),
+        preset: days
+    };
+    if (window._mktAirDp) window._mktAirDp.clear();
+    loadMarketingView();
+}
+
+function mktOpenRangePicker(inputEl) {
+    if (window._mktAirDp) { window._mktAirDp.show(); return; }
+    if (typeof AirDatepicker === 'undefined') return;
+    window._mktAirDp = new AirDatepicker(inputEl, {
+        locale: typeof airDatepickerLocalePt !== 'undefined' ? airDatepickerLocalePt : undefined,
+        dateFormat: 'dd/MM/yyyy',
+        range: true,
+        multipleDatesSeparator: ' – ',
+        maxDate: new Date(),
+        onSelect({ date }) {
+            if (Array.isArray(date) && date.length === 2) {
+                const a = date[0] <= date[1] ? date[0] : date[1];
+                const b = date[0] <= date[1] ? date[1] : date[0];
+                window._mktRange = { since: mktDateStr(a), until: mktDateStr(b), preset: null };
+                loadMarketingView();
+            }
+        }
+    });
+    window._mktAirDp.show();
+}
+
+function mktClearRange() {
+    if (window._mktAirDp) window._mktAirDp.clear();
+    mktSetRange(30);
+}
+
+function mktRenderRangeControls() {
+    const r = window._mktRange || mktDefaultRange();
+    document.querySelectorAll('#view-marketing .mkt-segment [data-mkt-range]').forEach(b => {
+        b.classList.toggle('is-active', Number(b.dataset.mktRange) === r.preset);
+    });
+    const custom = r.preset == null;
+    const field = document.getElementById('mkt-daterange');
+    const wrap = document.getElementById('mkt-daterange-wrap');
+    const clr = document.getElementById('mkt-dr-clear');
+    if (field) field.value = custom ? mktBrDate(r.since) + ' – ' + mktBrDate(r.until) : '';
+    if (wrap) wrap.classList.toggle('is-active', custom);
+    if (clr) clr.hidden = !custom;
+}
+
+// key | label | kind (money|int|pct|roas|text) | eff (efficiency group) | hint (th title)
+const MKT_COLS = [
+    { key: 'name', label: 'Campanha', kind: 'text' },
+    { key: 'gasto', label: 'Gasto', kind: 'money' },
+    { key: 'msg_started', label: 'Conversas', kind: 'int', hint: 'Conversas de WhatsApp iniciadas pelo anúncio (número do Meta). Diferença pra Leads = perda de atribuição no CRM.' },
+    { key: 'leads', label: 'Leads', kind: 'int' },
+    { key: 'qualificados', label: 'Qualif.', kind: 'int' },
+    { key: 'consultas', label: 'Consultas', kind: 'int' },
+    { key: 'conv', label: 'Conv.', kind: 'pct' },
+    { key: 'ganhos', label: 'Ganhos', kind: 'int' },
+    { key: 'receita', label: 'Receita', kind: 'money' },
+    { key: 'custo_por_lead', label: 'Custo/lead', kind: 'money', eff: true },
+    { key: 'custo_por_consulta', label: 'Custo/consulta', kind: 'money', eff: true },
+    { key: 'roas', label: 'ROAS', kind: 'roas', eff: true }
+];
+window._mktSort = window._mktSort || { key: 'gasto', dir: -1 };
+
+function mktSortBy(key) {
+    const s = window._mktSort;
+    if (s.key === key) s.dir = -s.dir;
+    else { s.key = key; s.dir = key === 'name' ? 1 : -1; }
+    if (window._mktRoi) renderMarketingRoi(window._mktRoi);
+}
+
+async function loadMarketingView() {
+    if (!window._mktRange) window._mktRange = mktDefaultRange();
+    const { since, until } = window._mktRange;
+    mktRenderRangeControls();
+
+    const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+    const syncBtn = document.getElementById('mkt-sync-btn');
+    if (syncBtn) syncBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+
+    const statusEl = document.getElementById('mkt-status');
+    try {
+        const s = await fetch('/api/marketing/status').then(r => r.json());
+        if (!s.configurado) {
+            mktShowEmpty('Integração não configurada. Defina <code>META_ADS_ACCOUNT_ID</code> e um token com <code>ads_read</code> no <code>.env</code> do servidor.');
+            if (statusEl) statusEl.innerHTML = '';
+            return;
+        }
+        if (statusEl) {
+            const last = s.ultimo_sync && s.ultimo_sync.at ? new Date(s.ultimo_sync.at) : null;
+            statusEl.innerHTML = '<i class="fa-solid fa-circle" style="font-size:0.5rem; color:' + (last ? 'var(--accent-success)' : 'var(--text-muted)') + ';"></i>'
+                + ' Conta <b>' + escapeHtml(s.conta || '') + '</b> · último sync '
+                + (last ? '<b>' + last.toLocaleString('pt-BR') + '</b>' : '<i>ainda não rodou — clique em Sincronizar</i>')
+                + (s.ultimo_sync && s.ultimo_sync.insight_rows != null ? ' · ' + s.ultimo_sync.insight_rows + ' linhas de insight' : '');
+        }
+    } catch (e) { /* status é best-effort */ }
+
+    const tbody = document.getElementById('mkt-tbody');
+    const empty = document.getElementById('mkt-empty');
+    const wrap = document.getElementById('mkt-table-wrap');
+    if (wrap) wrap.style.display = '';
+    if (empty) empty.style.display = 'none';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="' + MKT_COLS.length + '" style="padding:1.75rem; text-align:center; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Carregando…</td></tr>';
+    try {
+        const qs = new URLSearchParams({ since: since, until: until });
+        const data = await fetch('/api/marketing/roi?' + qs.toString()).then(r => r.json());
+        if (data.error) throw new Error(data.error);
+        window._mktRoi = data;
+        renderMarketingRoi(data);
+    } catch (e) {
+        window._mktRoi = null;
+        if (tbody) tbody.innerHTML = '<tr><td colspan="' + MKT_COLS.length + '" style="padding:1.75rem; text-align:center; color:var(--accent-danger);">' + escapeHtml(e.message || 'Erro') + '</td></tr>';
+    }
+}
+
+function mktShowEmpty(html) {
+    const summary = document.getElementById('mkt-summary');
+    const wrap = document.getElementById('mkt-table-wrap');
+    const legend = document.getElementById('mkt-legend');
+    const empty = document.getElementById('mkt-empty');
+    if (summary) { summary.style.display = 'none'; summary.innerHTML = ''; }
+    if (wrap) wrap.style.display = 'none';
+    if (legend) legend.style.display = 'none';
+    if (empty) { empty.style.display = 'block'; empty.innerHTML = '<i class="fa-solid fa-circle-info"></i> ' + html; }
+}
+
+function renderMarketingRoi(data) {
+    const t = data.totais || {};
+    const hasRevenue = (Number(t.receita) || 0) > 0;
+    const convTotal = t.leads ? (t.consultas || 0) / t.leads : null;
+
+    // Resumo — tira única, com "custo por consulta" como número de decisão
+    const summary = document.getElementById('mkt-summary');
+    const fig = (label, val, primary) =>
+        '<div class="mkt-fig' + (primary ? ' is-primary' : '') + '">'
+        + '<span class="mkt-fig-l">' + label + '</span>'
+        + '<span class="mkt-fig-v">' + val + '</span></div>';
+    if (summary) {
+        summary.style.display = 'flex';
+        summary.innerHTML =
+            fig('Custo por consulta', mktBRL(t.custo_por_consulta), true)
+            + fig('Investido', mktBRL(t.gasto))
+            + fig('Leads', mktInt(t.leads))
+            + fig('Consultas', mktInt(t.consultas) + '  ·  ' + mktPct(convTotal))
+            + fig('Receita', mktBRL(t.receita))
+            + fig('ROAS', hasRevenue ? mktRoasHtml(t.roas, true) : '<span style="color:var(--text-muted);">—</span>');
+    }
+
+    const wrap = document.getElementById('mkt-table-wrap');
+    const empty = document.getElementById('mkt-empty');
+    const legend = document.getElementById('mkt-legend');
+    const theadRow = document.getElementById('mkt-thead-row');
+    const tbody = document.getElementById('mkt-tbody');
+    const tfoot = document.getElementById('mkt-tfoot');
+
+    let rows = (data.campanhas || []).map(c => Object.assign({}, c, {
+        conv: c.leads ? (c.consultas || 0) / c.leads : null
+    }));
+    if (!rows.length) {
+        if (summary) summary.style.display = 'none';
+        if (wrap) wrap.style.display = 'none';
+        if (legend) legend.style.display = 'none';
+        if (empty) {
+            empty.style.display = 'block';
+            empty.innerHTML = '<i class="fa-solid fa-circle-info"></i> Nenhum gasto ou lead de anúncio no período. Se a conta acabou de ser ligada, clique em <b>Sincronizar</b>.';
+        }
+        return;
+    }
+    if (wrap) wrap.style.display = '';
+    if (empty) empty.style.display = 'none';
+
+    // flags: menor custo/consulta (entre quem tem consulta) e gasto sem lead
+    let bestKey = null, bestVal = Infinity;
+    rows.forEach(c => {
+        if ((c.consultas || 0) > 0 && c.custo_por_consulta != null && c.custo_por_consulta < bestVal) {
+            bestVal = c.custo_por_consulta; bestKey = c;
+        }
+    });
+
+    // ordena (nulls sempre por último)
+    const s = window._mktSort;
+    rows.sort((a, b) => {
+        let av = a[s.key], bv = b[s.key];
+        if (s.key === 'name') return String(av || '').localeCompare(String(bv || '')) * s.dir;
+        av = (av == null ? null : Number(av)); bv = (bv == null ? null : Number(bv));
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return (av - bv) * s.dir;
+    });
+
+    const maxGasto = Math.max.apply(null, rows.map(c => Number(c.gasto) || 0).concat([1]));
+
+    const firstEffKey = (MKT_COLS.find(c => c.eff) || {}).key;
+
+    // cabeçalho com ordenação
+    if (theadRow) theadRow.innerHTML = MKT_COLS.map(col => {
+        const sorted = s.key === col.key;
+        const caret = sorted ? (s.dir < 0 ? 'fa-caret-down' : 'fa-caret-up') : 'fa-sort';
+        const cls = [sorted ? 'is-sorted' : '', col.key === firstEffKey ? 'col-eff-start' : ''].filter(Boolean).join(' ');
+        const title = col.hint ? ' title="' + col.hint.replace(/"/g, '&quot;') + '"' : '';
+        return '<th' + (cls ? ' class="' + cls + '"' : '') + title + ' onclick="mktSortBy(\'' + col.key + '\')">'
+            + col.label + '<i class="fa-solid ' + caret + ' mkt-caret"></i></th>';
+    }).join('');
+
+    // linhas
+    if (tbody) tbody.innerHTML = rows.map(c => {
+        const dim = (Number(c.gasto) || 0) === 0 && (Number(c.leads) || 0) === 0;
+        const wasteFlag = (Number(c.gasto) || 0) > 0 && (Number(c.leads) || 0) === 0;
+        const bestFlag = c === bestKey;
+        const dot = bestFlag ? 'var(--accent-success)' : wasteFlag ? 'var(--accent-danger)' : 'transparent';
+        const gastoPct = Math.round((Number(c.gasto) || 0) / maxGasto * 100);
+        const bar = (Number(c.gasto) || 0) > 0 ? '<div class="mkt-bar" style="width:' + Math.max(gastoPct, 3) + '%;"></div>' : '';
+        const td = (v, cls) => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
+        return '<tr' + (dim ? ' class="is-dim"' : '') + '>'
+            + '<td><span class="mkt-dot" style="background:' + dot + ';"></span>' + escapeHtml(c.name || '—') + '</td>'
+            + '<td>' + mktBRL(c.gasto) + bar + '</td>'
+            + td(mktInt(c.msg_started))
+            + td(mktInt(c.leads))
+            + td(mktInt(c.qualificados))
+            + td(mktInt(c.consultas))
+            + td(mktPct(c.conv))
+            + td(mktInt(c.ganhos))
+            + td(mktBRL(c.receita))
+            + td(c.custo_por_lead != null ? mktBRL(c.custo_por_lead) : '—', 'col-eff-start')
+            + td(c.custo_por_consulta != null ? mktBRL(c.custo_por_consulta) : '—')
+            + td(mktRoasHtml(c.roas, hasRevenue))
+            + '</tr>';
+    }).join('');
+
+    // totais
+    if (tfoot) tfoot.innerHTML = '<tr>'
+        + '<td>Total</td>'
+        + '<td>' + mktBRL(t.gasto) + '</td>'
+        + '<td>' + mktInt(t.msg_started) + '</td>'
+        + '<td>' + mktInt(t.leads) + '</td>'
+        + '<td>' + mktInt(t.qualificados) + '</td>'
+        + '<td>' + mktInt(t.consultas) + '</td>'
+        + '<td>' + mktPct(convTotal) + '</td>'
+        + '<td>' + mktInt(t.ganhos) + '</td>'
+        + '<td>' + mktBRL(t.receita) + '</td>'
+        + '<td class="col-eff-start">' + mktBRL(t.custo_por_lead) + '</td>'
+        + '<td>' + mktBRL(t.custo_por_consulta) + '</td>'
+        + '<td>' + mktRoasHtml(t.roas, hasRevenue) + '</td>'
+        + '</tr>';
+
+    // legenda
+    if (legend) {
+        legend.style.display = 'flex';
+        const rev = document.getElementById('mkt-legend-rev');
+        if (rev) rev.innerHTML = hasRevenue ? '' : '<i class="fa-solid fa-circle-info"></i> Receita e ROAS ficam zerados até os leads em “Ganho” terem valor preenchido.';
+    }
+}
+
+async function marketingSyncNow() {
+    const btn = document.getElementById('mkt-sync-btn');
+    if (btn) { btn.disabled = true; btn._label = btn.innerHTML; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sincronizando…'; }
+    try {
+        const r = await fetch('/api/marketing/sync?days=30', { method: 'POST' }).then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        if (r.skipped) showToast('Sync pulado: ' + (r.reason || 'sem config'), 'danger');
+        else showToast('Sync ok: ' + (r.campaigns || 0) + ' campanhas, ' + (r.insight_rows || 0) + ' linhas', 'success');
+        await loadMarketingView();
+    } catch (e) {
+        showToast(e.message || 'Erro no sync', 'danger');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = btn._label || '<i class="fa-solid fa-cloud-arrow-down"></i> Sincronizar'; }
+    }
 }

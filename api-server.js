@@ -1425,7 +1425,17 @@ async function getAdContextForPhone(phone) {
         if (!raw) return '';
         let ref; try { ref = JSON.parse(raw); } catch (e) { return ''; }
         const headline = String(ref.headline || '').trim();
-        const body = String(ref.body || '').trim();
+        let body = String(ref.body || '').trim();
+        // Se o anúncio foi identificado (source_id) e o criativo completo já foi
+        // sincronizado pela Marketing API, usa ele — é mais completo que o trecho
+        // que o webhook do WhatsApp entrega.
+        if (ref.source_id) {
+            try {
+                const adRows = await queryD1('SELECT creative_body FROM ad_ads WHERE id = ?', [String(ref.source_id)]);
+                const full = adRows && adRows[0] && String(adRows[0].creative_body || '').trim();
+                if (full) body = full;
+            } catch (e) { /* ad_ads pode não existir se o sync nunca rodou */ }
+        }
         if (!headline && !body) return '';
         let t = '\n\n[ORIGEM DO LEAD] Esta pessoa chegou clicando num anúncio de Instagram/Facebook da clínica. Baseie a conversa NO QUE ESSE ANÚNCIO PROMETIA — não ofereça um procedimento diferente do anúncio.';
         if (headline) t += `\nTítulo do anúncio: "${headline}"`;
@@ -5146,6 +5156,330 @@ app.get('/api/ai-selftest', async (req, res) => {
     }
 });
 
+// ==========================================
+// META MARKETING API — gasto de anúncio + ROI por campanha
+// Complemento da CAPI: a CAPI manda "virou consulta" PRO Meta; aqui a gente puxa
+// DO Meta quanto cada campanha gastou, cruza com os leads atribuídos (ad_referral
+// .source_id, gravado pelo webhook de Click-to-WhatsApp) e o estágio do Kanban
+// pra chegar em custo por lead / por consulta / ROAS.
+//
+// Single-tenant: a conta de anúncio e o token vêm do .env. Quando virar
+// multi-clínica, isso migra pra um token por clinic_id cifrado no D1.
+//   META_ADS_ACCOUNT_ID  -> id da conta (com ou sem o prefixo act_)
+//   META_ADS_TOKEN       -> token long-lived com ads_read (cai pra META_API_MARKETING
+//                           e depois META_ACCESS_TOKEN se não existir)
+// ==========================================
+function metaAdsConfig() {
+    const token = (process.env.META_ADS_TOKEN || process.env.META_API_MARKETING || process.env.META_ACCESS_TOKEN || '').trim();
+    const acct  = (process.env.META_ADS_ACCOUNT_ID || '').trim().replace(/^act_/, '');
+    const appSecret = (process.env.META_APP_SECRET || '').trim();
+    return { token, acct, appSecret, ok: !!(token && acct) };
+}
+
+let _adTablesReady = false;
+async function ensureAdTables() {
+    if (_adTablesReady) return;
+    for (const sql of [
+        `CREATE TABLE IF NOT EXISTS ad_campaigns (
+            id TEXT PRIMARY KEY, name TEXT, status TEXT, objective TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS ad_ads (
+            id TEXT PRIMARY KEY, campaign_id TEXT, name TEXT, status TEXT,
+            creative_body TEXT, thumbnail_url TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS ad_insights_daily (
+            date TEXT NOT NULL, ad_id TEXT NOT NULL, adset_id TEXT, campaign_id TEXT,
+            spend REAL DEFAULT 0, impressions INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0,
+            reach INTEGER DEFAULT 0, msg_started INTEGER DEFAULT 0, leads_form INTEGER DEFAULT 0,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (date, ad_id)
+        )`
+    ]) {
+        try { await queryD1(sql, []); } catch (e) { console.error('[marketing] ensureAdTables:', e.message); }
+    }
+    _adTablesReady = true;
+}
+
+// GET no Graph seguindo paginação (paging.next). Devolve todos os data[] juntos.
+async function metaGraphGetAll(path, params, cfg) {
+    const { token, appSecret } = cfg;
+    const proof = appSecret ? crypto.createHmac('sha256', appSecret).update(token).digest('hex') : null;
+    let url = new URL(`https://graph.facebook.com/${META_GRAPH}/${path}`);
+    url.searchParams.set('access_token', token);
+    if (proof) url.searchParams.set('appsecret_proof', proof);
+    for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
+
+    const out = [];
+    let next = url.toString();
+    let guard = 0;
+    while (next && guard++ < 25) {
+        const r = await fetch(next);
+        const j = await r.json();
+        if (j.error) throw new Error(`Graph ${path}: ${j.error.message} (code ${j.error.code}${j.error.error_subcode ? '/' + j.error.error_subcode : ''})`);
+        if (Array.isArray(j.data)) out.push(...j.data);
+        next = j.paging && j.paging.next ? j.paging.next : null;
+    }
+    return out;
+}
+
+function _num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function _actionVal(actions, type) {
+    if (!Array.isArray(actions)) return 0;
+    const hit = actions.find(a => a.action_type === type);
+    return hit ? Math.round(_num(hit.value)) : 0;
+}
+
+// Puxa campanhas + anúncios + insights diários dos últimos `days` dias e grava no D1.
+async function syncMetaMarketing({ days = 3 } = {}) {
+    const cfg = metaAdsConfig();
+    if (!cfg.ok) {
+        return { skipped: true, reason: 'META_ADS_ACCOUNT_ID / token ausentes no .env' };
+    }
+    await ensureAdTables();
+    const acct = `act_${cfg.acct}`;
+    const started = Date.now();
+
+    // --- campanhas ---
+    const campaigns = await metaGraphGetAll(`${acct}/campaigns`, {
+        fields: 'id,name,status,objective', limit: '200'
+    }, cfg);
+    for (let i = 0; i < campaigns.length; i += 20) {
+        const ch = campaigns.slice(i, i + 20);
+        const ph = ch.map(() => '(?,?,?,?,CURRENT_TIMESTAMP)').join(',');
+        const params = ch.flatMap(c => [c.id, c.name || '', c.status || '', c.objective || '']);
+        await queryD1(`INSERT OR REPLACE INTO ad_campaigns (id,name,status,objective,updated_at) VALUES ${ph}`, params);
+    }
+
+    // --- anúncios (com criativo, pra alimentar o contexto de anúncio da IA) ---
+    const ads = await metaGraphGetAll(`${acct}/ads`, {
+        fields: 'id,name,status,campaign_id,creative{body,thumbnail_url}', limit: '200'
+    }, cfg);
+    for (let i = 0; i < ads.length; i += 12) {
+        const ch = ads.slice(i, i + 12);
+        const ph = ch.map(() => '(?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
+        const params = ch.flatMap(a => [
+            a.id, a.campaign_id || '', a.name || '', a.status || '',
+            (a.creative && a.creative.body) || '', (a.creative && a.creative.thumbnail_url) || ''
+        ]);
+        await queryD1(`INSERT OR REPLACE INTO ad_ads (id,campaign_id,name,status,creative_body,thumbnail_url,updated_at) VALUES ${ph}`, params);
+    }
+
+    // --- insights diários por anúncio ---
+    const until = new Date();
+    const since = new Date(Date.now() - Math.max(1, days) * 86400 * 1000);
+    const fmt = d => d.toISOString().slice(0, 10);
+    const insights = await metaGraphGetAll(`${acct}/insights`, {
+        level: 'ad',
+        time_increment: '1',
+        time_range: JSON.stringify({ since: fmt(since), until: fmt(until) }),
+        fields: 'ad_id,adset_id,campaign_id,spend,impressions,clicks,reach,actions',
+        limit: '500'
+    }, cfg);
+
+    const rows = insights.map(r => ({
+        date: r.date_start,
+        ad_id: r.ad_id,
+        adset_id: r.adset_id || '',
+        campaign_id: r.campaign_id || '',
+        spend: _num(r.spend),
+        impressions: Math.round(_num(r.impressions)),
+        clicks: Math.round(_num(r.clicks)),
+        reach: Math.round(_num(r.reach)),
+        msg_started: _actionVal(r.actions, 'onsite_conversion.messaging_conversation_started_7d')
+            || _actionVal(r.actions, 'onsite_conversion.total_messaging_connection'),
+        leads_form: _actionVal(r.actions, 'lead') || _actionVal(r.actions, 'onsite_conversion.lead_grouped')
+    })).filter(r => r.date && r.ad_id);
+
+    for (let i = 0; i < rows.length; i += 9) {
+        const ch = rows.slice(i, i + 9);
+        const ph = ch.map(() => '(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
+        const params = ch.flatMap(r => [r.date, r.ad_id, r.adset_id, r.campaign_id, r.spend, r.impressions, r.clicks, r.reach, r.msg_started, r.leads_form]);
+        await queryD1(`INSERT OR REPLACE INTO ad_insights_daily (date,ad_id,adset_id,campaign_id,spend,impressions,clicks,reach,msg_started,leads_form,updated_at) VALUES ${ph}`, params);
+    }
+
+    const summary = { campaigns: campaigns.length, ads: ads.length, insight_rows: rows.length, days, ms: Date.now() - started };
+    try {
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('marketing_sync_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify({ at: new Date().toISOString(), ...summary })]
+        );
+    } catch (e) {}
+    console.log(`[marketing] sync ok: ${summary.campaigns} campanhas, ${summary.ads} anúncios, ${summary.insight_rows} linhas de insight (${summary.ms}ms)`);
+    return { ok: true, ...summary };
+}
+
+// Cadência própria: chamado de graça em todo /api/flow-tick, mas só sincroniza
+// de verdade a cada MARKETING_SYNC_HORAS (default 6).
+let _mktSyncRunning = false;
+async function marketingSyncTick() {
+    if (_mktSyncRunning) return { skipped: 'em andamento' };
+    if (!metaAdsConfig().ok) return { skipped: 'sem config' };
+    const everyH = Number(process.env.MARKETING_SYNC_HORAS) || 6;
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'marketing_sync_last_run'");
+        const last = r && r[0] ? JSON.parse(r[0].value || '{}').at : null;
+        if (last && (Date.now() - new Date(last).getTime()) < everyH * 3600 * 1000) {
+            return { skipped: 'dentro da janela' };
+        }
+    } catch (e) {}
+    _mktSyncRunning = true;
+    try {
+        return await syncMetaMarketing({ days: 3 });
+    } catch (e) {
+        console.error('[marketing] tick falhou:', e.message);
+        return { erro: e.message };
+    } finally {
+        _mktSyncRunning = false;
+    }
+}
+
+// Status da integração — o que está configurado e quando rodou o último sync.
+app.get('/api/marketing/status', async (req, res) => {
+    const cfg = metaAdsConfig();
+    let last = null;
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'marketing_sync_last_run'");
+        last = r && r[0] ? JSON.parse(r[0].value || 'null') : null;
+    } catch (e) {}
+    res.json({
+        configurado: cfg.ok,
+        conta: cfg.acct ? `act_${cfg.acct}` : null,
+        token_source: process.env.META_ADS_TOKEN ? 'META_ADS_TOKEN'
+            : process.env.META_API_MARKETING ? 'META_API_MARKETING'
+            : process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN' : null,
+        appsecret_proof: !!cfg.appSecret,
+        graph: META_GRAPH,
+        ultimo_sync: last
+    });
+});
+
+// Dispara o sync na hora. ?days=30 pra backfill. Só admin.
+app.post('/api/marketing/sync', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const days = Math.min(Math.max(Number(req.query.days) || 3, 1), 90);
+        const out = await syncMetaMarketing({ days });
+        res.json(out);
+    } catch (e) {
+        console.error('[marketing] sync manual:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ROI por campanha: gasto (Meta) x leads atribuídos x estágio do Kanban.
+// ?since=YYYY-MM-DD&until=YYYY-MM-DD (default: últimos 30 dias)
+app.get('/api/marketing/roi', async (req, res) => {
+    try {
+        await ensureAdTables();
+        const fmt = d => d.toISOString().slice(0, 10);
+        const until = (req.query.until || fmt(new Date())).slice(0, 10);
+        const since = (req.query.since || fmt(new Date(Date.now() - 30 * 86400 * 1000))).slice(0, 10);
+
+        // gasto por campanha na janela
+        const spendRows = await queryD1(
+            `SELECT i.campaign_id,
+                    COALESCE(c.name, '(campanha ' || i.campaign_id || ')') AS name,
+                    SUM(i.spend) AS spend, SUM(i.impressions) AS impressions,
+                    SUM(i.clicks) AS clicks, SUM(i.msg_started) AS msg_started
+             FROM ad_insights_daily i
+             LEFT JOIN ad_campaigns c ON c.id = i.campaign_id
+             WHERE i.date BETWEEN ? AND ?
+             GROUP BY i.campaign_id`,
+            [since, until]
+        );
+
+        // mapa ad_id -> campanha, pra atribuir lead pelo source_id do referral
+        const adRows = await queryD1('SELECT id, campaign_id FROM ad_ads', []);
+        const adToCampaign = new Map(adRows.map(a => [String(a.id), String(a.campaign_id || '')]));
+
+        // leads do período que vieram de anúncio Meta
+        const leads = await queryD1(
+            `SELECT id, origem, ad_referral, column_id, valor_recebido, orcamento, qualificado_em
+             FROM leads
+             WHERE date(created_at) BETWEEN ? AND ?
+               AND (ad_referral IS NOT NULL OR origem LIKE 'Meta Ads%')`,
+            [since, until]
+        );
+
+        const UNATTR = '__sem_campanha__';
+        const buckets = new Map();
+        const bucket = (id, name) => {
+            if (!buckets.has(id)) buckets.set(id, {
+                campaign_id: id === UNATTR ? null : id, name,
+                gasto: 0, impressions: 0, clicks: 0, msg_started: 0,
+                leads: 0, qualificados: 0, consultas: 0, ganhos: 0, receita: 0
+            });
+            return buckets.get(id);
+        };
+
+        for (const row of spendRows) {
+            const b = bucket(String(row.campaign_id || UNATTR), row.name || 'Meta Ads');
+            b.gasto += _num(row.spend);
+            b.impressions += _num(row.impressions);
+            b.clicks += _num(row.clicks);
+            b.msg_started += _num(row.msg_started);
+        }
+
+        for (const l of leads) {
+            let campId = '';
+            try {
+                const ref = l.ad_referral ? JSON.parse(l.ad_referral) : null;
+                if (ref && ref.source_id) campId = adToCampaign.get(String(ref.source_id)) || '';
+            } catch (e) {}
+            const key = campId || UNATTR;
+            const name = campId
+                ? (buckets.get(campId)?.name || `(campanha ${campId})`)
+                : 'Meta Ads (não atribuído a campanha)';
+            const b = bucket(key, name);
+            b.leads += 1;
+            if (l.qualificado_em) b.qualificados += 1;
+            if (l.column_id === 'col-agendado' || l.column_id === 'col-ganho') b.consultas += 1;
+            if (l.column_id === 'col-ganho') {
+                b.ganhos += 1;
+                const v = leadPurchaseValueBRL(l);
+                if (v) b.receita += v;
+            }
+        }
+
+        const round2 = n => Math.round(n * 100) / 100;
+        const campanhas = [...buckets.values()].map(b => ({
+            ...b,
+            gasto: round2(b.gasto),
+            receita: round2(b.receita),
+            custo_por_lead: b.leads ? round2(b.gasto / b.leads) : null,
+            custo_por_qualificado: b.qualificados ? round2(b.gasto / b.qualificados) : null,
+            custo_por_consulta: b.consultas ? round2(b.gasto / b.consultas) : null,
+            custo_por_ganho: b.ganhos ? round2(b.gasto / b.ganhos) : null,
+            roas: b.gasto ? round2(b.receita / b.gasto) : null
+        })).sort((a, b) => b.gasto - a.gasto);
+
+        const t = campanhas.reduce((s, c) => ({
+            gasto: s.gasto + c.gasto, receita: s.receita + c.receita,
+            msg_started: s.msg_started + (c.msg_started || 0),
+            leads: s.leads + c.leads, qualificados: s.qualificados + c.qualificados,
+            consultas: s.consultas + c.consultas, ganhos: s.ganhos + c.ganhos
+        }), { gasto: 0, receita: 0, msg_started: 0, leads: 0, qualificados: 0, consultas: 0, ganhos: 0 });
+
+        res.json({
+            periodo: { since, until },
+            totais: {
+                ...t, gasto: round2(t.gasto), receita: round2(t.receita),
+                custo_por_lead: t.leads ? round2(t.gasto / t.leads) : null,
+                custo_por_consulta: t.consultas ? round2(t.gasto / t.consultas) : null,
+                roas: t.gasto ? round2(t.receita / t.gasto) : null
+            },
+            campanhas
+        });
+    } catch (e) {
+        console.error('[marketing] roi:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Criar um novo lead
 app.post('/api/leads', async (req, res) => {
     const { id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, tags, valor_recebido, orcamento } = req.body;
@@ -7566,7 +7900,12 @@ app.all('/api/flow-tick', async (req, res) => {
         let insights = { skipped: 'erro' };
         try { insights = await aiInsightsTick(); } catch (e) { console.error('Erro no digest do Agente de IA:', e); }
 
-        res.json({ processed, followup, opps, insights, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Sync do gasto de anúncio (Meta Marketing API) — cadência própria: só
+        // busca de verdade a cada MARKETING_SYNC_HORAS.
+        let marketing = { skipped: 'erro' };
+        try { marketing = await marketingSyncTick(); } catch (e) { console.error('Erro no sync de marketing:', e); }
+
+        res.json({ processed, followup, opps, insights, marketing, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
