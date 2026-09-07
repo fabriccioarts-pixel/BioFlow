@@ -1,5 +1,92 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-07 — Menu mobile: submenu "Campanhas"/"Relacionamento" não sai da tela
+
+### Corrigido
+* Os flyouts horizontais da sidebar ("Campanhas ›", "Relacionamento ›")
+  abriam à direita do drawer e ficavam cortados fora da tela no celular. Em
+  `≤768px` agora abrem como um painel **dentro do drawer**, logo abaixo do
+  item, com largura = drawer − margem e scroll próprio se não couber.
+  `openSidebarFlyout` ganhou o ramo mobile; o desktop segue igual.
+
+## 2026-09-07 — Kanban no celular: filtros colapsáveis
+
+### Alterado
+* Os ~7 filtros do Kanban empilhados ocupavam quase meia tela no celular antes
+  de aparecer qualquer lead. Em `≤768px` a barra vira **busca + botão
+  "Filtros"** — o resto (responsável, origem, ordenação, datas, "Apenas
+  Agendados", "Limpar") só aparece ao tocar em Filtros, cada um em largura
+  total. Puro CSS + um `classList.toggle('kf-open')` no botão.
+
+## 2026-09-07 — Conversa em tela cheia no celular
+
+### Alterado
+* Com uma conversa aberta no celular, a **topbar global** (hambúrguer / tema /
+  sino / conta) fica escondida — ela ficava empilhada, redundante, sobre o
+  header do chat, comendo ~52px. O ← do header volta pra lista, onde a topbar
+  reaparece (padrão de app de mensagem). Feito com
+  `#main-content:has(#view-chat.chat-open) .topbar-user`.
+
+## 2026-09-07 — Atendimento no celular: header e balões mais enxutos
+
+### Alterado
+* `@media (max-width: 480px)` no chat: header do chat com menos padding/gap,
+  avatar do contato escondido (redundante logo depois da lista), nome/telefone
+  menores, botões de ação (`.copilot-btn`) mais estreitos.
+* Balões de mensagem passam de 75% → 86% da largura no celular (o padrão
+  desperdiçava a tela); `#chat-active-messages` e composer com padding menor.
+* "Fabricio Alves" no topo esconde o nome (só avatar) a partir de 500px em vez
+  de 430px — deixa de disputar espaço com os ícones.
+* **Composer**: a caixa de texto vazia parava de crescer 4 linhas com o
+  placeholder longo — `autoExpandChatInput` agora trava em 44px quando não há
+  texto. Coluna do textarea ganhou `min-width: 0` (encolhe direito no flex),
+  placeholder encurtado, e no celular os ícones caem pra 34px com gaps menores
+  pra sobrar largura pro campo.
+
+## 2026-09-07 — Biblioteca de Mídia: menos vazio (Impeccable)
+
+### Alterado
+* `.midx-wrap` limitado a 1200px — as pastas param de ficar perdidas num
+  painel de ~1900px.
+* A grade de arquivos virou uma **área delimitada** (borda + fundo +
+  `min-height: 340px`, `align-content: start`) — lê como "aqui ficam os
+  arquivos / solte aqui" em vez de cards flutuando no vazio. A borda também
+  acende no dragover.
+* Tiles um pouco maiores (min 150px → 164px); pastas com mais respiro e nome
+  em peso 600. O grid do modal de envio ignora a borda/min-height.
+
+## 2026-09-07 — Follow-up automático: editor mais legível (Impeccable)
+
+### Alterado
+* **Layout de 2 colunas a partir de 1200px:** "Lembretes (em cascata)" ocupa a
+  coluna principal e os blocos "Onde aplicar" / "Horário permitido" / "Ao
+  esgotar" ficam ao lado, aproveitando o espaço que antes ficava vazio à
+  direita. Abaixo disso, empilha em coluna única.
+* "Ativo" virou o `.ui-switch` do sistema (mesmo toggle do Agente de IA).
+* Campos `time` em "Horário permitido" lado a lado, sem espaço morto.
+* Campos do editor (`#fx-editor`) param de esticar pra largura toda do painel —
+  coluna de até 780px. `input[type=number]` (minutos) e `input[type=time]`
+  ganharam largura máxima em vez de ocupar a linha inteira.
+* Card de lembrete: o texto "4 h após a última mensagem" saiu do estilo
+  minúsculo/apagado (`.fx-mini`) pra legível (`.fx-node-when`) — é a info
+  principal do card. Conector vertical entre lembretes reforça a cascata.
+* Corpo do card com mais respiro entre campos; anel de foco visível; `aria-label`
+  no botão de remover lembrete.
+
+## 2026-09-07 — Dashboard: itens P2 restantes do audit (mobile, teclado, toque)
+
+### Corrigido
+* **Funil reflui no mobile:** abaixo de 560px de largura do container, a forma
+  orgânica com rótulos posicionados por % (que se sobrepunham) dá lugar a
+  barras horizontais empilhadas — uma por etapa, largura proporcional.
+* **"Personalizar" agora é operável por teclado:** cada card ganhou botões
+  mover ◀/▶ e estreitar/alargar nas ferramentas (`moveDashboardCard` /
+  `resizeDashboardCard`), reaproveitando a mesma lógica do arraste + resize por
+  ponteiro. O grip de arraste virou `aria-hidden`.
+* **Alvos de toque** dos presets de período, do seletor de datas e de
+  "Personalizar" subiram pra `min-height: 40px`; botões das ferramentas do card
+  22px → 26px, toolbar com `flex-wrap`.
+
 ## 2026-09-07 — Dashboard: correções do audit Impeccable (a11y, tema, perf)
 
 ### Corrigido

@@ -3017,6 +3017,9 @@ document.addEventListener('click', (e) => {
 // === AUTO EXPAND TEXTAREA & KEYDOWN HANDLER ===
 function autoExpandChatInput(el) {
     if (!el) return;
+    // Vazio: trava em 1 linha — o placeholder longo não deve inflar a caixa
+    // (em alguns WebViews entra no scrollHeight). Só cresce quando há texto.
+    if (!el.value) { el.style.height = '44px'; return; }
     el.style.height = 'auto';
     const newH = Math.min(el.scrollHeight, 140);
     el.style.height = Math.max(newH, 44) + 'px';

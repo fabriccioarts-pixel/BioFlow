@@ -666,8 +666,8 @@ function renderFollowupEditor() {
         <div class="fx-node" style="margin-bottom:0.6rem">
             <div class="fx-node-head" style="cursor:default">
                 <span class="fx-node-id" style="min-width:auto">Lembrete ${i + 1}</span>
-                <span class="fx-mini" id="fu-step-lbl-${i}" style="flex:1">${fuMinToLabel(s.atraso_min)} após a última mensagem</span>
-                <button class="fx-drawer-del" onclick="fuRemoveStep(${i})" title="Remover"><i class="fa-solid fa-xmark"></i></button>
+                <span class="fx-node-when" id="fu-step-lbl-${i}">${fuMinToLabel(s.atraso_min)} após a última mensagem</span>
+                <button class="fx-drawer-del" onclick="fuRemoveStep(${i})" title="Remover lembrete" aria-label="Remover lembrete"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="fx-node-body" style="padding:0.7rem">
                 <label>Enviar após (minutos)
@@ -704,17 +704,27 @@ function renderFollowupEditor() {
                 <b style="font-size:0.95rem"><i class="fa-solid fa-clock-rotate-left"></i> Follow-up automático</b>
                 <div class="fx-mini">Lembra o lead quando ele para de responder. Para na hora em que ele responde.</div>
             </div>
-            <label class="fx-switch"><input type="checkbox" ${c.ativo ? 'checked' : ''} onchange="fuCfg.ativo = this.checked"> Ativo</label>
+            <label class="fx-switch">
+                <span class="ui-switch">
+                    <input type="checkbox" ${c.ativo ? 'checked' : ''} onchange="fuCfg.ativo = this.checked">
+                    <span class="ui-switch-track"></span>
+                </span>
+                Ativo
+            </label>
             <button class="btn-save" onclick="flowSaveFollowup()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
         </div>
 
+        <div class="fx-cols">
+        <div class="fx-col-main">
         <div class="fx-block">
             <div class="fx-block-title"><i class="fa-solid fa-list-ol"></i> Lembretes (em cascata)</div>
             ${stepsHtml}
             <button class="fx-add-btn" onclick="fuAddStep()"><i class="fa-solid fa-plus"></i> Adicionar lembrete</button>
             <div class="fx-mini" style="margin-top:0.6rem">O tempo conta a partir da <b>última mensagem que você enviou</b>. Dentro da janela de 24h do WhatsApp vai a mensagem de texto; fora dela vai o template aprovado escolhido no lembrete (sem template escolhido, o lembrete é pulado). O nome do paciente preenche a variável do template, se houver uma.</div>
         </div>
+        </div>
 
+        <div class="fx-col-side">
         <div class="fx-block">
             <div class="fx-block-title"><i class="fa-solid fa-filter"></i> Onde aplicar</div>
             <label>Colunas do Kanban <span class="fx-mini">nenhuma marcada = todas, menos as de parada</span></label>
@@ -749,6 +759,8 @@ function renderFollowupEditor() {
                     <option value="tag:sem-resposta" ${c.acao_final === 'tag:sem-resposta' ? 'selected' : ''}>Adicionar etiqueta "sem-resposta"</option>
                 </select>
             </label>
+        </div>
+        </div>
         </div>`;
 }
 

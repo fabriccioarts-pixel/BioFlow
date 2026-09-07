@@ -7402,9 +7402,13 @@ body:has(#login-overlay.active) header { display: none; }
         margin-left: 0 !important;
     }
 
-    /* Topbar has room for hamburger at left */
+    /* Topbar: hambúrguer encostado à esquerda, resto agrupado à direita
+       (sem a busca — que some no mobile — a barra ficava com um vão à esquerda). */
     .topbar-user {
         padding-left: 0.5rem;
+    }
+    .topbar-user .sb-mobile-toggle {
+        margin-right: auto;
     }
 }
 
@@ -7483,6 +7487,11 @@ body:has(#login-overlay.active) header { display: none; }
     #chat-active-header { padding: 0.8rem 1rem !important; }
     #chat-active-input { padding: 0.7rem 0.9rem !important; }
     #chat-active-messages { padding-left: 0.9rem !important; padding-right: 0.9rem !important; }
+
+    /* Conversa aberta = tela cheia: a topbar global (hambúrguer/tema/sino/conta)
+       fica redundante sobre o header do chat. O ← volta pra lista, onde ela
+       reaparece. Padrão de app de mensagem. */
+    #main-content:has(#view-chat.chat-open) .topbar-user { display: none !important; }
 }
 
 @media (max-width: 640px) {
@@ -7521,11 +7530,32 @@ body:has(#login-overlay.active) header { display: none; }
     }
 }
 
-/* Telas bem estreitas: no topo, só o avatar (sem o nome) */
-@media (max-width: 430px) {
+/* Telas estreitas: no topo, só o avatar (sem o nome) */
+@media (max-width: 500px) {
     .user-chip .user-chip-name { display: none; }
     .user-chip { padding: 4px; }
     .topbar-user { gap: 8px; padding: 0 0.6rem; }
+}
+
+/* Atendimento em telas de celular: header e composer mais enxutos */
+@media (max-width: 480px) {
+    #chat-active-header { padding: 0.7rem 0.85rem !important; gap: 0.5rem !important; }
+    #chat-active-header > div:first-child { gap: 0.55rem !important; }
+    /* avatar do contato no header é redundante logo depois da lista — some */
+    #chat-header-avatar-slot { display: none !important; }
+    #chat-active-name { font-size: 1rem !important; }
+    #chat-active-phone { font-size: 0.78rem !important; }
+    #chat-active-header .copilot-btn { padding: 0.4rem 0.5rem !important; }
+    #chat-active-header .chat-mobile-back { width: 34px; height: 34px; }
+
+    #chat-active-input { padding: 0.55rem 0.6rem !important; gap: 0.25rem !important; }
+    #chat-active-input > div:last-child { gap: 0.15rem !important; }
+    #chat-active-input .chat-input-icon-btn,
+    #chat-active-input .chat-input-send-btn { width: 34px; height: 34px; font-size: 1rem; }
+    #chat-input-text { padding: 0.6rem 0.9rem !important; }
+    #chat-active-messages { padding-left: 0.7rem !important; padding-right: 0.7rem !important; }
+    /* balões usam a largura da tela (o padrão 75% desperdiça no celular) */
+    #chat-active-messages .msg-bubble-container > div[id^="msg-bubble-"] { max-width: 86% !important; }
 }
 
 /* Botões voltar / ficha / fechar do Atendimento — só aparecem no mobile
@@ -7728,7 +7758,7 @@ h1, h2,
    BIBLIOTECA DE MÍDIA — gerenciador de arquivos (#view-midias)
    ============================================================================ */
 #view-midias { background: var(--bg-main); flex-direction: column; min-height: 0; overflow-y: auto; }
-.midx-wrap { padding: 1.75rem 2rem; display: flex; flex-direction: column; gap: 1.1rem; }
+.midx-wrap { padding: 1.75rem 2rem; display: flex; flex-direction: column; gap: 1.1rem; max-width: 1200px; }
 .midx-head h2 {
     margin: 0; font-size: 1.3rem; color: var(--text-main);
     display: flex; align-items: center; gap: 0.55rem;
@@ -7751,14 +7781,18 @@ h1, h2,
 }
 
 .midx-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 0.9rem; padding: 0.25rem; border-radius: 12px;
-    transition: background 0.15s, box-shadow 0.15s;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
+    gap: 0.9rem; padding: 1rem; border-radius: 12px;
+    border: 1px solid var(--border-color); background: var(--bg-main);
+    align-content: start; min-height: 340px;
+    transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
 .midx-grid.is-drop {
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: var(--accent-primary);
     box-shadow: inset 0 0 0 2px var(--accent-primary);
 }
+.midx-grid--modal { border: 0; min-height: 0; background: none; padding: 0.25rem; }
 .midx-grid--modal { max-height: 52vh; overflow-y: auto; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 
 .midx-tile {
@@ -7770,7 +7804,8 @@ h1, h2,
 }
 .midx-tile:hover { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
 .midx-tile:active { transform: scale(0.98); }
-.midx-tile--folder { background: color-mix(in srgb, var(--accent-primary) 9%, var(--bg-card)); }
+.midx-tile--folder { background: color-mix(in srgb, var(--accent-primary) 9%, var(--bg-card)); padding-block: 1.5rem; }
+.midx-tile--folder .midx-tile-name { font-size: 0.82rem; font-weight: 600; }
 .midx-tile.is-dragover { border-color: var(--accent-primary); box-shadow: inset 0 0 0 2px var(--accent-primary); }
 .midx-tile-ic { font-size: 2.1rem; color: var(--text-muted); margin-top: 0.4rem; }
 .midx-tile--folder .midx-tile-ic { color: var(--accent-primary); }

@@ -3095,24 +3095,40 @@ function openSidebarFlyout(flyoutId, triggerId) {
     // header.sb-collapsed:hover { width: 232px }). Não medir getBoundingClientRect
     // da sidebar aqui: a largura está em transição e mediria um valor menor,
     // jogando o flyout por cima do menu.
-    const EXPANDED_SIDEBAR_W = 232;
-    const sidebarLeft = sidebar ? sidebar.getBoundingClientRect().left : 0;
-    const measuredRight = sidebar ? sidebar.getBoundingClientRect().right : rect.right;
-    // usa o maior entre a largura-alvo e a medida atual — nunca sob a barra
-    const anchorRight = Math.max(sidebarLeft + EXPANDED_SIDEBAR_W, measuredRight);
-    flyout.style.left = Math.round(anchorRight + gap) + 'px';
-    flyout.style.top = Math.round(rect.top) + 'px';
     flyout.style.display = 'flex';
     flyout.style.flexDirection = 'column';
     // Acima da sidebar (que fica em z-index 10000 quando expandida no hover).
     flyout.style.zIndex = '10001';
+
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    if (isMobile && sidebar) {
+        // No celular a sidebar é um drawer estreito — o flyout horizontal saía
+        // da tela. Vira um painel dentro do drawer, logo abaixo do item.
+        const sb = sidebar.getBoundingClientRect();
+        flyout.style.left = Math.round(sb.left + 12) + 'px';
+        flyout.style.width = Math.round(sb.width - 24) + 'px';
+        flyout.style.top = Math.round(rect.bottom + 4) + 'px';
+        flyout.style.maxHeight = Math.max(160, window.innerHeight - rect.bottom - 24) + 'px';
+        flyout.style.overflowY = 'auto';
+    } else {
+        flyout.style.width = '';
+        flyout.style.maxHeight = '';
+        flyout.style.overflowY = '';
+        const EXPANDED_SIDEBAR_W = 232;
+        const sidebarLeft = sidebar ? sidebar.getBoundingClientRect().left : 0;
+        const measuredRight = sidebar ? sidebar.getBoundingClientRect().right : rect.right;
+        // usa o maior entre a largura-alvo e a medida atual — nunca sob a barra
+        const anchorRight = Math.max(sidebarLeft + EXPANDED_SIDEBAR_W, measuredRight);
+        flyout.style.left = Math.round(anchorRight + gap) + 'px';
+        flyout.style.top = Math.round(rect.top) + 'px';
+    }
 
     // Reinicia a animação de abertura toda vez (remove + força reflow + adiciona de novo).
     flyout.classList.remove('sb-flyout-visible');
     void flyout.offsetWidth;
     flyout.classList.add('sb-flyout-visible');
 
-    requestAnimationFrame(() => {
+    if (!isMobile) requestAnimationFrame(() => {
         const overflowBottom = flyout.getBoundingClientRect().bottom - window.innerHeight;
         if (overflowBottom > 0) {
             flyout.style.top = Math.max(8, rect.top - overflowBottom - 8) + 'px';
@@ -6111,8 +6127,12 @@ function renderDashboardCardTools() {
         card.querySelectorAll(':scope > .dash-card-tools, :scope > .dash-card-resize-handle').forEach(el => el.remove());
         const isHidden = card.dataset.hidden === 'true';
         card.insertAdjacentHTML('afterbegin', `
-            <div class="dash-card-tools" aria-label="Controles do card">
-                <span class="dash-card-drag" title="Arraste para reordenar"><i class="fa-solid fa-grip-vertical"></i></span>
+            <div class="dash-card-tools" role="group" aria-label="Controles do card">
+                <span class="dash-card-drag" title="Arraste para reordenar" aria-hidden="true"><i class="fa-solid fa-grip-vertical"></i></span>
+                <button type="button" class="dash-card-move dash-card-move-up" onclick="moveDashboardCard(this, -1)" title="Mover card para trás" aria-label="Mover card para trás"><i class="fa-solid fa-arrow-left"></i></button>
+                <button type="button" class="dash-card-move dash-card-move-down" onclick="moveDashboardCard(this, 1)" title="Mover card para frente" aria-label="Mover card para frente"><i class="fa-solid fa-arrow-right"></i></button>
+                <button type="button" class="dash-card-move dash-card-narrower" onclick="resizeDashboardCard(this, -1)" title="Estreitar card" aria-label="Estreitar card"><i class="fa-solid fa-compress"></i></button>
+                <button type="button" class="dash-card-move dash-card-wider" onclick="resizeDashboardCard(this, 1)" title="Alargar card" aria-label="Alargar card"><i class="fa-solid fa-expand"></i></button>
                 <button type="button" class="dash-card-visibility" onclick="toggleDashboardCardVisibility(this)" title="${isHidden ? 'Card oculto — clique para mostrar' : 'Ocultar este card'}"><i class="fa-solid ${isHidden ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
             </div>
             <span class="dash-card-resize-handle dash-card-resize-right" data-dash-resize-edge="right" title="Arraste para redimensionar na horizontal"></span>
@@ -6186,6 +6206,43 @@ function finishDashboardPointerDrag() {
     // Rede de segurança: garante que o card solto (e todos os outros) continuam
     // com o grip/olho — renderDashboardCardTools só insere o que estiver faltando.
     if (dashboardCustomizerActive) renderDashboardCardTools();
+}
+
+// Reorder por teclado — mesmo efeito do arraste, sem depender de ponteiro.
+function moveDashboardCard(button, dir) {
+    const card = button.closest('.dash-kpi-card, .dash-layout-card');
+    if (!card) return;
+    const cards = getDashboardCards();
+    const i = cards.indexOf(card);
+    const j = i + dir;
+    if (i === -1 || j < 0 || j >= cards.length) return;
+    if (dir < 0) cards[j].before(card); else cards[j].after(card);
+    getDashboardCards().forEach((item, idx) => { item.style.order = idx + 1; });
+    if (typeof autoPackDashboardCards === 'function') autoPackDashboardCards();
+    packDashboardMasonry();
+    renderDashboardCardTools();
+    saveDashboardLayout();
+    const again = card.querySelector(dir < 0 ? '.dash-card-move-up' : '.dash-card-move-down');
+    if (again) again.focus();
+}
+
+// Alargar / estreitar por teclado — mesma lógica do resize por arraste.
+function resizeDashboardCard(button, dir) {
+    const card = button.closest('.dash-kpi-card, .dash-layout-card');
+    const grid = getDashboardGrid();
+    if (!card || !grid) return;
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(' ').length || 4;
+    const cur = Math.max(1, Math.min(columns, Number(card.dataset.layoutSpan) || 1));
+    const next = Math.max(1, Math.min(columns, cur + dir));
+    if (next === cur) return;
+    card.dataset.layoutSpan = next;
+    card.style.gridColumn = `span ${next}`;
+    card.style.removeProperty('width');
+    if (typeof updateDashboardCardScale === 'function') updateDashboardCardScale(card);
+    packDashboardMasonry();
+    saveDashboardLayout();
+    const again = card.querySelector(dir < 0 ? '.dash-card-narrower' : '.dash-card-wider');
+    if (again) again.focus();
 }
 
 function toggleDashboardCardVisibility(button) {
@@ -7031,6 +7088,26 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         const formatValue = (val) => val >= 1000 ? (val/1000).toFixed(1).replace('.0','') + 'k' : val.toString();
         const maxVal = Math.max(...data.map(d => d.value), 1);
 
+        // Mobile / painel estreito: a forma orgânica com rótulos posicionados por
+        // % se sobrepõe. Abaixo de ~560px, mostra barras horizontais empilhadas.
+        const narrow = funnelContainer.clientWidth > 0 && funnelContainer.clientWidth < 560;
+        if (narrow) {
+            funnelContainer.style.flexDirection = 'column';
+            funnelContainer.style.justifyContent = 'center';
+            funnelContainer.style.gap = '0.5rem';
+            funnelContainer.innerHTML = data.map(d => {
+                const pct = Math.round((d.value / maxVal) * 100);
+                return `<div style="display:flex;align-items:center;gap:0.75rem;">
+                    <span style="flex:0 0 78px;font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${d.label}</span>
+                    <div style="flex:1;height:20px;background:var(--bg-hover);border-radius:6px;overflow:hidden;">
+                        <div style="width:${Math.max(pct,2)}%;height:100%;background:linear-gradient(90deg,#7dd3fc,#0284c7);"></div>
+                    </div>
+                    <span style="flex:0 0 auto;min-width:3ch;text-align:right;font-size:0.85rem;font-weight:700;color:var(--text-main);">${formatValue(d.value)}</span>
+                </div>`;
+            }).join('');
+        } else {
+        funnelContainer.style.flexDirection = 'row';
+
         let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
             <defs>
                 <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -7122,6 +7199,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         
         labelsHtml += `</div>`;
         funnelContainer.innerHTML = svgHtml + labelsHtml;
+        }
     }
 
     // Origem Doughnut Chart
@@ -9145,8 +9223,7 @@ function renderMidias() {
             ' ondragleave="this.classList.remove(\'is-dragover\');"' +
             ' ondrop="this.classList.remove(\'is-dragover\'); midxMoveDropped(event, \'' + f.id + '\')">' +
             '<div class="midx-tile-actions">' +
-            '<button title="Renomear" onclick="event.stopPropagation(); midxRename(\'folder\',\'' + f.id + '\', ' + nmeta + ')"><i class="fa-solid fa-pen"></i></button>' +
-            '<button class="is-danger" title="Excluir" onclick="event.stopPropagation(); midxDelete(\'folder\',\'' + f.id + '\')"><i class="fa-solid fa-trash"></i></button>' +
+            '<button title="Ações" aria-label="Ações da pasta" onclick="event.stopPropagation(); midxOnFolderCtx(event, \'' + f.id + '\', ' + nmeta + ')"><i class="fa-solid fa-ellipsis-vertical"></i></button>' +
             '</div>' +
             '<i class="fa-solid fa-folder midx-tile-ic"></i>' +
             '<span class="midx-tile-name">' + escapeHtml(f.nome) + '</span>' +
@@ -9154,7 +9231,6 @@ function renderMidias() {
     }).join('');
 
     const itemHtml = items.map(function (i) {
-        const nmeta = JSON.stringify(String(i.nome)).replace(/"/g, '&quot;');
         const thumb = i.tipo === 'image'
             ? '<img class="midx-tile-thumb" loading="lazy" src="' + (i.thumb_base64 ? ('data:image/jpeg;base64,' + i.thumb_base64) : ('/api/media/' + i.id + '/raw')) + '" alt="">'
             : '<i class="fa-solid ' + (i.tipo === 'video' ? 'fa-film' : i.tipo === 'audio' ? 'fa-music' : 'fa-file-lines') + ' midx-tile-ic"></i>';
@@ -9163,8 +9239,7 @@ function renderMidias() {
             ' oncontextmenu="midxOnItemCtx(event, \'' + i.id + '\')"' +
             ' ondblclick="midxPreview(\'' + i.id + '\')">' +
             '<div class="midx-tile-actions">' +
-            '<button title="Renomear" onclick="event.stopPropagation(); midxRename(\'item\',\'' + i.id + '\', ' + nmeta + ')"><i class="fa-solid fa-pen"></i></button>' +
-            '<button class="is-danger" title="Excluir" onclick="event.stopPropagation(); midxDelete(\'item\',\'' + i.id + '\')"><i class="fa-solid fa-trash"></i></button>' +
+            '<button title="Ações" aria-label="Ações do arquivo" onclick="event.stopPropagation(); midxOnItemCtx(event, \'' + i.id + '\')"><i class="fa-solid fa-ellipsis-vertical"></i></button>' +
             '</div>' +
             thumb +
             '<span class="midx-tile-name">' + escapeHtml(i.nome) + '</span>' +

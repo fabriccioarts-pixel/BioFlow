@@ -35,6 +35,25 @@
             height: 100%;
         }
 
+        /* No mobile, os ~7 filtros do Kanban empilhados comiam meia tela antes
+           de aparecer um lead. Colapsa em busca + botão "Filtros". */
+        #kf-toggle { display: none; }
+        @media (max-width: 768px) {
+            .kanban-filters { gap: 0.5rem !important; padding: 0.7rem 1rem !important; }
+            .kanban-filters > * { display: none !important; }
+            .kanban-filters > #filter-search { display: block !important; flex: 1; width: auto !important; min-width: 0; }
+            .kanban-filters > #kf-toggle { display: inline-flex !important; flex-shrink: 0; }
+            .kanban-filters.kf-open > #filter-owner,
+            .kanban-filters.kf-open > #filter-origem,
+            .kanban-filters.kf-open > #kanban-sort { display: block !important; width: 100% !important; }
+            .kanban-filters.kf-open > .kf-daterange,
+            .kanban-filters.kf-open > label,
+            .kanban-filters.kf-open > button:not(#kf-toggle) { display: flex !important; width: 100% !important; }
+            .kanban-filters.kf-open .kf-daterange { flex-wrap: wrap; }
+            .kanban-filters.kf-open .kf-daterange > div { flex: 1 1 44%; min-width: 0; }
+            .kanban-filters.kf-open #kf-toggle { color: var(--accent-primary); border-color: var(--accent-primary); }
+        }
+
         /* Orçamento — bloco "Dados do paciente" + busca */
         #modalOrcamento .orcx-patient {
             padding: 0.85rem;
@@ -283,7 +302,7 @@
             border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-card); color: var(--text-main);
         }
         .fx-editor-actions { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; }
-        .fx-switch { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+        .fx-switch { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
         .fx-mini { font-size: 0.7rem; font-weight: 400; color: var(--text-muted); text-transform: none; letter-spacing: 0; line-height: 1.4; }
 
         /* palco: canvas + drawer */
@@ -374,6 +393,14 @@
         .fx-sim-err { color: #ef4444; }
 
         /* blocos de formulário (usado pela tela de Follow-up automático) */
+        /* Numa coluna legível; a partir de 1200px vira 2 colunas (lembretes | config). */
+        #fx-editor .fx-editor-head, #fx-editor .fx-block { max-width: 780px; }
+        #fx-editor .fx-cols { display: flex; flex-direction: column; gap: 0.75rem; }
+        #fx-editor .fx-col-main, #fx-editor .fx-col-side { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+        @media (min-width: 1200px) {
+            #fx-editor .fx-editor-head, #fx-editor .fx-cols .fx-block { max-width: none; }
+            #fx-editor .fx-cols { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); align-items: start; gap: 1.25rem; }
+        }
         #fx-editor .fx-block { border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-card); padding: 1rem 1.1rem; }
         #fx-editor .fx-block-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.85rem; display: flex; align-items: center; gap: 0.4rem; }
         #fx-editor .fx-block > label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.55rem; }
@@ -383,13 +410,20 @@
             border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-main); color: var(--text-main); box-sizing: border-box;
         }
         #fx-editor .fx-block textarea { resize: vertical; }
-        #fx-editor .fx-row { display: flex; gap: 0.75rem; }
-        #fx-editor .fx-row > label { flex: 1; }
-        #fx-editor .fx-node { border: 1px solid var(--border-color); border-radius: 9px; }
-        #fx-editor .fx-node-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.6rem; background: var(--bg-main); border-bottom: 1px solid var(--border-color); border-radius: 9px 9px 0 0; }
+        #fx-editor .fx-block input[type="number"] { max-width: 140px; }
+        #fx-editor .fx-block input[type="time"] { max-width: 150px; }
+        #fx-editor :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+        #fx-editor .fx-row { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+        #fx-editor .fx-row > label { flex: 0 0 auto; }
+        /* Cascata: conector vertical entre os lembretes */
+        #fx-editor .fx-node { border: 1px solid var(--border-color); border-radius: 9px; position: relative; }
+        #fx-editor .fx-node + .fx-node::before { content: ""; position: absolute; left: 1.15rem; top: -0.6rem; width: 2px; height: 0.6rem; background: var(--border-color); }
+        #fx-editor .fx-node-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.7rem; background: var(--bg-main); border-bottom: 1px solid var(--border-color); border-radius: 9px 9px 0 0; }
         #fx-editor .fx-node-id { font-size: 0.72rem; font-weight: 700; color: var(--accent-primary); }
-        #fx-editor .fx-node-body { padding: 0.7rem; }
-        #fx-editor .fx-node-body label { display: block; font-size: 0.78rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.6rem; }
+        #fx-editor .fx-node-when { font-size: 0.8rem; color: var(--text-main); flex: 1; }
+        #fx-editor .fx-node-body { padding: 0.85rem 0.9rem; }
+        #fx-editor .fx-node-body label { display: block; font-size: 0.78rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.75rem; }
+        #fx-editor .fx-node-body label:last-child { margin-bottom: 0; }
         #fx-editor .fx-add-btn { width: 100%; padding: 0.5rem; border: 1px dashed var(--border-color); border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.82rem; font-weight: 600; }
         #fx-editor .fx-add-btn:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
         .fx-followup-entry i { width: 14px; }
@@ -753,6 +787,12 @@
 
             <input type="text" id="filter-search" oninput="renderBoard()" placeholder="Buscar nome ou telefone..."
                 style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: 180px;">
+
+            <button type="button" id="kf-toggle" class="btn-secondary"
+                onclick="this.closest('.kanban-filters').classList.toggle('kf-open')"
+                style="padding: 0.4rem 0.8rem; font-size: 0.85rem;" aria-label="Mostrar filtros">
+                <i class="fa-solid fa-sliders"></i> Filtros
+            </button>
 
             <select id="filter-owner" onchange="renderBoard()"
                 style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: auto;">
@@ -1349,6 +1389,17 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <div class="view-section" id="view-dashboard"
         style="display: none; flex-direction: column; overflow-y: auto; min-height: 0; background: var(--bg-main);">
 
+        <style>
+            /* Alvos de toque >= 40px nos controles do header (audit Impeccable) */
+            #view-dashboard .dash-preset-btn { min-height: 40px; display: inline-flex; align-items: center; }
+            #view-dashboard .dash-range-box { min-height: 40px; }
+            #view-dashboard #dash-customize-btn { min-height: 40px; }
+            #view-dashboard :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+            /* Ferramentas do card no modo Personalizar: reorder/resize por teclado */
+            #view-dashboard .dash-card-tools { flex-wrap: wrap; max-width: 60%; justify-content: flex-end; }
+            #view-dashboard .dash-card-tools button { width: 26px; height: 26px; }
+        </style>
+
         <!-- Dashboard Header -->
         <div
             style="padding: 2rem 2rem 0 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
@@ -1370,7 +1421,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-muted); padding: 0.4rem 0.75rem; border-radius: 8px; font-size: 0.78rem; cursor: pointer; transition: all 0.15s;">Tudo</button>
                 </div>
                 <!-- Custom date range picker -->
-                <div
+                <div class="dash-range-box"
                     style="position: relative; display: flex; align-items: center; gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.4rem 0.75rem;">
                     <i class="fa-regular fa-calendar" style="color: var(--text-muted); font-size: 0.9rem;"></i>
                     <input type="text" id="dash-daterange" placeholder="Período personalizado" readonly=""
@@ -3749,7 +3800,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
 
                 <!-- Textarea Central Expansível -->
-                <div style="flex: 1; position: relative; display: flex; flex-direction: column;">
+                <div style="flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column;">
                     <!-- Preview de Resposta (Mencionando Mensagem) -->
                     <div id="chat-reply-preview"
                         style="display: none; background: rgba(0, 0, 0, 0.25); border-left: 2px solid var(--accent-success); border-radius: 8px; padding: 0.4rem 0.6rem; margin-bottom: 0.4rem; font-size: 0.85rem; justify-content: space-between; align-items: center; box-sizing: border-box; width: 100%;">
@@ -3772,7 +3823,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="display: none; position: absolute; bottom: 100%; left: 0; right: 0; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; max-height: 220px; overflow-y: auto; z-index: 1000; margin-bottom: 8px;">
                         </div>
                         <textarea id="chat-input-text" rows="1"
-                            placeholder="Digite uma mensagem ou / para respostas rápidas..."
+                            placeholder="Mensagem, ou / para respostas rápidas"
                             oninput="autoExpandChatInput(this); if(typeof handleQuickRepliesInput==='function') handleQuickRepliesInput(this); if(typeof saveChatDraftFromInput==='function') saveChatDraftFromInput();"
                             onkeydown="handleChatInputKeyDown(event)"
                             style="width: 100%; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.75rem 1.2rem; border-radius: 22px; outline: none; resize: none; min-height: 44px; max-height: 140px; font-family: inherit; font-size: 0.95rem; line-height: 1.4; box-sizing: border-box;"></textarea>
