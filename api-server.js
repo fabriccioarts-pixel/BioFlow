@@ -2839,6 +2839,10 @@ queryD1("CREATE INDEX IF NOT EXISTS idx_wa_msg_phone_ts ON wa_messages(phone, ti
 // wa_messages: UPDATE ... SET status='read' WHERE phone IN (...) AND direction='in'
 // e a contagem de não lidas.
 queryD1("CREATE INDEX IF NOT EXISTS idx_wa_msg_phone_status ON wa_messages(phone, direction, status)").catch(() => {});
+// wa_messages: MAX(timestamp) WHERE phone = ? AND direction = 'in' — usada pelo
+// last_inbound_at da lista de conversas (selo da janela de 24h) e por todo
+// código que já perguntava "quando foi a última mensagem QUE ELE mandou".
+queryD1("CREATE INDEX IF NOT EXISTS idx_wa_msg_phone_dir_ts ON wa_messages(phone, direction, timestamp)").catch(() => {});
 // leads: SELECT * FROM leads ORDER BY created_at ASC (lista do kanban).
 queryD1("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at)").catch(() => {});
 queryD1("CREATE INDEX IF NOT EXISTS idx_leads_owner_created ON leads(owner_id, created_at)").catch(() => {});
