@@ -5829,6 +5829,18 @@ async function marketingSyncTick() {
         return await syncMetaMarketing({ days: 3 });
     } catch (e) {
         console.error('[marketing] tick falhou:', e.message);
+        // Sem gravar o timestamp aqui, um erro permanente (credencial errada,
+        // token expirado) tentava de novo em TODO flow-tick pra sempre — a cada
+        // ~2min, sem parar, só pra falhar de novo. Marca a tentativa igual um
+        // sucesso marcaria, então o mesmo intervalo de MARKETING_SYNC_HORAS vale
+        // pros dois casos. Corrigir a credencial + chamar /api/marketing/sync
+        // (admin) dispara na hora, sem esperar a janela.
+        try {
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('marketing_sync_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [JSON.stringify({ at: new Date().toISOString(), erro: e.message })]
+            );
+        } catch (e2) {}
         return { erro: e.message };
     } finally {
         _mktSyncRunning = false;
