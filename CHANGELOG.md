@@ -1,5 +1,11 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-14 — ROI de Anúncios: corrige "Invalid appsecret_proof" que zerava o gasto
+
+### Corrigido
+* **Sync de Marketing (Meta Ads) sempre falhava com `Invalid appsecret_proof provided in the API argument (code 100)`**, deixando gasto/receita/ROAS em R$0,00 na tela de ROI de Anúncios (os números de leads/qualificados continuavam certos porque vêm do banco local, não da Meta). Causa: o token configurado pra essa integração não pertence ao mesmo app do `META_APP_SECRET` disponível — a prova de assinatura nunca batia.
+* `metaGraphGetAll()` parou de calcular/enviar `appsecret_proof` nessa chamada (é só leitura de gasto/campanha, sem nada sensível — a Meta não exige a prova aqui). Resolve sem precisar achar a credencial certa; `/api/marketing/status` reflete isso (`appsecret_proof: false`).
+
 ## 2026-09-14 — Webhook: reentrega da Meta não quebra mais com erro de duplicidade
 
 ### Corrigido

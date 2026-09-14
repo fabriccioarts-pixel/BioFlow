@@ -5754,11 +5754,14 @@ async function ensureAdTables() {
 
 // GET no Graph seguindo paginação (paging.next). Devolve todos os data[] juntos.
 async function metaGraphGetAll(path, params, cfg) {
-    const { token, appSecret } = cfg;
-    const proof = appSecret ? crypto.createHmac('sha256', appSecret).update(token).digest('hex') : null;
+    const { token } = cfg;
+    // Sem appsecret_proof de propósito: o token configurado pra essa integração
+    // (leitura de gasto/campanha, sem nada sensível) não bate com o app do
+    // META_APP_SECRET disponível, e a Meta rejeitava toda chamada com "Invalid
+    // appsecret_proof" (code 100). Sem a prova, funciona igual — só perde essa
+    // camada extra de verificação, que não é exigida pela Meta nessa chamada.
     let url = new URL(`https://graph.facebook.com/${META_GRAPH}/${path}`);
     url.searchParams.set('access_token', token);
-    if (proof) url.searchParams.set('appsecret_proof', proof);
     for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
 
     const out = [];
@@ -5911,7 +5914,7 @@ app.get('/api/marketing/status', async (req, res) => {
         token_source: process.env.META_ADS_TOKEN ? 'META_ADS_TOKEN'
             : process.env.META_API_MARKETING ? 'META_API_MARKETING'
             : process.env.META_ACCESS_TOKEN ? 'META_ACCESS_TOKEN' : null,
-        appsecret_proof: !!cfg.appSecret,
+        appsecret_proof: false, // desligado de propósito nessa chamada — ver metaGraphGetAll
         graph: META_GRAPH,
         ultimo_sync: last
     });
