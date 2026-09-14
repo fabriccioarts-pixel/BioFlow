@@ -3645,7 +3645,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
 
             <!-- Corpo das Mensagens -->
-            <div id="chat-active-messages"
+            <div id="chat-active-messages" onscroll="handleChatScrollForOlderMessages(this)"
                 style="display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 1.5rem 2rem; display: flex; flex-direction: column; gap: 0.65rem;">
                 <!-- As mensagens serão injetadas aqui -->
             </div>
