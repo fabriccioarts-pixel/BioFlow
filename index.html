@@ -3485,10 +3485,6 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
                     <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;"><i class="fa-brands fa-whatsapp"
                             style="color: var(--accent-success);"></i> Mensagens</h2>
-                    <button type="button" id="chat-select-toggle-btn" onclick="toggleChatSelectMode()" title="Selecionar conversas para apagar"
-                        style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; gap: 0.35rem;">
-                        <i class="fa-regular fa-square-check"></i> Selecionar
-                    </button>
                 </div>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <div style="position: relative; flex: 1; min-width: 0;">
@@ -3502,9 +3498,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
                     <!-- Filtros de conversa: ícone com flyout -->
                     <div style="position: relative; flex-shrink: 0;">
-                        <button type="button" id="chat-filter-toggle-btn" onclick="toggleChatFilterMenu(event)" title="Filtrar conversas"
+                        <button type="button" id="chat-filter-toggle-btn" onclick="toggleChatFilterMenu(event)" title="Filtros e opções"
                             style="width: 38px; height: 38px; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative;">
-                            <i class="fa-solid fa-filter"></i>
+                            <i class="fa-solid fa-ellipsis-vertical"></i>
                             <span id="chat-filter-active-dot" style="display: none; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-success);"></span>
                         </button>
 
@@ -3542,6 +3538,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             </div>
                             <div class="chat-filter-menu-item" data-filter="archived" onclick="setChatFilter('archived')">
                                 <i class="fa-solid fa-box-archive"></i> Arquivadas
+                            </div>
+                            <div style="height: 1px; background: var(--border-color); margin: 0.3rem 0;"></div>
+                            <div class="chat-filter-menu-item" id="chat-select-toggle-btn"
+                                onclick="toggleChatSelectMode(); document.getElementById('chat-filter-menu').style.display='none';">
+                                <i class="fa-regular fa-square-check"></i> Selecionar
                             </div>
                         </div>
                     </div>
