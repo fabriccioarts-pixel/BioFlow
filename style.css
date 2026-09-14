@@ -5131,9 +5131,10 @@ select.form-control option,
 }
 .chat-filter-chip:hover { color: var(--text-main); border-color: var(--text-muted); }
 .chat-filter-chip.active {
-    background: rgba(16, 185, 129, 0.12);
-    border-color: rgba(16, 185, 129, 0.4);
-    color: var(--accent-success);
+    background: var(--accent-success);
+    border-color: var(--accent-success);
+    color: #fff;
+    font-weight: 700;
 }
 
 .dash-card-compact {
@@ -7588,13 +7589,49 @@ body:has(#login-overlay.active) header { display: none; }
     display: none;
 }
 
+.chat-empty-fallback-icon {
+    font-size: 4rem;
+    opacity: 0.16;
+    margin-bottom: 1.2rem;
+    color: var(--accent-success);
+}
+
+.chat-empty-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0 0 0.5rem;
+}
+
+.chat-empty-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    max-width: 380px;
+    line-height: 1.55;
+    margin: 0;
+}
+
+.chat-empty-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 3rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.chat-empty-footer i {
+    color: var(--accent-success);
+}
+
 @media (min-width: 769px) {
     .chat-empty-illustration {
         display: block;
-        width: min(340px, 40vw);
-        max-width: 340px;
+        width: min(280px, 32vw);
+        max-width: 280px;
         height: auto;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.75rem;
         opacity: 0.92;
     }
     /* Com a ilustração presente, o ícone do WhatsApp vira redundante.

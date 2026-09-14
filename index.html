@@ -3481,9 +3481,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         <!-- Sidebar Esquerda (Lista de Contatos) -->
         <div class="chat-sidebar"
             style="width: 350px; height: 100%; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--bg-card); overflow: hidden;">
-            <div style="padding: 1.5rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+            <div style="padding: 1.1rem 1.5rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
-                    <h2 style="font-size: 1.2rem; margin: 0;"><i class="fa-brands fa-whatsapp"
+                    <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;"><i class="fa-brands fa-whatsapp"
                             style="color: var(--accent-success);"></i> Mensagens</h2>
                     <button type="button" id="chat-select-toggle-btn" onclick="toggleChatSelectMode()" title="Selecionar conversas para apagar"
                         style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; gap: 0.35rem;">
@@ -3584,14 +3584,15 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
             <!-- Estado Vazio -->
             <div id="chat-empty-state"
-                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted);">
+                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); text-align: center; padding: 2rem;">
                 <img src="vendor/illustrations/undraw_group-chat_nze2.svg" alt=""
                     class="chat-empty-illustration" onerror="this.remove()">
-                <i class="fa-brands fa-whatsapp chat-empty-fallback-icon"
-                    style="font-size: 4rem; opacity: 0.2; margin-bottom: 1rem;"></i>
-                <p style="font-size: 1.1rem;">Selecione uma conversa para começar</p>
+                <i class="fa-brands fa-whatsapp chat-empty-fallback-icon"></i>
+                <h3 class="chat-empty-title">Selecione uma conversa</h3>
+                <p class="chat-empty-subtitle">Escolha um contato na lista ao lado para ver o histórico completo, ou comece um atendimento novo.</p>
                 <button class="btn-primary" onclick="openNewMessageModal()" style="margin-top: 1.5rem;"><i
-                        class="fa-solid fa-plus"></i> Nova Conversa</button>
+                        class="fa-solid fa-plus"></i> Nova conversa</button>
+                <div class="chat-empty-footer"><i class="fa-brands fa-whatsapp"></i> Conectado ao WhatsApp Business</div>
             </div>
 
             <!-- Header do Chat Ativo -->
