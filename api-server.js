@@ -2292,20 +2292,39 @@ function buildPhoneVariants(phone) {
 }
 
 // 5. Histórico de Conversa de um Número
+// ?limit=N pagina: devolve só as N mensagens mais recentes (ou anteriores a
+// ?before=<timestamp>, pra "carregar mais antigas" ao rolar pra cima), em
+// ordem cronológica igual sempre foi. Sem ?limit, mantém o comportamento
+// antigo (conversa inteira) — só existe pra não quebrar nenhum outro uso
+// que porventura exista dessa rota.
 app.get('/api/whatsapp/chat/:phone', async (req, res) => {
     try {
         const phonesArr = buildPhoneVariants(req.params.phone);
         const placeholders = phonesArr.map(() => '?').join(', ');
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 0, 0), 200);
+        const before = req.query.before ? String(req.query.before) : null;
 
-        const rows = await queryD1(`
+        let sql = `
             SELECT m.*,
                    q.message as quoted_message,
                    q.direction as quoted_direction
             FROM wa_messages m
             LEFT JOIN wa_messages q ON m.quoted_id = q.id
             WHERE m.phone IN (${placeholders})
-            ORDER BY m.timestamp ASC
-        `, phonesArr);
+        `;
+        const params = [...phonesArr];
+        if (before) { sql += ' AND m.timestamp < ?'; params.push(before); }
+
+        if (limit > 0) {
+            sql += ' ORDER BY m.timestamp DESC, m.rowid DESC LIMIT ?';
+            params.push(limit);
+            const rows = await queryD1(sql, params);
+            const data = (rows || []).slice().reverse(); // devolve cronológico, igual sempre foi
+            return res.json({ success: true, data, has_more: (rows || []).length === limit });
+        }
+
+        sql += ' ORDER BY m.timestamp ASC';
+        const rows = await queryD1(sql, params);
         res.json({ success: true, data: rows });
     } catch(e) {
         console.error(e);
