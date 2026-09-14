@@ -54,6 +54,19 @@ app.use(express.json({ limit: '50mb', verify: (req, res, buf) => { req.rawBody =
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
+// Instrumentação temporária: loga só as requisições "pesadas" (>800ms), pra
+// achar o que está consumindo o Fluid Active CPU do Vercel sem depender da
+// Observability paga — isso aparece de graça no log normal de qualquer plano.
+// Remover depois de identificar o suspeito.
+app.use((req, res, next) => {
+    const _t0 = Date.now();
+    res.on('finish', () => {
+        const ms = Date.now() - _t0;
+        if (ms > 800) console.log(`[slow] ${req.method} ${req.path} — ${ms}ms`);
+    });
+    next();
+});
+
 // Rate limiting básico — protege contra flood/força bruta.
 // Limite geral generoso de propósito: várias pessoas da clínica usam o sistema
 // atrás do mesmo IP do escritório, e o polling de notificações (a cada 10s)
@@ -430,10 +443,23 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 const quoted_id = message_obj.context ? message_obj.context.id : null;
 
                 // 1. Salva a mensagem no histórico do chat (incluindo o campo referral e quoted_id)
-                await queryD1(
-                    'INSERT INTO wa_messages (id, phone, direction, message, status, referral, quoted_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                    [msg_id, from, 'in', msg_body, 'received', referral, quoted_id, msgTimestamp]
-                );
+                try {
+                    await queryD1(
+                        'INSERT INTO wa_messages (id, phone, direction, message, status, referral, quoted_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                        [msg_id, from, 'in', msg_body, 'received', referral, quoted_id, msgTimestamp]
+                    );
+                } catch (e) {
+                    if (/UNIQUE constraint failed/i.test(e.message || '')) {
+                        // A Meta reentregou uma mensagem que já processamos — normalmente
+                        // porque a 1ª tentativa demorou a responder (ex.: a IA levando vários
+                        // segundos simulando "digitando..."). Não é erro de verdade: não
+                        // reabre lead/IA pra algo já tratado, só confirma 200 pra Meta parar
+                        // de reentregar (evita fila de retentativa crescendo).
+                        console.log(`Webhook: mensagem ${msg_id} já processada (reentrega da Meta) — ignorando.`);
+                        return res.sendStatus(200);
+                    }
+                    throw e;
+                }
 
                 // 2. Verifica se o lead já existe no Kanban — casa qualquer forma equivalente
                 //    do número (com/sem 55, com/sem o 9º dígito), não só substring.
@@ -686,7 +712,12 @@ async function convertToOggOpus(buffer, inputExt = 'webm') {
             }, 20000);
             cmd.save(outputPath);
         });
-        return await fs.promises.readFile(outputPath);
+        const out = await fs.promises.readFile(outputPath);
+        console.log(`[ffmpeg] concluído em ${Date.now() - _t0}ms — ${buffer.length} -> ${out.length} bytes`);
+        return out;
+    } catch (e) {
+        console.log(`[ffmpeg] falhou depois de ${Date.now() - _t0}ms:`, e.message);
+        throw e;
     } finally {
         fs.promises.unlink(inputPath).catch(() => {});
         fs.promises.unlink(outputPath).catch(() => {});

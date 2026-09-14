@@ -1,5 +1,22 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-14 — Webhook: reentrega da Meta não quebra mais com erro de duplicidade
+
+### Corrigido
+* **`Erro ao processar webhook no DB: UNIQUE constraint failed: wa_messages.id`** — acontecia quando o webhook demorava demais pra responder (ex.: a IA levando vários segundos simulando "digitando…" antes de mandar a resposta) e a Meta reentregava a mesma mensagem. A segunda tentativa tentava inserir o mesmo `id` de novo e caía num erro genérico, sem reprocessar nada de útil.
+* Agora o `INSERT` em `wa_messages` é isolado: se falhar por `UNIQUE constraint`, o webhook reconhece que aquela mensagem já foi tratada, loga como informativo (não mais como erro) e responde `200` pra Meta na hora — sem tentar de novo lead/IA/fluxo.
+* Achado analisando um export real de logs do Vercel: uma chamada ao webhook levou 25s, e 23s depois veio a reentrega da Meta batendo no `UNIQUE constraint`. Ficou registrado que essa demora vem da simulação de "ritmo humano" da IA somada ao tempo de geração do Gemini, tudo dentro da mesma requisição (limitação da Vercel serverless) — candidato a próxima otimização, ainda não mexido.
+
+### Adicionado (diagnóstico temporário)
+* Log `[slow] MÉTODO /rota — Xms` pra qualquer requisição acima de 800ms, e `[ffmpeg] convertendo/concluído` com tamanho e duração da conversão de áudio — pra investigar consumo de CPU do Vercel sem depender da Observability paga. Remover depois de mapear os maiores consumidores.
+
+## 2026-09-14 — Chat: lista de conversas não trava mais no "Carregando..." ao abrir depois de um tempo parado
+
+### Corrigido
+* **Lista de conversas demorava muito pra carregar** quando ninguém abria o chat há alguns minutos (típico "ao iniciar o sistema" de manhã). O cache (`wa_chats_cache`, TTL 5 min) só era reconstruído sob demanda, na hora que alguém pedia — essa pessoa pagava a consulta cara (`GROUP BY` + subquery em toda a `wa_messages`) na cara, travando a tela em "Carregando conversas...".
+* **`waChatsCacheTick()`** — o cache agora é renovado **proativamente** dentro do `/api/flow-tick` (roda a cada ~1min pelo pinger externo), com folga de metade do TTL. Na prática, ninguém mais deveria pagar a reconstrução ao abrir o chat — ela já foi feita em segundo plano antes de alguém precisar.
+* A rota `GET /api/whatsapp/chats` continua com a reconstrução sob demanda como rede de segurança (cache ausente/muito velho, ex.: pinger externo caiu).
+
 ## 2026-09-07 — Loader: sem trilho cinza, só o traço animado
 
 ### Alterado

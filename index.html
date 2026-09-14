@@ -3516,6 +3516,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <div class="chat-filter-menu-item active" data-filter="todos" onclick="setChatFilter('todos')">
                                 <i class="fa-solid fa-inbox"></i> Todos
                             </div>
+                            <div class="chat-filter-menu-item" data-filter="mine" onclick="setChatFilter('mine')">
+                                <i class="fa-solid fa-user-check"></i> Meus atendimentos
+                            </div>
                             <div class="chat-filter-menu-item" data-filter="unread" onclick="setChatFilter('unread')">
                                 <i class="fa-solid fa-comment-dots"></i> Não lidos
                             </div>
@@ -3547,6 +3550,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div id="chat-filter-chips"
                     style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem;">
                     <button type="button" class="chat-filter-chip active" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
+                    <button type="button" class="chat-filter-chip" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
                     <button type="button" class="chat-filter-chip" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
                     <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')">Aguardando resposta</button>
                     <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
