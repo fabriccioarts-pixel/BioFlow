@@ -190,8 +190,12 @@ function chatPresenceBadgeHTML(leadId) {
     return `<span class="chat-viewers" title="Em atendimento agora">${shown}${extra}</span>`;
 }
 
-function formatChatTime(rawTs) {
-    if (!rawTs) return '';
+// Parser único de timestamp de mensagem — aceita epoch (s ou ms), número em
+// string, ou "YYYY-MM-DD HH:MM:SS" do D1 (sem timezone, então marca como UTC
+// antes de converter pro horário local). Usado por tudo que precisa saber
+// QUANDO uma mensagem chegou: hora exibida, selo de janela de 24h, divisor de dia.
+function parseWaTimestamp(rawTs) {
+    if (!rawTs) return null;
     let d;
     if (typeof rawTs === 'number') {
         d = rawTs < 10000000000 ? new Date(rawTs * 1000) : new Date(rawTs);
@@ -210,8 +214,19 @@ function formatChatTime(rawTs) {
     } else {
         d = new Date(rawTs);
     }
+    return (d && !isNaN(d.getTime())) ? d : null;
+}
 
-    if (!d || isNaN(d.getTime())) return '';
+// Chave de dia (pra comparar "é o mesmo dia?") — string estável, independe de
+// hora/minuto.
+function waDayKey(rawTs) {
+    const d = parseWaTimestamp(rawTs);
+    return d ? d.toDateString() : null;
+}
+
+function formatChatTime(rawTs) {
+    const d = parseWaTimestamp(rawTs);
+    if (!d) return '';
 
     // Só hoje mostra hora crua — mensagem de ontem/mais antiga precisa dizer
     // QUANDO foi, senão "23:50" de ontem parece ter chegado agora mesmo.
@@ -236,18 +251,8 @@ function formatChatTime(rawTs) {
 // da última mensagem da conversa, que pode ser nossa). Depois de fechada,
 // só dá pra mandar template aprovado.
 function whatsappWindowBadgeHTML(lastInboundRaw) {
-    if (!lastInboundRaw) return '';
-    let d;
-    const cleanStr = String(lastInboundRaw).trim();
-    if (/^\d+$/.test(cleanStr)) {
-        const num = Number(cleanStr);
-        d = num < 10000000000 ? new Date(num * 1000) : new Date(num);
-    } else {
-        let isoStr = cleanStr;
-        if (isoStr.includes(' ') && !isoStr.includes('T')) isoStr = isoStr.replace(' ', 'T') + 'Z';
-        d = new Date(isoStr);
-    }
-    if (!d || isNaN(d.getTime())) return '';
+    const d = parseWaTimestamp(lastInboundRaw);
+    if (!d) return '';
 
     const msLeft = (d.getTime() + 24 * 3600000) - Date.now();
     if (msLeft <= 0) {
@@ -264,27 +269,8 @@ function whatsappWindowBadgeHTML(lastInboundRaw) {
 }
 
 function formatFullChatDate(rawTs) {
-    if (!rawTs) return '';
-    let d;
-    if (typeof rawTs === 'number') {
-        d = rawTs < 10000000000 ? new Date(rawTs * 1000) : new Date(rawTs);
-    } else if (typeof rawTs === 'string') {
-        const cleanStr = rawTs.trim();
-        if (/^\d+$/.test(cleanStr)) {
-            const num = Number(cleanStr);
-            d = num < 10000000000 ? new Date(num * 1000) : new Date(num);
-        } else {
-            let isoStr = cleanStr;
-            if (isoStr.includes(' ') && !isoStr.includes('T')) {
-                isoStr = isoStr.replace(' ', 'T') + 'Z';
-            }
-            d = new Date(isoStr);
-        }
-    } else {
-        d = new Date(rawTs);
-    }
-
-    if (!d || isNaN(d.getTime())) return '';
+    const d = parseWaTimestamp(rawTs);
+    if (!d) return '';
 
     const now = new Date();
     const isToday = d.toDateString() === now.toDateString();
@@ -1686,9 +1672,19 @@ function renderContactsList(chats) {
     chats = Array.from(seen.values());
 
     let html = '';
+    let lastDayKey = null;
     chats.forEach(chat => {
+        // Divisor grosso quando a conversa muda de dia (a lista vem ordenada por
+        // data em quase todos os filtros) — mesmo texto Hoje/Ontem/data do
+        // divisor de dia dentro da conversa aberta.
+        const dayKey = waDayKey(chat.last_interaction);
+        if (dayKey && dayKey !== lastDayKey) {
+            html += `<div style="padding: 0.45rem 1rem; background: rgba(255,255,255,0.045); border-top: 2px solid var(--border-color); border-bottom: 2px solid var(--border-color); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">${formatFullChatDate(chat.last_interaction)}</div>`;
+            lastDayKey = dayKey;
+        }
+
         const isActive = window.currentActiveChat && window.currentActiveChat.phone === chat.phone ? 'background: rgba(16, 185, 129, 0.1); border-left: 4px solid var(--accent-success);' : 'border-bottom: 1px solid var(--border-color);';
-        
+
         const timeString = formatChatTime(chat.last_interaction);
         const displayName = chat.nome || ('Contato ' + chat.phone);
         const preview = getMessagePreviewText(chat.message);
