@@ -8221,3 +8221,29 @@ h1, h2,
 .copilot-icon-btn { color: var(--accent-primary) !important; }
 .copilot-icon-btn.is-loading { opacity: 0.5; pointer-events: none; }
 @media (max-width: 720px) { .copilot-btn-label { display: none; } }
+
+/* ============================================================================
+   PAPEL DE PAREDE DO CHAT (estilo WhatsApp) — camada isolada num ::before pra
+   poder inverter as cores no tema escuro sem filtrar as mensagens junto (um
+   filter direto no container afetaria o texto/balões também).
+   ============================================================================ */
+#chat-active-messages { position: relative; }
+#chat-active-messages::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url('whatsapp-bg.png');
+    background-repeat: repeat;
+    background-size: 320px auto;
+    pointer-events: none;
+    z-index: 0;
+}
+[data-theme="light"] #chat-active-messages::before {
+    background-color: #efeae2;
+}
+:root:not([data-theme="light"]) #chat-active-messages::before {
+    background-color: var(--bg-main);
+    filter: invert(0.92) hue-rotate(180deg);
+    opacity: 0.55;
+}
+#chat-active-messages > * { position: relative; z-index: 1; }

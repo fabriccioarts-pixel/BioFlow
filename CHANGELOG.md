@@ -1,5 +1,11 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-14 — Papel de parede no fundo do chat (estilo WhatsApp)
+
+### Adicionado
+* `whatsapp-bg.png` na raiz do projeto — o padrão de doodles usado no fundo das conversas.
+* CSS em `style.css`: aplicado como `::before` isolado atrás das mensagens (não filtra o texto/balões). No tema claro usa o tom bege clássico; no escuro, o padrão é invertido e com opacidade reduzida pra não brigar com o resto da UI. `index.html`: `style.css?v=7` pra invalidar cache.
+
 ## 2026-09-14 — ROI de Anúncios: corrige "Invalid appsecret_proof" que zerava o gasto
 
 ### Corrigido
