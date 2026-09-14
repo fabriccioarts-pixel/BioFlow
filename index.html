@@ -3485,26 +3485,21 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
                     <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;"><i class="fa-brands fa-whatsapp"
                             style="color: var(--accent-success);"></i> Mensagens</h2>
-                </div>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <div style="position: relative; flex: 1; min-width: 0;">
-                        <i class="fa-solid fa-magnifying-glass"
-                            style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
-                        <input type="text" id="chat-search-input"
-                            placeholder="Buscar conversa por nome, número ou mensagem..."
-                            oninput="filterChatContacts(this.value)"
-                            style="width: 100%; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.6rem 1rem 0.6rem 2.2rem; border-radius: 8px; outline: none; box-sizing: border-box;">
-                    </div>
-
-                    <!-- Filtros de conversa: ícone com flyout -->
-                    <div style="position: relative; flex-shrink: 0;">
-                        <button type="button" id="chat-filter-toggle-btn" onclick="toggleChatFilterMenu(event)" title="Filtros e opções"
-                            style="width: 38px; height: 38px; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative;">
-                            <i class="fa-solid fa-ellipsis-vertical"></i>
-                            <span id="chat-filter-active-dot" style="display: none; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-success);"></span>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <button type="button" onclick="openNewMessageModal()" title="Nova conversa a partir de um número"
+                            style="width: 34px; height: 34px; background: var(--accent-success); border: none; color: #fff; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;">
+                            <i class="fa-solid fa-plus"></i>
                         </button>
 
-                        <div id="chat-filter-menu" class="dropdown-content"
+                        <!-- Filtros de conversa + opções: ícone com flyout -->
+                        <div style="position: relative; flex-shrink: 0;">
+                            <button type="button" id="chat-filter-toggle-btn" onclick="toggleChatFilterMenu(event)" title="Filtros e opções"
+                                style="width: 34px; height: 34px; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative;">
+                                <i class="fa-solid fa-ellipsis-vertical"></i>
+                                <span id="chat-filter-active-dot" style="display: none; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-success);"></span>
+                            </button>
+
+                            <div id="chat-filter-menu" class="dropdown-content"
                             style="display: none; position: fixed; width: 220px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; z-index: 9999; overflow: hidden; padding: 0.4rem 0;">
                             <div style="padding: 0.6rem 1rem 0.5rem; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border-color); margin-bottom: 0.3rem;">
                                 Filtrar Conversas Por
@@ -3544,8 +3539,19 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                 onclick="toggleChatSelectMode(); document.getElementById('chat-filter-menu').style.display='none';">
                                 <i class="fa-regular fa-square-check"></i> Selecionar
                             </div>
+                            </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Busca -->
+                <div style="position: relative;">
+                    <i class="fa-solid fa-magnifying-glass"
+                        style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
+                    <input type="text" id="chat-search-input"
+                        placeholder="Buscar conversa por nome, número ou mensagem..."
+                        oninput="filterChatContacts(this.value)"
+                        style="width: 100%; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.6rem 1rem 0.6rem 2.2rem; border-radius: 8px; outline: none; box-sizing: border-box;">
                 </div>
                 <!-- Chips de acesso rápido aos filtros mais usados (embaixo da busca) -->
                 <div id="chat-filter-chips"
