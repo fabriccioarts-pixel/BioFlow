@@ -1565,6 +1565,8 @@ function closeActiveChat() {
     leaveChatPresence();
     window.currentActiveChat = null;
     window.activeChatMessages = null;
+    window.chatOldestLoadedTs = null;
+    window.chatHasMoreOlder = false;
     const empty = document.getElementById('chat-empty-state');
     const header = document.getElementById('chat-active-header');
     const messages = document.getElementById('chat-active-messages');
@@ -4465,6 +4467,229 @@ document.addEventListener('keydown', (e) => {
     closeActiveChat();
 });
 
+// Quantas mensagens vêm de cada vez — a rota manda só as mais recentes; o
+// resto do histórico é buscado sob demanda ao rolar pro topo da conversa
+// (loadOlderChatMessages), em vez de carregar a conversa inteira de uma vez.
+const WA_CHAT_PAGE_SIZE = 60;
+
+// Monta o HTML de todas as bolhas a partir de window.activeChatMessages (o
+// array cumulativo já carregado — página recente + qualquer página antiga
+// trazida pelo scroll). Extraído de dentro de openChat pra poder ser chamado
+// de novo depois de "carregar mais antigas" sem refazer o fetch da rede.
+function buildChatMessagesHTML() {
+    let html = '';
+    let lastDateStr = '';
+
+    // Agrega reações — a partir do array CUMULATIVO (window.activeChatMessages),
+    // não só da página recém-buscada, senão uma reação a uma mensagem antiga
+    // (carregada via scroll pra cima) não encontrava o alvo pra desenhar o badge.
+    const reactionsMap = {};
+    const nonReactionMessages = [];
+    window.activeChatMessages.forEach(msg => {
+        if (msg.message && msg.message.startsWith('[Reagiu com:')) {
+            const match = msg.message.match(/\[Reagiu com:\s*(.*?)\]/);
+            if (match && msg.quoted_id) {
+                if (match[1]) {
+                    reactionsMap[msg.quoted_id] = match[1];
+                } else {
+                    delete reactionsMap[msg.quoted_id];
+                }
+            }
+        } else {
+            nonReactionMessages.push(msg);
+        }
+    });
+    window.currentReactionsMap = reactionsMap;
+
+    nonReactionMessages.forEach(msg => {
+        const currentDateStr = formatFullChatDate(msg.timestamp);
+
+        // Exibe a data no início da conversa e na mudança de dia (sem fundo, apenas ícone e texto)
+        if (currentDateStr && currentDateStr !== lastDateStr) {
+            lastDateStr = currentDateStr;
+            html += `
+                <div style="align-self: center; margin: 0.8rem 0 0.4rem 0; padding: 0.2rem 0.6rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600; user-select: none;">
+                    <i class="fa-regular fa-calendar-days" style="margin-right: 5px; color: var(--accent-success);"></i> ${currentDateStr}
+                </div>
+            `;
+        }
+
+        const isOut = msg.direction === 'out';
+        const bg = isOut
+            ? 'var(--accent-success)'
+            : 'var(--bg-card)';
+        const color = isOut ? '#fff' : 'var(--text-main)';
+        const align = isOut ? 'flex-end' : 'flex-start';
+        const borderRadius = isOut ? '16px 4px 16px 16px' : '4px 16px 16px 16px';
+        const border = isOut
+            ? '1px solid rgba(255, 255, 255, 0.18)'
+            : '1px solid var(--border-color)';
+        const boxShadow = 'none';
+
+        const timeString = formatChatTime(msg.timestamp);
+        const statusIcon = isOut ? renderStatusIcon(msg.status) : '';
+
+        let referralHTML = '';
+        if (msg.referral) {
+            try {
+                const ref = typeof msg.referral === 'string' ? JSON.parse(msg.referral) : msg.referral;
+                if (ref && (ref.headline || ref.body || ref.image_url)) {
+                    referralHTML = `
+                        <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.22); border-left: 4px solid var(--accent-success); padding: 0.6rem; margin-bottom: 0.6rem; border-radius: 6px; display: flex; gap: 0.6rem; max-width: 100%; align-items: flex-start; box-sizing: border-box;">
+                            ${ref.image_url ? `<img src="${ref.image_url}" style="width: 55px; height: 55px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-color); flex-shrink: 0;" />` : ''}
+                            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem;">
+                                <div style="font-size: 0.72rem; font-weight: 700; color: var(--accent-success); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 0.3rem;">
+                                    <i class="fa-brands fa-meta"></i> Anúncio do Instagram/Facebook
+                                </div>
+                                ${ref.headline ? `<div style="font-size: 0.8rem; font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ref.headline}</div>` : ''}
+                                ${ref.body ? `<div style="font-size: 0.75rem; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3;">${ref.body}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch(e) {
+                console.error("Erro ao fazer parse do referral:", e);
+            }
+        }
+
+        const isDeleted = msg.message === '🚫 Esta mensagem foi apagada';
+        const htmlMsg = isDeleted
+            ? `<span style="font-style: italic; opacity: 0.65; display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted);"><i class="fa-solid fa-ban" style="font-size: 0.85rem;"></i> Esta mensagem foi apagada</span>`
+            : renderChatMessageContent(msg.message);
+
+        let quotedHTML = '';
+        if (msg.quoted_message) {
+            quotedHTML = renderQuotedMessage(msg.quoted_message, msg.quoted_direction, msg.quoted_id);
+        }
+
+        const reactionBadge = reactionsMap[msg.id] ? `
+            <div class="message-reaction-badge" style="
+                position: absolute;
+                bottom: -10px;
+                ${isOut ? 'left: 15px;' : 'right: 15px;'}
+                background: var(--bg-card);
+                border: 1px solid var(--border-color);
+                border-radius: 10px;
+                padding: 0.1rem 0.35rem;
+                font-size: 0.75rem;
+                display: flex;
+                align-items: center;
+                box-shadow: none;
+                user-select: none;
+                z-index: 5;
+            ">
+                ${reactionsMap[msg.id]}
+            </div>
+        ` : '';
+
+        html += `
+            <div class="msg-bubble-container" style="display: flex; flex-direction: column; align-items: ${align}; margin-bottom: 0.85rem; position: relative;">
+                <div id="msg-bubble-${msg.id}" style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: none; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
+                    <!-- Botão Dropdown de Ações -->
+                    ${isDeleted ? '' : `
+                    <button class="msg-dropdown-trigger" onclick="toggleMsgDropdown(event, '${msg.id}')" style="
+                        position: absolute;
+                        top: 5px;
+                        right: 5px;
+                        background: var(--bg-dark);
+                        border: 1px solid var(--border-color);
+                        color: var(--text-muted);
+                        border-radius: 50%;
+                        width: 22px;
+                        height: 22px;
+                        display: none;
+                        align-items: center;
+                        justify-content: center;
+                        cursor: pointer;
+                        z-index: 10;
+                        font-size: 0.7rem;
+                        box-shadow: none;
+                        transition: all 0.2s ease;
+                        padding: 0;
+                    " onmouseover="this.style.color='var(--accent-success)'; this.style.borderColor='var(--accent-success)'" onmouseout="this.style.color='var(--text-muted)'; this.style.borderColor='var(--border-color)'" title="Opções">
+                        <i class="fa-solid fa-chevron-down"></i>
+                    </button>
+                    `}
+
+                    ${referralHTML}
+                    ${quotedHTML}
+                    ${htmlMsg}
+                    ${reactionBadge}
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem; padding: 0 0.2rem;">
+                    <span style="font-size: 0.73rem; color: var(--text-muted);">${timeString}</span>
+                    ${statusIcon}
+                </div>
+                ${(isOut && msg.status === 'failed') ? `
+                <div style="display: flex; align-items: flex-start; gap: 0.35rem; margin-top: 0.2rem; padding: 0 0.2rem; max-width: 75%;">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-danger); font-size: 0.7rem; margin-top: 0.15rem;"></i>
+                    <span style="font-size: 0.72rem; color: var(--accent-danger); line-height: 1.35;">
+                        Não entregue${msg.error_detail ? ': ' + escapeHtml(msg.error_detail) : ' (motivo não informado pela Meta).'}
+                    </span>
+                </div>` : ''}
+            </div>
+        `;
+    });
+
+    return html;
+}
+
+// Chamada pelo onscroll de #chat-active-messages — quando o atendente rola
+// perto do topo da conversa, busca a página anterior de mensagens.
+let chatLoadingOlder = false;
+function handleChatScrollForOlderMessages(el) {
+    if (!el || el.scrollTop > 60) return;
+    if (chatLoadingOlder || !window.chatHasMoreOlder || !window.currentActiveChat) return;
+    loadOlderChatMessages();
+}
+
+async function loadOlderChatMessages() {
+    if (chatLoadingOlder || !window.chatHasMoreOlder || !window.currentActiveChat) return;
+    const phone = window.currentActiveChat.phone;
+    const before = window.chatOldestLoadedTs;
+    if (!before) return;
+
+    chatLoadingOlder = true;
+    const msgsContainer = document.getElementById('chat-active-messages');
+    const spinner = document.createElement('div');
+    spinner.id = 'chat-older-spinner';
+    spinner.style.cssText = 'text-align: center; padding: 0.6rem; color: var(--text-muted); font-size: 0.78rem;';
+    spinner.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Carregando mensagens anteriores...';
+    if (msgsContainer) msgsContainer.prepend(spinner);
+
+    try {
+        const res = await fetch(`/api/whatsapp/chat/${phone}?limit=${WA_CHAT_PAGE_SIZE}&before=${encodeURIComponent(before)}`);
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+            if (json.data.length) {
+                const byId = new Map(window.activeChatMessages.map(m => [m.id, m]));
+                json.data.forEach(m => byId.set(m.id, m));
+                window.activeChatMessages = Array.from(byId.values()).sort((a, b) => {
+                    const ta = String(a.timestamp || ''), tb = String(b.timestamp || '');
+                    return ta === tb ? 0 : (ta < tb ? -1 : 1);
+                });
+                window.chatOldestLoadedTs = json.data[0].timestamp;
+            }
+            window.chatHasMoreOlder = !!json.has_more;
+
+            if (msgsContainer) {
+                // Preserva a posição de leitura: guarda a altura antes de reconstruir
+                // o HTML (que agora inclui as mensagens antigas lá em cima) e soma a
+                // diferença ao scrollTop, senão a tela "pula" pro topo.
+                const oldScrollHeight = msgsContainer.scrollHeight;
+                const oldScrollTop = msgsContainer.scrollTop;
+                msgsContainer.innerHTML = buildChatMessagesHTML();
+                msgsContainer.scrollTop = oldScrollTop + (msgsContainer.scrollHeight - oldScrollHeight);
+            }
+        }
+    } catch (e) {
+        console.error('Erro ao carregar mensagens antigas:', e);
+    } finally {
+        chatLoadingOlder = false;
+        document.getElementById('chat-older-spinner')?.remove();
+    }
+}
+
 async function openChat(phone, name, silent = false) {
     // Normaliza o número: remove não-dígitos e adiciona 55 se não tiver
     let normalizedPhone = String(phone).replace(/\D/g, '');
@@ -4606,9 +4831,9 @@ async function openChat(phone, name, silent = false) {
     if(!silent) document.getElementById('chat-active-messages').innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando mensagens...</div>';
     
     try {
-        const res = await fetch(`/api/whatsapp/chat/${phone}`);
+        const res = await fetch(`/api/whatsapp/chat/${phone}?limit=${WA_CHAT_PAGE_SIZE}`);
         const json = await res.json();
-        
+
         if (json.success && Array.isArray(json.data)) {
             // Compara com o que já está renderizado ANTES de sobrescrever o cache — se nada
             // mudou (nenhuma mensagem nova, nenhum status novo), a atualização silenciosa de
@@ -4618,7 +4843,24 @@ async function openChat(phone, name, silent = false) {
             const newMessagesSignature = JSON.stringify(json.data);
             const messagesUnchanged = silent && window.lastRenderedMessagesSignature === newMessagesSignature;
 
-            window.activeChatMessages = json.data; // Cache global de mensagens
+            // A rota só devolve a página mais recente (WA_CHAT_PAGE_SIZE mensagens). Numa
+            // abertura de verdade, reseta pra essa página só — histórico mais antigo vem
+            // sob demanda ao rolar pra cima (loadOlderChatMessages). No poll silencioso,
+            // MESCLA na lista já carregada (que pode ter páginas antigas trazidas pelo
+            // scroll) em vez de substituir — senão o histórico rolado desaparecia a cada
+            // atualização de fundo.
+            if (silent && Array.isArray(window.activeChatMessages) && window.activeChatMessages.length) {
+                const byId = new Map(window.activeChatMessages.map(m => [m.id, m]));
+                json.data.forEach(m => byId.set(m.id, m));
+                window.activeChatMessages = Array.from(byId.values()).sort((a, b) => {
+                    const ta = String(a.timestamp || ''), tb = String(b.timestamp || '');
+                    return ta === tb ? 0 : (ta < tb ? -1 : 1);
+                });
+            } else {
+                window.activeChatMessages = json.data;
+                window.chatOldestLoadedTs = json.data.length ? json.data[0].timestamp : null;
+                window.chatHasMoreOlder = !!json.has_more;
+            }
 
             // Atualiza "Última interação" no painel do lead com a mensagem real mais recente
             // (mais confiável que a allChatsList, que só chega via polling e pode não ter esse número ainda)
@@ -4633,157 +4875,7 @@ async function openChat(phone, name, silent = false) {
                 return;
             }
 
-            let html = '';
-            let lastDateStr = '';
-
-            // Agrega reações
-            const reactionsMap = {};
-            const nonReactionMessages = [];
-            json.data.forEach(msg => {
-                if (msg.message && msg.message.startsWith('[Reagiu com:')) {
-                    const match = msg.message.match(/\[Reagiu com:\s*(.*?)\]/);
-                    if (match && msg.quoted_id) {
-                        if (match[1]) {
-                            reactionsMap[msg.quoted_id] = match[1];
-                        } else {
-                            delete reactionsMap[msg.quoted_id];
-                        }
-                    }
-                } else {
-                    nonReactionMessages.push(msg);
-                }
-            });
-            window.currentReactionsMap = reactionsMap;
-
-            nonReactionMessages.forEach(msg => {
-                const currentDateStr = formatFullChatDate(msg.timestamp);
-
-                // Exibe a data no início da conversa e na mudança de dia (sem fundo, apenas ícone e texto)
-                if (currentDateStr && currentDateStr !== lastDateStr) {
-                    lastDateStr = currentDateStr;
-                    html += `
-                        <div style="align-self: center; margin: 0.8rem 0 0.4rem 0; padding: 0.2rem 0.6rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600; user-select: none;">
-                            <i class="fa-regular fa-calendar-days" style="margin-right: 5px; color: var(--accent-success);"></i> ${currentDateStr}
-                        </div>
-                    `;
-                }
-
-                const isOut = msg.direction === 'out';
-                const bg = isOut
-                    ? 'var(--accent-success)'
-                    : 'var(--bg-card)';
-                const color = isOut ? '#fff' : 'var(--text-main)';
-                const align = isOut ? 'flex-end' : 'flex-start';
-                const borderRadius = isOut ? '16px 4px 16px 16px' : '4px 16px 16px 16px';
-                const border = isOut
-                    ? '1px solid rgba(255, 255, 255, 0.18)'
-                    : '1px solid var(--border-color)';
-                const boxShadow = 'none';
-
-                const timeString = formatChatTime(msg.timestamp);
-                const statusIcon = isOut ? renderStatusIcon(msg.status) : '';
-                
-                let referralHTML = '';
-                if (msg.referral) {
-                    try {
-                        const ref = typeof msg.referral === 'string' ? JSON.parse(msg.referral) : msg.referral;
-                        if (ref && (ref.headline || ref.body || ref.image_url)) {
-                            referralHTML = `
-                                <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.22); border-left: 4px solid var(--accent-success); padding: 0.6rem; margin-bottom: 0.6rem; border-radius: 6px; display: flex; gap: 0.6rem; max-width: 100%; align-items: flex-start; box-sizing: border-box;">
-                                    ${ref.image_url ? `<img src="${ref.image_url}" style="width: 55px; height: 55px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-color); flex-shrink: 0;" />` : ''}
-                                    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem;">
-                                        <div style="font-size: 0.72rem; font-weight: 700; color: var(--accent-success); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 0.3rem;">
-                                            <i class="fa-brands fa-meta"></i> Anúncio do Instagram/Facebook
-                                        </div>
-                                        ${ref.headline ? `<div style="font-size: 0.8rem; font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ref.headline}</div>` : ''}
-                                        ${ref.body ? `<div style="font-size: 0.75rem; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3;">${ref.body}</div>` : ''}
-                                    </div>
-                                </div>
-                            `;
-                        }
-                    } catch(e) {
-                        console.error("Erro ao fazer parse do referral:", e);
-                    }
-                }
-
-                const isDeleted = msg.message === '🚫 Esta mensagem foi apagada';
-                const htmlMsg = isDeleted
-                    ? `<span style="font-style: italic; opacity: 0.65; display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted);"><i class="fa-solid fa-ban" style="font-size: 0.85rem;"></i> Esta mensagem foi apagada</span>`
-                    : renderChatMessageContent(msg.message);
-                
-                let quotedHTML = '';
-                if (msg.quoted_message) {
-                    quotedHTML = renderQuotedMessage(msg.quoted_message, msg.quoted_direction, msg.quoted_id);
-                }
-
-                const reactionBadge = reactionsMap[msg.id] ? `
-                    <div class="message-reaction-badge" style="
-                        position: absolute;
-                        bottom: -10px;
-                        ${isOut ? 'left: 15px;' : 'right: 15px;'}
-                        background: var(--bg-card);
-                        border: 1px solid var(--border-color);
-                        border-radius: 10px;
-                        padding: 0.1rem 0.35rem;
-                        font-size: 0.75rem;
-                        display: flex;
-                        align-items: center;
-                        box-shadow: none;
-                        user-select: none;
-                        z-index: 5;
-                    ">
-                        ${reactionsMap[msg.id]}
-                    </div>
-                ` : '';
-
-                html += `
-                    <div class="msg-bubble-container" style="display: flex; flex-direction: column; align-items: ${align}; margin-bottom: 0.85rem; position: relative;">
-                        <div id="msg-bubble-${msg.id}" style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: none; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
-                            <!-- Botão Dropdown de Ações -->
-                            ${isDeleted ? '' : `
-                            <button class="msg-dropdown-trigger" onclick="toggleMsgDropdown(event, '${msg.id}')" style="
-                                position: absolute;
-                                top: 5px;
-                                right: 5px;
-                                background: var(--bg-dark);
-                                border: 1px solid var(--border-color);
-                                color: var(--text-muted);
-                                border-radius: 50%;
-                                width: 22px;
-                                height: 22px;
-                                display: none;
-                                align-items: center;
-                                justify-content: center;
-                                cursor: pointer;
-                                z-index: 10;
-                                font-size: 0.7rem;
-                                box-shadow: none;
-                                transition: all 0.2s ease;
-                                padding: 0;
-                            " onmouseover="this.style.color='var(--accent-success)'; this.style.borderColor='var(--accent-success)'" onmouseout="this.style.color='var(--text-muted)'; this.style.borderColor='var(--border-color)'" title="Opções">
-                                <i class="fa-solid fa-chevron-down"></i>
-                            </button>
-                            `}
-
-                            ${referralHTML}
-                            ${quotedHTML}
-                            ${htmlMsg}
-                            ${reactionBadge}
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem; padding: 0 0.2rem;">
-                            <span style="font-size: 0.73rem; color: var(--text-muted);">${timeString}</span>
-                            ${statusIcon}
-                        </div>
-                        ${(isOut && msg.status === 'failed') ? `
-                        <div style="display: flex; align-items: flex-start; gap: 0.35rem; margin-top: 0.2rem; padding: 0 0.2rem; max-width: 75%;">
-                            <i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-danger); font-size: 0.7rem; margin-top: 0.15rem;"></i>
-                            <span style="font-size: 0.72rem; color: var(--accent-danger); line-height: 1.35;">
-                                Não entregue${msg.error_detail ? ': ' + escapeHtml(msg.error_detail) : ' (motivo não informado pela Meta).'}
-                            </span>
-                        </div>` : ''}
-                    </div>
-                `;
-            });
+            const html = buildChatMessagesHTML();
             const msgsContainer = document.getElementById('chat-active-messages');
             const isScrolledToBottom = msgsContainer.scrollHeight - msgsContainer.clientHeight <= msgsContainer.scrollTop + 50;
             
