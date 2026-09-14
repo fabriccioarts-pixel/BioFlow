@@ -1469,13 +1469,12 @@ function filterChatContacts(query) {
                 const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
                 return !!(lead && lead.qualificado_em);
             });
-            // Esperando atendimento há mais tempo primeiro.
+            // Última mensagem mais recente no topo — mesmo horário que aparece em
+            // cada linha, pra lista bater com o que os olhos veem.
             filtered = [...filtered].sort((a, b) => {
-                const leadA = leads.find(l => isSamePhone(l.telefone, a.phone));
-                const leadB = leads.find(l => isSamePhone(l.telefone, b.phone));
-                const ta = parseD1TimestampMs(leadA && leadA.qualificado_em) || 0;
-                const tb = parseD1TimestampMs(leadB && leadB.qualificado_em) || 0;
-                return ta - tb;
+                const ta = parseD1TimestampMs(a.last_timestamp || a.timestamp || a.last_interaction) || 0;
+                const tb = parseD1TimestampMs(b.last_timestamp || b.timestamp || b.last_interaction) || 0;
+                return tb - ta;
             });
         } else if (activeChatFilter === 'favorites') {
             filtered = filtered.filter(chat => isFavoriteChat(chat.phone));
