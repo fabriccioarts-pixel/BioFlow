@@ -212,7 +212,23 @@ function formatChatTime(rawTs) {
     }
 
     if (!d || isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Só hoje mostra hora crua — mensagem de ontem/mais antiga precisa dizer
+    // QUANDO foi, senão "23:50" de ontem parece ter chegado agora mesmo.
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return 'Ontem';
+
+    const diffDays = Math.floor((now - d) / 86400000);
+    if (diffDays >= 0 && diffDays < 7) {
+        const dia = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+        return dia.charAt(0).toUpperCase() + dia.slice(1);
+    }
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
 function formatFullChatDate(rawTs) {
@@ -1411,7 +1427,16 @@ function filterChatContacts(query) {
         // de novo entrando explicitamente em "Arquivadas".
         filtered = filtered.filter(chat => !isArchivedChat(chat.phone));
 
-        if (activeChatFilter === 'unread') {
+        if (activeChatFilter === 'mine') {
+            // Conversas cujo lead está atribuído a quem está logado agora —
+            // corta o ruído de ficar caçando visualmente de quem é cada uma.
+            const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
+            filtered = filtered.filter(chat => {
+                if (!currentUser || typeof leads === 'undefined' || !Array.isArray(leads)) return false;
+                const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
+                return !!lead && lead.owner_id === currentUser;
+            });
+        } else if (activeChatFilter === 'unread') {
             filtered = filtered.filter(chat => Number(chat.unread_count || 0) > 0 || isMarkedUnreadChat(chat.phone));
         } else if (activeChatFilter === 'awaiting') {
             // O lead mandou a última mensagem e ninguém (atendente ou IA) respondeu
@@ -1594,6 +1619,7 @@ function renderContactsList(chats) {
 
     if (!chats || chats.length === 0) {
         const emptyMessages = {
+            mine: 'Nenhum atendimento atribuído a você no momento.',
             unread: 'Nenhuma conversa não lida.',
             awaiting: 'Nenhuma conversa aguardando resposta do atendente.',
             quente: 'Nenhum lead quente esperando atendimento no momento.',
@@ -1666,20 +1692,34 @@ function renderContactsList(chats) {
                 ? `<span style="background: var(--accent-danger, #ef4444); color: white; padding: 0.15rem 0.5rem; font-size: 0.65rem; border-radius: 999px; font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;"><i class="fa-solid fa-ban"></i> Bloqueado (CRM)</span>`
                 : '';
 
-            if (displayTagIds.length > 0 || isBlockedTag) {
+            // Selo de responsável FIXO — diferente do "🔒 em atendimento agora" (que
+            // some depois de 5min parado), esse mostra sempre de quem é o lead, pra
+            // parar de depender de olhar quem tá online naquele instante.
+            const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
+            let ownerBadgeHTML = '';
+            if (lead && lead.owner_id) {
+                const isMine = lead.owner_id === currentUser;
+                const ownerName = getLockOwnerDisplayName(lead.owner_id);
+                const ownerAvatarHTML = renderAvatarHTML(ownerName, (typeof avatarMap !== 'undefined' && avatarMap[lead.owner_id]) || null, null, 15);
+                ownerBadgeHTML = `<span title="Responsável: ${escapeHtml(ownerName)}" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: ${isMine ? 'var(--accent-success)' : 'var(--text-muted)'}; background: ${isMine ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)'}; border: 1px solid ${isMine ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-color)'}; padding: 0.05rem 0.5rem 0.05rem 0.2rem; border-radius: 10px; white-space: nowrap;">${ownerAvatarHTML}${escapeHtml(isMine ? 'Você' : ownerName)}</span>`;
+            } else if (lead) {
+                ownerBadgeHTML = `<span title="Nenhum atendente responsável por esse lead ainda" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: var(--text-muted); border: 1px dashed var(--border-color); padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-regular fa-circle-user" style="font-size: 0.65rem;"></i>Sem responsável</span>`;
+            }
+
+            if (displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML) {
                 leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
-                    blockedTagBadge + 
+                    ownerBadgeHTML +
+                    blockedTagBadge +
                     displayTagIds.map(tId => getTagBadgeHTML(tId, true)).join('') +
                     `</div>`;
             }
             if (lead && lead.owner_id) {
-                const currentUser = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
                 const isOtherOwner = lead.owner_id !== currentUser;
                 const assignedAtMs = parseD1TimestampMs(lead.assigned_at);
                 const isStale = !assignedAtMs || (Date.now() - assignedAtMs) > LEAD_LOCK_TIMEOUT_MS;
                 if (isOtherOwner && !isStale) {
                     const ownerName = getLockOwnerDisplayName(lead.owner_id);
-                    lockBadgeHTML = `<span title="Em atendimento por ${escapeHtml(ownerName)}" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); padding: 0.1rem 0.5rem; border-radius: 10px; margin-left: 6px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>${escapeHtml(ownerName)}</span>`;
+                    lockBadgeHTML = `<span title="Em atendimento por ${escapeHtml(ownerName)} agora" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); padding: 0.1rem 0.5rem; border-radius: 10px; margin-left: 6px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>ativo agora</span>`;
                 }
             }
         }
