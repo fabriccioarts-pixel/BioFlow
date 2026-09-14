@@ -652,6 +652,12 @@ async function convertToOggOpus(buffer, inputExt = 'webm') {
     const inputPath = path.join(tmpDir, `wa-audio-in-${uid}.${inputExt}`);
     const outputPath = path.join(tmpDir, `wa-audio-out-${uid}.ogg`);
 
+    // Instrumentação temporária pra medir quanto o ffmpeg pesa no Fluid Active
+    // CPU do Vercel (a Observability detalhada por rota é paga; isso aparece de
+    // graça no log de qualquer plano). Remover depois de confirmar o suspeito.
+    const _t0 = Date.now();
+    console.log(`[ffmpeg] convertendo áudio: ${buffer.length} bytes (.${inputExt})`);
+
     await fs.promises.writeFile(inputPath, buffer);
 
     try {
@@ -2046,12 +2052,24 @@ async function buildWaChatsList() {
                (SELECT x.message   FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as message,
                (SELECT x.direction FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as direction,
                (SELECT x.status    FROM wa_messages x WHERE x.phone = m.phone ORDER BY x.timestamp DESC, x.rowid DESC LIMIT 1) as status,
+               (SELECT MAX(x.timestamp) FROM wa_messages x WHERE x.phone = m.phone AND x.direction = 'in') as last_inbound_at,
                SUM(CASE WHEN m.direction = 'in' AND (m.status IS NULL OR m.status != 'read') THEN 1 ELSE 0 END) as unread_count
         FROM wa_messages m
         GROUP BY m.phone
         ORDER BY last_interaction DESC
         LIMIT 500
     `);
+}
+
+async function refreshWaChatsCache() {
+    const rows = await buildWaChatsList();
+    try {
+        await queryD1(
+            "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [JSON.stringify({ built_at: Date.now(), rows: rows || [] })]
+        );
+    } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
+    return rows || [];
 }
 
 async function getWaChatsList() {
@@ -2065,14 +2083,29 @@ async function getWaChatsList() {
             }
         }
     } catch (e) {}
-    const rows = await buildWaChatsList();
+    // Cache ausente ou vencido: essa requisição paga a consulta cara na hora.
+    // Em uso normal isso quase nunca deveria acontecer — ver waChatsCacheTick().
+    return await refreshWaChatsCache();
+}
+
+// Renova o cache da lista de conversas ANTES dela expirar — chamado a cada tick
+// de /api/flow-tick (roda a cada ~1min pelo pinger externo). Sem isso, quem
+// abrisse o chat depois de alguns minutos de silêncio (ex.: início do dia)
+// pagava a consulta cara na hora, travando a tela em "Carregando conversas...".
+// Renova com folga (metade do TTL) pra tolerar algum tick perdido sem a lista
+// nunca chegar perto de expirar de fato.
+async function waChatsCacheTick() {
     try {
-        await queryD1(
-            "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [JSON.stringify({ built_at: Date.now(), rows: rows || [] })]
-        );
-    } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
-    return rows || [];
+        const row = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_cache'");
+        const cached = (row && row[0] && row[0].value) ? JSON.parse(row[0].value) : null;
+        const ageMs = (cached && cached.built_at) ? (Date.now() - cached.built_at) : Infinity;
+        if (ageMs < WA_CHATS_CACHE_TTL_MS / 2) return { skipped: true, age_sec: Math.round(ageMs / 1000) };
+        await refreshWaChatsCache();
+        return { refreshed: true };
+    } catch (e) {
+        console.error('wa_chats_cache tick falhou:', e.message);
+        return { skipped: 'erro' };
+    }
 }
 
 // A lista de conversas é servida de um cache com TTL de 5 min. mark-read grava
@@ -9100,7 +9133,12 @@ app.all('/api/flow-tick', async (req, res) => {
         let marketing = { skipped: 'erro' };
         try { marketing = await marketingSyncTick(); } catch (e) { console.error('Erro no sync de marketing:', e); }
 
-        res.json({ processed, followup, opps, insights, marketing, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Mantém o cache da lista de conversas do WhatsApp sempre quente — ver
+        // waChatsCacheTick() pra entender por que isso existe.
+        let waChats = { skipped: 'erro' };
+        try { waChats = await waChatsCacheTick(); } catch (e) { console.error('Erro ao renovar cache de conversas:', e); }
+
+        res.json({ processed, followup, opps, insights, marketing, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 

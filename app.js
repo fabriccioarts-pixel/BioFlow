@@ -75,7 +75,7 @@ initTheme();
 
         // Para todo polling de fundo pra não martelar o servidor com 401 em loop.
         ['kanbanSyncInterval', 'heartbeatInterval', 'dashPollingInterval',
-         'chatPollingInterval', 'globalChatCheckInterval', 'notifPollInterval'
+         'chatPollingInterval', 'globalChatCheckInterval', 'notifPollInterval', 'waWindowBadgeInterval'
         ].forEach(k => { if (window[k]) { clearInterval(window[k]); window[k] = null; } });
         if (window._kanbanSSE) { try { window._kanbanSSE.close(); } catch (e) {} window._kanbanSSE = null; }
 
@@ -323,7 +323,14 @@ function initApp() {
                 if (loggedUser) fetchLeadsFromServer(true);
             }, 90000);
         }
-        
+        // Só re-renderiza a lista de conversas em memória (sem bater no servidor)
+        // pra o selo "faltam Xh pra fechar a janela de 24h" ir contando sozinho.
+        if (!window.waWindowBadgeInterval) {
+            window.waWindowBadgeInterval = setInterval(() => {
+                if (loggedUser && typeof reapplyChatFilters === 'function' && document.getElementById('chat-contacts-list')) reapplyChatFilters();
+            }, 60000);
+        }
+
         if (loggedUser.role === 'admin' || loggedUser.username === 'admin') {
             const btnGestao = document.getElementById('flyout-gestao-acessos');
             if (btnGestao) {
@@ -8412,7 +8419,7 @@ function showToast(message, type = 'success', duration = 3500) {
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         ['kanbanSyncInterval', 'dashPollingInterval', 'chatPollingInterval',
-         'globalChatCheckInterval', 'heartbeatInterval', 'notifPollInterval'].forEach(key => {
+         'globalChatCheckInterval', 'heartbeatInterval', 'notifPollInterval', 'waWindowBadgeInterval'].forEach(key => {
             clearInterval(window[key]);
             window[key] = null;
         });
@@ -8432,6 +8439,11 @@ document.addEventListener('visibilitychange', () => {
         }
         if (loggedUser && !window.notifPollInterval && typeof startNotificationPolling === 'function') {
             startNotificationPolling();
+        }
+        if (loggedUser && !window.waWindowBadgeInterval) {
+            window.waWindowBadgeInterval = setInterval(() => {
+                if (loggedUser && typeof reapplyChatFilters === 'function' && document.getElementById('chat-contacts-list')) reapplyChatFilters();
+            }, 60000);
         }
         startHeartbeat();
     }

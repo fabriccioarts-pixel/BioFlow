@@ -231,6 +231,38 @@ function formatChatTime(rawTs) {
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
+// Selo de "quanto falta pra fechar a janela de 24h" de mensagem livre do
+// WhatsApp (contada a partir da ÚLTIMA mensagem recebida do paciente — não
+// da última mensagem da conversa, que pode ser nossa). Depois de fechada,
+// só dá pra mandar template aprovado.
+function whatsappWindowBadgeHTML(lastInboundRaw) {
+    if (!lastInboundRaw) return '';
+    let d;
+    const cleanStr = String(lastInboundRaw).trim();
+    if (/^\d+$/.test(cleanStr)) {
+        const num = Number(cleanStr);
+        d = num < 10000000000 ? new Date(num * 1000) : new Date(num);
+    } else {
+        let isoStr = cleanStr;
+        if (isoStr.includes(' ') && !isoStr.includes('T')) isoStr = isoStr.replace(' ', 'T') + 'Z';
+        d = new Date(isoStr);
+    }
+    if (!d || isNaN(d.getTime())) return '';
+
+    const msLeft = (d.getTime() + 24 * 3600000) - Date.now();
+    if (msLeft <= 0) {
+        return `<span title="Janela de 24h de mensagem livre já fechou — só dá pra mandar template aprovado" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.65rem; font-weight: 600; color: var(--text-muted); background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>Janela fechada</span>`;
+    }
+    const totalMin = Math.floor(msLeft / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    const label = h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
+    let color = 'var(--accent-success, #34d399)', bg = 'rgba(52, 211, 153, 0.12)', border = 'rgba(52, 211, 153, 0.3)';
+    if (h < 1) { color = 'var(--accent-danger, #f87171)'; bg = 'rgba(248, 113, 113, 0.12)'; border = 'rgba(248, 113, 113, 0.35)'; }
+    else if (h < 4) { color = '#fbbf24'; bg = 'rgba(251, 191, 36, 0.12)'; border = 'rgba(251, 191, 36, 0.35)'; }
+    return `<span title="Faltam ${label} pra fechar a janela de 24h de mensagem livre" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.65rem; font-weight: 600; color: ${color}; background: ${bg}; border: 1px solid ${border}; padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-regular fa-clock" style="font-size: 0.6rem;"></i>${label}</span>`;
+}
+
 function formatFullChatDate(rawTs) {
     if (!rawTs) return '';
     let d;
@@ -1705,10 +1737,12 @@ function renderContactsList(chats) {
                 ownerBadgeHTML = `<span title="Nenhum atendente responsável por esse lead ainda" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: var(--text-muted); border: 1px dashed var(--border-color); padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-regular fa-circle-user" style="font-size: 0.65rem;"></i>Sem responsável</span>`;
             }
 
-            if (displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML) {
+            const windowBadgeHTML = whatsappWindowBadgeHTML(chat.last_inbound_at);
+            if (displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML || windowBadgeHTML) {
                 leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
                     ownerBadgeHTML +
                     blockedTagBadge +
+                    windowBadgeHTML +
                     displayTagIds.map(tId => getTagBadgeHTML(tId, true)).join('') +
                     `</div>`;
             }
@@ -1901,11 +1935,12 @@ function patchChatListFromSSE({ phone, preview, ts, leadId }) {
         entry.last_direction = 'in';
         entry.last_interaction = ts || entry.last_interaction;
         entry.last_timestamp = ts || entry.last_timestamp;
+        entry.last_inbound_at = ts || entry.last_inbound_at;
         if (!isOpen) entry.unread_count = Number(entry.unread_count || 0) + 1;
         if (nome) entry.nome = nome;
     } else {
         entry = { phone, message: preview || '', direction: 'in', last_direction: 'in',
-                  last_interaction: ts || '', last_timestamp: ts || '', status: 'received',
+                  last_interaction: ts || '', last_timestamp: ts || '', last_inbound_at: ts || '', status: 'received',
                   unread_count: isOpen ? 0 : 1, nome: nome || undefined };
     }
     allChatsList.unshift(entry);
