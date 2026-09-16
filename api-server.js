@@ -4621,10 +4621,17 @@ app.get('/api/leads/export-qualificados-meta', async (req, res) => {
     }
     try {
         const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 180, 1), 3650);
+        // qualificado_em é TRANSITÓRIO — zera assim que um atendente assume a
+        // conversa (ou ela volta pra IA). Pra pegar todo lead que já foi
+        // qualificado ALGUMA vez, o histórico de verdade é crm_lead_events
+        // (permanente, nunca apagado), não a coluna na tabela leads.
         const rows = await queryD1(
-            `SELECT telefone, email FROM leads
-             WHERE qualificado_em IS NOT NULL AND qualificado_em > datetime('now', '-${dias} days')
-               AND telefone IS NOT NULL AND telefone != ''`
+            `SELECT DISTINCT l.telefone, l.email
+             FROM leads l
+             JOIN crm_lead_events e ON e.lead_id = l.id
+             WHERE e.tipo = 'lead_qualificado_ia'
+               AND e.created_at > datetime('now', '-${dias} days')
+               AND l.telefone IS NOT NULL AND l.telefone != ''`
         );
         const header = 'phone,email\n';
         const csvBody = (rows || []).map(r => {
