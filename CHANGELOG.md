@@ -1,5 +1,11 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — "Cobrar Pix" corrigido: agora envia de verdade
+
+### Corrigido
+* **Botão "Cobrar Pix" não enviava nada.** Dois problemas: (1) mesmo com só 1 unidade cadastrada, ele sempre abria um submenu exigindo um clique a mais na unidade; (2) mesmo depois de escolher, só preenchia o campo de mensagem — ainda faltava clicar em "Enviar" manualmente.
+* Agora: com **1 unidade** configurada, "Cobrar Pix" manda direto num clique só. Com **2+**, abre o submenu, mas escolher a unidade já envia na hora — reaproveita `sendActiveChatMessage` (assinatura do atendente, trava anti-duplicidade, tudo igual a um envio manual normal).
+
 ## 2026-09-16 — Botão "Cobrar Pix" no chat, com chave por unidade
 
 ### Adicionado

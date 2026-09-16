@@ -3095,18 +3095,19 @@ function toggleAttachMenu(e) {
     if (!opening && submenu) submenu.style.display = 'none';
 }
 
-// Abre o submenu de unidades pra "Cobrar Pix" (uma chave por unidade — ver
-// promptUnidadePix em app.js). Não manda direto: só preenche o campo de
-// mensagem, igual uma resposta rápida, pra o atendente revisar antes de enviar.
+// "Cobrar Pix": com 1 unidade cadastrada, manda direto (1 clique). Com 2+,
+// abre o submenu pra escolher qual, e a escolha já manda também.
 function toggleChatPixSubmenu(e) {
     if (e) e.stopPropagation();
+    const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
+    if (comPix.length === 0) return;
+    if (comPix.length === 1) { sendPixKey(comPix[0].id); return; }
+
     const submenu = document.getElementById('chat-pix-submenu');
     if (!submenu) return;
     if (submenu.style.display === 'block') { submenu.style.display = 'none'; return; }
-
-    const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
     submenu.innerHTML = comPix.map(u => `
-        <div onclick="insertPixKey('${u.id}')"
+        <div onclick="sendPixKey('${u.id}')"
             style="padding: 0.75rem 1rem; cursor: pointer; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
             onmouseover="this.style.background='rgba(255,255,255,0.08)'"
             onmouseout="this.style.background='transparent'">
@@ -3115,15 +3116,17 @@ function toggleChatPixSubmenu(e) {
     submenu.style.display = 'block';
 }
 
-function insertPixKey(unidadeId) {
+// Preenche o campo com a chave Pix da unidade e manda na hora, reaproveitando
+// sendActiveChatMessage (assinatura do atendente, trava anti-duplicidade, etc.
+// — tudo que um envio manual normal já faz).
+function sendPixKey(unidadeId) {
     const u = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).find(x => x.id === unidadeId);
     if (!u || !u.pix_key) return;
-    const input = document.getElementById('chat-input-text');
-    if (input) {
-        input.value = `Chave Pix pra pagamento (${u.nome}):\n${u.pix_key}`;
-        input.focus();
-    }
     toggleAttachMenu();
+    const input = document.getElementById('chat-input-text');
+    if (!input) return;
+    input.value = `Chave Pix pra pagamento (${u.nome}):\n${u.pix_key}`;
+    if (typeof sendActiveChatMessage === 'function') sendActiveChatMessage();
 }
 
 function triggerImageUpload() {
