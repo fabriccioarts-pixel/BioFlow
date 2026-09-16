@@ -5600,6 +5600,29 @@ app.get('/api/capi-selftest', async (req, res) => {
         return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0], resposta_meta: r } });
     }
 
+    // ?diag_qualificados=1 — sem disparar nada, só mostra quantos leads
+    // qualificados existem e quantos já têm o Lead marcado como enviado
+    // (pra confirmar por que fire_pendentes=lead deu 0: já foi tudo enviado
+    // sob a regra antiga, não é falha).
+    if (req.query.diag_qualificados) {
+        const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 90, 1), 3650);
+        const rows = await queryD1(
+            `SELECT capi_lead_sent, COUNT(*) AS n FROM leads
+             WHERE qualificado_em IS NOT NULL AND qualificado_em > datetime('now', '-${dias} days')
+               AND ctwa_clid IS NOT NULL AND ctwa_clid != ''
+             GROUP BY capi_lead_sent`, []
+        ).catch(() => []);
+        const semCtwa = await queryD1(
+            `SELECT COUNT(*) AS n FROM leads WHERE qualificado_em IS NOT NULL AND qualificado_em > datetime('now', '-${dias} days') AND (ctwa_clid IS NULL OR ctwa_clid = '')`, []
+        ).catch(() => []);
+        return res.json({ cfg, colunas_leads, diag_qualificados: {
+            dias,
+            qualificados_com_ctwa_por_flag: rows,
+            qualificados_sem_ctwa_organico: (semCtwa && semCtwa[0] && semCtwa[0].n) || 0,
+            dica: 'capi_lead_sent=1 => ja foi enviado (regra antiga ou nova); =0 => pendente de verdade, devia ter aparecido no fire_pendentes'
+        } });
+    }
+
     // ?fire_pendentes=lead|schedule|purchase|contact — dispara o evento pra TODOS os
     // leads pendentes (flag 0) dos últimos 7 dias que fazem sentido pro evento.
     if (req.query.fire_pendentes) {
