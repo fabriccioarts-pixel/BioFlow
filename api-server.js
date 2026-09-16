@@ -5605,13 +5605,24 @@ app.get('/api/capi-selftest', async (req, res) => {
     if (req.query.fire_pendentes) {
         const ev = ['Lead', 'Schedule', 'Purchase', 'Contact'].find(e => e.toLowerCase() === String(req.query.fire_pendentes).toLowerCase());
         if (!ev) return res.status(400).json({ error: 'fire_pendentes deve ser lead, schedule, purchase ou contact' });
+        // &dias=N alarga a janela de busca (default 7) — o Lead agora dispara na
+        // qualificação, não na criação do lead, então pra reprocessar retroativo
+        // (leads qualificados antes dessa mudança) o corte é por qualificado_em,
+        // não por created_at, e pode precisar ir bem mais longe que 7 dias.
+        const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 365);
         const flagCol = `capi_${ev.toLowerCase()}_sent`;
-        let where = `${flagCol} = 0 AND created_at > datetime('now', '-7 days')`;
-        if (ev === 'Lead')     where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != ''`;
-        if (ev === 'Schedule') where += ` AND column_id = 'col-agendado'`;
-        if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
-        if (ev === 'Contact')  where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != '' AND tags LIKE '%ia-qualificado%'`;
-        const pend = await queryD1(`SELECT id, telefone, ctwa_clid FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
+        let where = `${flagCol} = 0`;
+        if (ev === 'Lead') {
+            where += ` AND qualificado_em IS NOT NULL AND qualificado_em > datetime('now', '-${dias} days')`;
+            where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != ''`;
+        } else {
+            where += ` AND created_at > datetime('now', '-${dias} days')`;
+            if (ev === 'Schedule') where += ` AND column_id = 'col-agendado'`;
+            if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
+            if (ev === 'Contact')  where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != '' AND tags LIKE '%ia-qualificado%'`;
+        }
+        const orderCol = ev === 'Lead' ? 'qualificado_em' : 'created_at';
+        const pend = await queryD1(`SELECT id, telefone, ctwa_clid FROM leads WHERE ${where} ORDER BY ${orderCol} DESC LIMIT 200`, []).catch(() => []);
         const linhas = pend || [];
         let enviados = 0, falharam = 0, primeiroErro = null, primeiroErroLead = null;
         for (const linha of linhas) {
