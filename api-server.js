@@ -2656,8 +2656,29 @@ async function queryD1(sql, params = []) {
     if (!data.success) {
         throw new Error(data.errors?.[0]?.message || 'Erro na Cloudflare D1');
     }
-    
+
     return data.result[0].results || [];
+}
+
+// Igual queryD1, mas devolve o objeto inteiro (results + meta.changes) em vez
+// de só as linhas — usado onde precisa saber quantas linhas um UPDATE/INSERT
+// realmente afetou (ex.: UPDATE ... WHERE flag = 0 como trava contra corrida).
+async function queryD1Meta(sql, params = []) {
+    const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_D1_DATABASE_ID } = process.env;
+    if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN || !CLOUDFLARE_D1_DATABASE_ID) {
+        throw new Error("Chaves da Cloudflare não configuradas no .env");
+    }
+    const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CLOUDFLARE_D1_DATABASE_ID}/query`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql, params })
+    });
+    const data = await response.json();
+    if (!data.success) {
+        throw new Error(data.errors?.[0]?.message || 'Erro na Cloudflare D1');
+    }
+    return data.result[0] || { results: [], meta: {} };
 }
 
 // Migration para garantir coluna quoted_id no D1
@@ -5478,6 +5499,23 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
     if (!lead) { console.warn(`CAPI ${eventName}: lead ${leadId} não encontrado`); return { ok: false, reason: 'lead-nao-encontrado' }; }
     if (lead.sent) { console.log(`CAPI ${eventName}: já enviado antes pro lead ${leadId}, pulando`); return { ok: false, reason: 'ja-enviado' }; }
 
+    // Trava atômica ANTES de chamar a Meta: marca a flag já aqui, condicionada a
+    // ela ainda estar em 0. Se outra execução concorrente (webhook reentregue,
+    // mensagens quase simultâneas) já ganhou a corrida, "changes" vem 0 e essa
+    // chamada desiste sem mandar nada — sem isso, as duas liam a flag=0 durante
+    // o tempo da chamada HTTP à Meta (até 4s) e as duas enviavam o evento.
+    let claim;
+    try {
+        claim = await queryD1Meta(`UPDATE leads SET ${col} = 1 WHERE id = ? AND (${col} = 0 OR ${col} IS NULL)`, [leadId]);
+    } catch (e) {
+        console.error(`CAPI ${eventName}: trava da flag falhou pro lead ${leadId}:`, e.message);
+        return { ok: false, reason: 'trava-falhou' };
+    }
+    if (!claim || !claim.meta || !claim.meta.changes) {
+        console.log(`CAPI ${eventName}: perdeu a corrida (já reivindicado) pro lead ${leadId}, pulando`);
+        return { ok: false, reason: 'ja-enviado' };
+    }
+
     if (eventName === 'Purchase' && extra.value == null) {
         const v = leadPurchaseValueBRL(lead);
         if (v != null) extra = { ...extra, value: v };
@@ -5493,10 +5531,11 @@ async function fireCapiForLead(leadId, eventName, extra = {}) {
         ...extra
     });
     // res.ok = enviado. res.unsupportedForCtwa = o Meta não tem esse evento pra
-    // CTWA — marca como "resolvido" mesmo assim, senão todo arrasto de coluna
-    // tenta reenviar pra sempre.
-    if (res.ok || res.unsupportedForCtwa) {
-        try { await queryD1(`UPDATE leads SET ${col} = 1 WHERE id = ?`, [leadId]); } catch (e) {}
+    // CTWA — a flag já está marcada (reivindicada acima), então ambos os casos
+    // ficam "resolvidos" e não tentam de novo. Só em falha de verdade a gente
+    // devolve a flag pra 0, pra permitir retry manual (?fire_pendentes=...).
+    if (!res.ok && !res.unsupportedForCtwa) {
+        try { await queryD1(`UPDATE leads SET ${col} = 0 WHERE id = ?`, [leadId]); } catch (e) {}
     }
     return res;
 }
