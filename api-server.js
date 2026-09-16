@@ -1971,6 +1971,12 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
             const aiMode = await getWhatsappAiMode();
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
             await tagLeadAsQualified(leadId);
+            // Sinaliza "qualificado" pro Meta também — não só o primeiro contato
+            // (LeadSubmitted) e a venda (Purchase). 'Contact' ainda não foi
+            // confirmado como aceito pra business_messaging nessa conta; se a Meta
+            // recusar, fica só logado (não trava nem repete a cada mensagem — a
+            // flag capi_contact_sent só é marcada em caso de sucesso).
+            await fireCapiForLead(leadId, 'Contact').catch(e => console.error('CAPI Contact:', e.message));
             const notas = await queryD1('SELECT notas FROM leads WHERE id = ?', [leadId]);
             const notaAtual = notas?.[0]?.notas || '';
             const motivo = aiMode === 'vendas'
@@ -5284,7 +5290,8 @@ async function ensureCapiColumns() {
         'ALTER TABLE leads ADD COLUMN ad_referral TEXT',
         'ALTER TABLE leads ADD COLUMN capi_lead_sent INTEGER DEFAULT 0',
         'ALTER TABLE leads ADD COLUMN capi_schedule_sent INTEGER DEFAULT 0',
-        'ALTER TABLE leads ADD COLUMN capi_purchase_sent INTEGER DEFAULT 0'
+        'ALTER TABLE leads ADD COLUMN capi_purchase_sent INTEGER DEFAULT 0',
+        'ALTER TABLE leads ADD COLUMN capi_contact_sent INTEGER DEFAULT 0'
     ]) {
         try { await queryD1(sql, []); } catch (e) { /* já existe */ }
     }
@@ -5580,25 +5587,26 @@ app.get('/api/capi-selftest', async (req, res) => {
         return res.json({ cfg, colunas_leads, probe: { event_name: nome, lead_id: ld.id, tinha_ctwa_clid: !!ld.ctwa_clid, resposta_meta: r } });
     }
 
-    // ?fire=<leadId>&event=Schedule|Purchase|Lead — roda o caminho EXATO do arrasto num lead real.
+    // ?fire=<leadId>&event=Schedule|Purchase|Lead|Contact — roda o caminho EXATO do arrasto num lead real.
     if (req.query.fire) {
-        const ev = ['Schedule', 'Purchase', 'Lead'].includes(req.query.event) ? req.query.event : 'Schedule';
+        const ev = ['Schedule', 'Purchase', 'Lead', 'Contact'].includes(req.query.event) ? req.query.event : 'Schedule';
         const before = await queryD1(`SELECT id, column_id, ctwa_clid, capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
         const r = await fireCapiForLead(String(req.query.fire), ev);
         const after = await queryD1(`SELECT capi_${ev.toLowerCase()}_sent AS flag FROM leads WHERE id = ?`, [String(req.query.fire)]).catch(() => null);
         return res.json({ cfg, colunas_leads, fire: { evento: ev, lead_antes: before && before[0], flag_depois: after && after[0], resposta_meta: r } });
     }
 
-    // ?fire_pendentes=lead|schedule|purchase — dispara o evento pra TODOS os leads
-    // pendentes (flag 0) dos últimos 7 dias que fazem sentido pro evento.
+    // ?fire_pendentes=lead|schedule|purchase|contact — dispara o evento pra TODOS os
+    // leads pendentes (flag 0) dos últimos 7 dias que fazem sentido pro evento.
     if (req.query.fire_pendentes) {
-        const ev = ['Lead', 'Schedule', 'Purchase'].find(e => e.toLowerCase() === String(req.query.fire_pendentes).toLowerCase());
-        if (!ev) return res.status(400).json({ error: 'fire_pendentes deve ser lead, schedule ou purchase' });
+        const ev = ['Lead', 'Schedule', 'Purchase', 'Contact'].find(e => e.toLowerCase() === String(req.query.fire_pendentes).toLowerCase());
+        if (!ev) return res.status(400).json({ error: 'fire_pendentes deve ser lead, schedule, purchase ou contact' });
         const flagCol = `capi_${ev.toLowerCase()}_sent`;
         let where = `${flagCol} = 0 AND created_at > datetime('now', '-7 days')`;
         if (ev === 'Lead')     where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != ''`;
         if (ev === 'Schedule') where += ` AND column_id = 'col-agendado'`;
         if (ev === 'Purchase') where += ` AND column_id = 'col-ganho'`;
+        if (ev === 'Contact')  where += ` AND ctwa_clid IS NOT NULL AND ctwa_clid != '' AND tags LIKE '%ia-qualificado%'`;
         const pend = await queryD1(`SELECT id, telefone, ctwa_clid FROM leads WHERE ${where} ORDER BY created_at DESC LIMIT 200`, []).catch(() => []);
         const linhas = pend || [];
         let enviados = 0, falharam = 0, primeiroErro = null, primeiroErroLead = null;
