@@ -3082,7 +3082,48 @@ function toggleAttachMenu(e) {
     if (e) e.stopPropagation();
     const popup = document.getElementById('attach-menu-popup');
     if (!popup) return;
-    popup.style.display = (popup.style.display === 'block') ? 'none' : 'block';
+    const opening = popup.style.display !== 'block';
+    popup.style.display = opening ? 'block' : 'none';
+    // "Cobrar Pix" só aparece se alguma unidade tiver chave Pix cadastrada —
+    // sem isso some do menu, não fica um item morto pra quem nunca configurou.
+    const pixItem = document.getElementById('attach-menu-pix');
+    const submenu = document.getElementById('chat-pix-submenu');
+    if (pixItem) {
+        const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
+        pixItem.style.display = (opening && comPix.length > 0) ? 'block' : 'none';
+    }
+    if (!opening && submenu) submenu.style.display = 'none';
+}
+
+// Abre o submenu de unidades pra "Cobrar Pix" (uma chave por unidade — ver
+// promptUnidadePix em app.js). Não manda direto: só preenche o campo de
+// mensagem, igual uma resposta rápida, pra o atendente revisar antes de enviar.
+function toggleChatPixSubmenu(e) {
+    if (e) e.stopPropagation();
+    const submenu = document.getElementById('chat-pix-submenu');
+    if (!submenu) return;
+    if (submenu.style.display === 'block') { submenu.style.display = 'none'; return; }
+
+    const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
+    submenu.innerHTML = comPix.map(u => `
+        <div onclick="insertPixKey('${u.id}')"
+            style="padding: 0.75rem 1rem; cursor: pointer; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.08)'"
+            onmouseout="this.style.background='transparent'">
+            ${escapeHtml(u.nome)}
+        </div>`).join('');
+    submenu.style.display = 'block';
+}
+
+function insertPixKey(unidadeId) {
+    const u = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).find(x => x.id === unidadeId);
+    if (!u || !u.pix_key) return;
+    const input = document.getElementById('chat-input-text');
+    if (input) {
+        input.value = `Chave Pix pra pagamento (${u.nome}):\n${u.pix_key}`;
+        input.focus();
+    }
+    toggleAttachMenu();
 }
 
 function triggerImageUpload() {

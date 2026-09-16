@@ -486,10 +486,10 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     );
                     console.log(`Novo lead criado a partir do WhatsApp: ${profileName} (${from}) - Origem: ${origemLead}`);
 
-                    // Veio de anúncio (Click-to-WhatsApp)? Dispara o Lead agora — clique fresco, match forte.
-                    if (ctwaClid) {
-                        await fireCapiForLead(newLeadId, 'Lead').catch(e => console.error('CAPI Lead:', e.message));
-                    }
+                    // O CAPI Lead (LeadSubmitted) não dispara mais aqui, no primeiro
+                    // contato — dispara só quando a IA qualifica o lead de verdade
+                    // (handleWhatsappAiAutoReply). Sinal mais raro, mas muito mais forte
+                    // pro Meta otimizar por quem qualifica, não por quem só manda "oi".
 
                     // Notifica a equipe que um novo lead entrou no funil.
                     try {
@@ -1971,12 +1971,11 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
             const aiMode = await getWhatsappAiMode();
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
             await tagLeadAsQualified(leadId);
-            // Sinaliza "qualificado" pro Meta também — não só o primeiro contato
-            // (LeadSubmitted) e a venda (Purchase). 'Contact' ainda não foi
-            // confirmado como aceito pra business_messaging nessa conta; se a Meta
-            // recusar, fica só logado (não trava nem repete a cada mensagem — a
-            // flag capi_contact_sent só é marcada em caso de sucesso).
-            await fireCapiForLead(leadId, 'Contact').catch(e => console.error('CAPI Contact:', e.message));
+            // CAPI Lead (LeadSubmitted pra quem veio de anúncio) dispara AQUI, na
+            // qualificação — não no primeiro contato. Sinal mais raro, mas muito
+            // mais forte: só conta como "Lead" pro Meta quem a IA realmente
+            // confirmou ser um lead de verdade, não qualquer um que mandou "oi".
+            await fireCapiForLead(leadId, 'Lead').catch(e => console.error('CAPI Lead:', e.message));
             const notas = await queryD1('SELECT notas FROM leads WHERE id = ?', [leadId]);
             const notaAtual = notas?.[0]?.notas || '';
             const motivo = aiMode === 'vendas'
@@ -3357,6 +3356,9 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_unidades (
     ativo INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).then(async () => {
+    // Chave Pix por unidade (ex.: CNPJ de Taguatinga vs de Planaltina) — usada
+    // pelo botão "Cobrar Pix" do chat, pra mandar a chave certa por conversa.
+    try { await queryD1('ALTER TABLE crm_unidades ADD COLUMN pix_key TEXT'); } catch (e) {}
     // Migração automática: se a tabela estiver vazia, cria a unidade atual
     // (Taguatinga) usando o token que já está no .env — assim o sistema
     // continua funcionando exatamente igual, sem precisar de nenhum passo manual.
@@ -3391,7 +3393,7 @@ async function getAmigoToken(unidadeId) {
 
 app.get('/api/unidades', async (req, res) => {
     try {
-        const rows = await queryD1('SELECT id, nome, ativo, created_at FROM crm_unidades ORDER BY created_at ASC');
+        const rows = await queryD1('SELECT id, nome, ativo, pix_key, created_at FROM crm_unidades ORDER BY created_at ASC');
         res.json({ items: rows || [] });
     } catch (e) {
         console.error('Erro ao listar unidades:', e);
@@ -3425,12 +3427,13 @@ app.put('/api/unidades/:id', async (req, res) => {
         return res.status(403).json({ error: 'Apenas administradores podem editar unidades.' });
     }
     try {
-        const { nome, amigo_api_token, ativo } = req.body;
+        const { nome, amigo_api_token, ativo, pix_key } = req.body;
         const updates = [];
         const params = [];
         if (nome !== undefined) { updates.push('nome = ?'); params.push(nome.trim()); }
         if (amigo_api_token !== undefined) { updates.push('amigo_api_token = ?'); params.push(amigo_api_token.trim() || null); }
         if (ativo !== undefined) { updates.push('ativo = ?'); params.push(ativo ? 1 : 0); }
+        if (pix_key !== undefined) { updates.push('pix_key = ?'); params.push(pix_key.trim() || null); }
         if (updates.length === 0) return res.status(400).json({ error: 'Nada pra atualizar.' });
 
         params.push(req.params.id);

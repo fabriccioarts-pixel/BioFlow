@@ -1,5 +1,12 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — Botão "Cobrar Pix" no chat, com chave por unidade
+
+### Adicionado
+* **Chave Pix por unidade** — nova coluna `pix_key` em `crm_unidades`. Tela de Unidades ganhou um botão (ícone de QR code) pra definir/trocar a chave de cada unidade (CNPJ, e-mail, telefone ou chave aleatória), do lado do botão que já existia pro token do Amigo.
+* **"Cobrar Pix" no menu de anexo do chat** — só aparece se pelo menos uma unidade tiver chave cadastrada. Com 1 unidade, ou com 2+ (abre submenu pra escolher qual), insere no campo de mensagem: `Chave Pix pra pagamento (<unidade>): <chave>` — não manda sozinho, o atendente revisa e confirma o envio, igual uma resposta rápida.
+* Decisão de design: não tenta adivinhar automaticamente a unidade do lead (não existe esse dado confiável hoje) — o atendente escolhe, pra nunca mandar a chave errada.
+
 ## 2026-09-16 — IA (Modo Vendas): não empurra agendamento mais tão cedo
 
 ### Alterado

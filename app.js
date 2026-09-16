@@ -6959,6 +6959,7 @@ function renderUnidadesList() {
             ${isAdmin ? `
             <div style="display: flex; gap: 0.4rem;">
                 <button type="button" onclick="promptUnidadeToken('${u.id}', '${u.nome.replace(/'/g, "\\'")}')" title="Definir/trocar token do Amigo" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem;"><i class="fa-solid fa-key"></i></button>
+                <button type="button" onclick="promptUnidadePix('${u.id}', '${u.nome.replace(/'/g, "\\'")}')" title="Definir/trocar chave Pix${u.pix_key ? ' (já cadastrada)' : ''}" style="background: none; border: none; color: ${u.pix_key ? 'var(--accent-success)' : 'var(--text-muted)'}; cursor: pointer; padding: 0.3rem;"><i class="fa-solid fa-qrcode"></i></button>
                 <button type="button" onclick="toggleUnidadeAtivo('${u.id}', ${u.ativo ? 'false' : 'true'})" title="${u.ativo ? 'Desativar' : 'Reativar'}" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.3rem;"><i class="fa-solid fa-${u.ativo ? 'ban' : 'rotate-left'}"></i></button>
                 ${cachedUnidades.length > 1 ? `<button type="button" onclick="deleteUnidadeItem('${u.id}')" title="Excluir" style="background: none; border: none; color: var(--accent-danger); cursor: pointer; padding: 0.3rem;"><i class="fa-solid fa-trash"></i></button>` : ''}
             </div>` : ''}
@@ -7007,6 +7008,24 @@ async function promptUnidadeToken(id, nome) {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Erro ao salvar token');
         if (typeof showToast === 'function') showToast('Token atualizado.', 'success');
+        await loadUnidades();
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
+async function promptUnidadePix(id, nome) {
+    const pix_key = prompt(`Chave Pix pra "${nome}" (CNPJ, e-mail, telefone ou chave aleatória):`);
+    if (pix_key === null) return; // cancelou
+    try {
+        const res = await fetch(`/api/unidades/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pix_key })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar chave Pix');
+        if (typeof showToast === 'function') showToast('Chave Pix atualizada.', 'success');
         await loadUnidades();
     } catch (e) {
         alert(e.message);

@@ -3717,6 +3717,21 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <i class="fa-regular fa-file-lines" style="color: #60a5fa; font-size: 1rem;"></i>
                             Enviar Template Pré-Aprovado
                         </div>
+                        <div id="attach-menu-pix" style="display: none; position: relative;">
+                            <div onclick="toggleChatPixSubmenu(event)"
+                                style="padding: 0.75rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s; justify-content: space-between;"
+                                onmouseover="this.style.background='rgba(255,255,255,0.08)'"
+                                onmouseout="this.style.background='transparent'">
+                                <span style="display: flex; align-items: center; gap: 0.7rem;">
+                                    <i class="fa-solid fa-qrcode" style="color: #10b981; font-size: 1rem;"></i>
+                                    Cobrar Pix
+                                </span>
+                                <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; color: var(--text-muted);"></i>
+                            </div>
+                            <div id="chat-pix-submenu"
+                                style="display: none; position: absolute; left: calc(100% + 4px); top: 0; width: 190px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; z-index: 1001; overflow: hidden; padding: 0.4rem 0;">
+                            </div>
+                        </div>
                     </div>
                 </div>
 
