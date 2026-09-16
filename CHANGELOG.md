@@ -1,5 +1,11 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — IA (Modo Vendas): não empurra agendamento mais tão cedo
+
+### Alterado
+* **Regra de ritmo adicionada ao Modo Vendas** ([api-server.js:1305](api-server.js#L1305)): a IA não convida mais pra agendar nas 2 primeiras respostas da conversa — esse tempo passa a ser só descoberta de verdade. O convite de agendamento só pode aparecer a partir da 3ª resposta (e ainda assim só depois de já ter entendido a necessidade e apresentado o procedimento), a menos que o próprio paciente peça pra agendar antes disso.
+* Motivo: relatório da IA de insights apontou "abordagens comerciais precipitadas" como causa de bloqueio/descadastro de leads. A regra antiga mandava terminar toda resposta com CTA de agendamento sem nenhuma trava de estágio mínimo — na prática podia empurrar agendamento já na 1ª mensagem.
+
 ## 2026-09-16 — Remove o papel de parede do chat
 
 ### Removido
