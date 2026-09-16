@@ -4611,6 +4611,38 @@ app.get('/api/campaigns/export-leads', async (req, res) => {
     }
 });
 
+// Lista de clientes pra subir como Público Personalizado na Meta (semente pro
+// Lookalike de "quem qualifica"). Só telefone + email, sem hash — o próprio
+// uploader da Meta (Anúncios > Públicos > Lista de clientes) normaliza e
+// faz o hash no navegador dela. ?dias=N limita a janela (default 180).
+app.get('/api/leads/export-qualificados-meta', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 180, 1), 3650);
+        const rows = await queryD1(
+            `SELECT telefone, email FROM leads
+             WHERE qualificado_em IS NOT NULL AND qualificado_em > datetime('now', '-${dias} days')
+               AND telefone IS NOT NULL AND telefone != ''`
+        );
+        const header = 'phone,email\n';
+        const csvBody = (rows || []).map(r => {
+            const tel = String(r.telefone || '').replace(/\D/g, '');
+            const phone = tel ? '+' + tel : '';
+            const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+            return [esc(phone), esc(r.email || '')].join(',');
+        }).join('\n');
+
+        res.set('Content-Type', 'text/csv; charset=utf-8');
+        res.set('Content-Disposition', 'attachment; filename="leads-qualificados-meta.csv"');
+        res.send('﻿' + header + csvBody);
+    } catch (e) {
+        console.error('Erro ao exportar leads qualificados pra Meta:', e);
+        res.status(500).json({ error: 'Erro interno ao exportar.' });
+    }
+});
+
 // Relatório de anúncios Meta (Click-to-WhatsApp): agrupa por "origem" (que já
 // vem como "Meta Ads: <título do anúncio>" desde o webhook) todo lead que tem
 // ctwa_clid — ou seja, veio de um clique real rastreado, não de mensagem
