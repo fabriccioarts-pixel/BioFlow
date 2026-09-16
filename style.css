@@ -8223,12 +8223,14 @@ h1, h2,
 @media (max-width: 720px) { .copilot-btn-label { display: none; } }
 
 /* ============================================================================
-   PAPEL DE PAREDE DO CHAT (estilo WhatsApp) — camada isolada num ::before pra
-   poder inverter as cores no tema escuro sem filtrar as mensagens junto (um
-   filter direto no container afetaria o texto/balões também).
+   PAPEL DE PAREDE DO CHAT (estilo WhatsApp) — o ::before vai no `.chat-main`
+   (o painel que NÃO rola), não no `#chat-active-messages` (que rola o
+   histórico). Um ::before dentro do próprio elemento com overflow rola junto
+   com o conteúdo; aqui ele fica atrás de tudo e parado, como no WhatsApp de
+   verdade. Isolado num pseudo-elemento pra poder inverter as cores no tema
+   escuro sem filtrar o texto/balões junto (um filter no container faria isso).
    ============================================================================ */
-#chat-active-messages { position: relative; }
-#chat-active-messages::before {
+.chat-main::before {
     content: '';
     position: absolute;
     inset: 0;
@@ -8238,12 +8240,16 @@ h1, h2,
     pointer-events: none;
     z-index: 0;
 }
-[data-theme="light"] #chat-active-messages::before {
+[data-theme="light"] .chat-main::before {
     background-color: #efeae2;
 }
-:root:not([data-theme="light"]) #chat-active-messages::before {
+:root:not([data-theme="light"]) .chat-main::before {
     background-color: var(--bg-main);
     filter: invert(0.92) hue-rotate(180deg);
     opacity: 0.55;
 }
-#chat-active-messages > * { position: relative; z-index: 1; }
+.chat-main > * { position: relative; z-index: 1; }
+/* O corpo das mensagens precisa ficar transparente pra deixar o papel de
+   parede aparecer por trás — header e rodapé continuam sólidos (var(--bg-card)
+   já definido inline neles). */
+#chat-active-messages { background: transparent; }

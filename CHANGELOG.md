@@ -1,5 +1,10 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — Papel de parede do chat: corrige rolando junto com as mensagens
+
+### Corrigido
+* O `::before` do papel de parede estava dentro de `#chat-active-messages` (o elemento com `overflow-y:auto`) — um pseudo-elemento posicionado dentro do próprio container que rola, rola junto com o conteúdo, mesmo sendo `position:absolute`. Movido pro `.chat-main` (o painel que envolve header + mensagens + rodapé e não rola); `#chat-active-messages` virou transparente pra deixar o padrão aparecer por trás, parado, igual o WhatsApp de verdade. `style.css?v=8` pra invalidar cache.
+
 ## 2026-09-14 — Papel de parede no fundo do chat (estilo WhatsApp)
 
 ### Adicionado
