@@ -3082,51 +3082,7 @@ function toggleAttachMenu(e) {
     if (e) e.stopPropagation();
     const popup = document.getElementById('attach-menu-popup');
     if (!popup) return;
-    const opening = popup.style.display !== 'block';
-    popup.style.display = opening ? 'block' : 'none';
-    // "Cobrar Pix" só aparece se alguma unidade tiver chave Pix cadastrada —
-    // sem isso some do menu, não fica um item morto pra quem nunca configurou.
-    const pixItem = document.getElementById('attach-menu-pix');
-    const submenu = document.getElementById('chat-pix-submenu');
-    if (pixItem) {
-        const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
-        pixItem.style.display = (opening && comPix.length > 0) ? 'block' : 'none';
-    }
-    if (!opening && submenu) submenu.style.display = 'none';
-}
-
-// "Cobrar Pix": com 1 unidade cadastrada, manda direto (1 clique). Com 2+,
-// abre o submenu pra escolher qual, e a escolha já manda também.
-function toggleChatPixSubmenu(e) {
-    if (e) e.stopPropagation();
-    const comPix = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).filter(u => u.pix_key && u.ativo);
-    if (comPix.length === 0) return;
-    if (comPix.length === 1) { sendPixKey(comPix[0].id); return; }
-
-    const submenu = document.getElementById('chat-pix-submenu');
-    if (!submenu) return;
-    if (submenu.style.display === 'block') { submenu.style.display = 'none'; return; }
-    submenu.innerHTML = comPix.map(u => `
-        <div onclick="sendPixKey('${u.id}')"
-            style="padding: 0.75rem 1rem; cursor: pointer; font-size: 0.85rem; color: var(--text-main); font-weight: 500; transition: 0.15s;"
-            onmouseover="this.style.background='rgba(255,255,255,0.08)'"
-            onmouseout="this.style.background='transparent'">
-            ${escapeHtml(u.nome)}
-        </div>`).join('');
-    submenu.style.display = 'block';
-}
-
-// Preenche o campo com a chave Pix da unidade e manda na hora, reaproveitando
-// sendActiveChatMessage (assinatura do atendente, trava anti-duplicidade, etc.
-// — tudo que um envio manual normal já faz).
-function sendPixKey(unidadeId) {
-    const u = (typeof cachedUnidades !== 'undefined' ? cachedUnidades : []).find(x => x.id === unidadeId);
-    if (!u || !u.pix_key) return;
-    toggleAttachMenu();
-    const input = document.getElementById('chat-input-text');
-    if (!input) return;
-    input.value = `Chave Pix pra pagamento (${u.nome}):\n${u.pix_key}`;
-    if (typeof sendActiveChatMessage === 'function') sendActiveChatMessage();
+    popup.style.display = (popup.style.display === 'block') ? 'none' : 'block';
 }
 
 function triggerImageUpload() {

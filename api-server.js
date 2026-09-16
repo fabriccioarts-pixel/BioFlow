@@ -3356,9 +3356,6 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_unidades (
     ativo INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).then(async () => {
-    // Chave Pix por unidade (ex.: CNPJ de Taguatinga vs de Planaltina) — usada
-    // pelo botão "Cobrar Pix" do chat, pra mandar a chave certa por conversa.
-    try { await queryD1('ALTER TABLE crm_unidades ADD COLUMN pix_key TEXT'); } catch (e) {}
     // Migração automática: se a tabela estiver vazia, cria a unidade atual
     // (Taguatinga) usando o token que já está no .env — assim o sistema
     // continua funcionando exatamente igual, sem precisar de nenhum passo manual.
@@ -3393,7 +3390,7 @@ async function getAmigoToken(unidadeId) {
 
 app.get('/api/unidades', async (req, res) => {
     try {
-        const rows = await queryD1('SELECT id, nome, ativo, pix_key, created_at FROM crm_unidades ORDER BY created_at ASC');
+        const rows = await queryD1('SELECT id, nome, ativo, created_at FROM crm_unidades ORDER BY created_at ASC');
         res.json({ items: rows || [] });
     } catch (e) {
         console.error('Erro ao listar unidades:', e);
@@ -3427,13 +3424,12 @@ app.put('/api/unidades/:id', async (req, res) => {
         return res.status(403).json({ error: 'Apenas administradores podem editar unidades.' });
     }
     try {
-        const { nome, amigo_api_token, ativo, pix_key } = req.body;
+        const { nome, amigo_api_token, ativo } = req.body;
         const updates = [];
         const params = [];
         if (nome !== undefined) { updates.push('nome = ?'); params.push(nome.trim()); }
         if (amigo_api_token !== undefined) { updates.push('amigo_api_token = ?'); params.push(amigo_api_token.trim() || null); }
         if (ativo !== undefined) { updates.push('ativo = ?'); params.push(ativo ? 1 : 0); }
-        if (pix_key !== undefined) { updates.push('pix_key = ?'); params.push(pix_key.trim() || null); }
         if (updates.length === 0) return res.status(400).json({ error: 'Nada pra atualizar.' });
 
         params.push(req.params.id);
