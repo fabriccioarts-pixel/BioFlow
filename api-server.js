@@ -5346,14 +5346,15 @@ async function sendMetaCapiEvent(eventName, {
     const ln = nomePartes.length > 1 ? nomePartes.slice(1).join(' ') : '';
 
     // Pra action_source 'business_messaging' (Click-to-WhatsApp) o Meta só aceita
-    // um punhado de event_name. Testado: 'Lead', 'Schedule', 'CompleteRegistration',
-    // 'SubmitApplication' -> todos recusados (error_subcode 2804066). Válidos: só
-    // 'LeadSubmitted' e 'Purchase'. Então:
+    // DOIS event_name nessa conta: 'LeadSubmitted' e 'Purchase'. Testado e recusado
+    // (error_subcode 2804066): 'Lead', 'Schedule', 'CompleteRegistration',
+    // 'SubmitApplication', 'Contact'. Não tem um terceiro nome pra sinalizar
+    // "qualificado" — só dá pra usar os dois momentos que a Meta abre:
     //   Lead     -> LeadSubmitted
     //   Purchase -> Purchase
-    //   Schedule -> não tem equivalente CTWA; não envia (fica métrica só no CRM)
+    //   Schedule, Contact -> sem equivalente CTWA; não envia (fica métrica só no CRM)
     const MSG_EVENT_MAP = { Lead: 'LeadSubmitted' };
-    const MSG_EVENT_UNSUPPORTED = new Set(['Schedule']);
+    const MSG_EVENT_UNSUPPORTED = new Set(['Schedule', 'Contact']);
     if (isMsg && MSG_EVENT_UNSUPPORTED.has(eventName)) {
         console.log(`CAPI ${eventName}: sem nome válido pra business_messaging (CTWA) — não enviado`);
         return { ok: false, unsupportedForCtwa: true };
