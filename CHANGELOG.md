@@ -1,5 +1,10 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — Remove o papel de parede do chat
+
+### Removido
+* `whatsapp-bg.png` e o CSS do `.chat-main::before` que aplicava o padrão de fundo — voltou ao fundo sólido de antes. `style.css?v=9`.
+
 ## 2026-09-16 — Papel de parede do chat: corrige rolando junto com as mensagens
 
 ### Corrigido
