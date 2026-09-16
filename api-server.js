@@ -9431,12 +9431,20 @@ async function followupTick() {
         const firstDelay = cfg.steps[0].atraso_min || 60;
         const cutoffDelay = flowDbTime(-firstDelay * 60000);
         const cutoffOld = flowDbTime(-30 * 86400000);
+        // ORDER BY last_msg_at DESC: sem isso o D1 devolvia sempre a mesma fatia
+        // (as linhas mais antigas que batem no filtro). Se o total elegível na
+        // janela de 30 dias passar de 200, essa mesma fatia antiga — já coberta
+        // por 'mesma_ancora' — ocupava o LIMIT em todo tick, e leads novos nunca
+        // chegavam a ser avaliados. Ordenar do mais recente pro mais antigo
+        // prioriza quem ficou quieto por último (mais relevante agora) e evita
+        // travar a fila nos mesmos leads antigos pra sempre.
         const cand = await queryD1(
             `SELECT id, nome, telefone, tags, column_id, ai_enabled, last_msg_at
              FROM leads
              WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
                AND last_msg_at <= ? AND last_msg_at >= ?
                AND (campaign_opt_out IS NULL OR campaign_opt_out = 0)
+             ORDER BY last_msg_at DESC
              LIMIT 200`, [cutoffDelay, cutoffOld]);
         dbg.janela = (cand || []).length;
 

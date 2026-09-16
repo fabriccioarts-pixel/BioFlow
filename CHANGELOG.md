@@ -1,5 +1,20 @@
 # Changelog - CRM Natuclinic
 
+## 2026-09-16 — Follow-up automático travado nos mesmos leads antigos
+
+### Corrigido
+* **Follow-up parava de abrir novos lembretes.** A consulta que busca candidatos
+  em `followupTick()` ([api-server.js:9434](api-server.js#L9434)) não tinha
+  `ORDER BY`. Sem ordenação, o D1 devolvia sempre a mesma fatia de até 200 leads
+  batendo no filtro (tipicamente os mais antigos) — e se esses já tinham um
+  follow-up rodado pra mesma última mensagem (`mesma_ancora`), a fila inteira
+  ficava presa neles: leads novos que realmente precisavam de um lembrete nunca
+  chegavam a ser avaliados. Diagnosticado pelo debug do `/api/flow-tick`
+  (`janela: 200, mesma_ancora: 196, opened: 0`) com o cron confirmadamente vivo
+  (`prev_run_ago_sec` baixo). Corrigido com `ORDER BY last_msg_at DESC` — usa o
+  índice já existente `idx_leads_lastmsg(last_msg_direction, last_msg_at)`, sem
+  custo extra de D1 — e prioriza quem ficou quieto mais recentemente.
+
 ## 2026-09-16 — "Cobrar Pix" corrigido: agora envia de verdade
 
 ### Corrigido
