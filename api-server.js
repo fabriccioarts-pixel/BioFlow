@@ -1291,6 +1291,17 @@ REGRAS DE TOM:
 // querer ao editar o texto do contexto.
 const WHATSAPP_AI_QUALIFIED_TOKEN = 'QUALIFICADO_SILENCIO';
 
+// Reconhece o token de handoff mesmo quando o Gemini não reproduz a palavra
+// letra por letra (ex.: respondeu "QUALIFICAÇÃO_SILENCIO" em vez de
+// "QUALIFICADO_SILENCIO" — mesma intenção, grafia diferente). Um startsWith()
+// exato deixou passar essa variação direto pro paciente como mensagem de
+// verdade, porque a comparação de string falhou e o código nunca reconheceu
+// como sinal de silêncio.
+function isQualifiedSilenceToken(text) {
+    const norm = String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+    return /^qualifica[a-z]*_silencio\b/.test(norm);
+}
+
 // Modo "qualificação" (padrão): entende a necessidade e passa rápido pro humano.
 const WHATSAPP_AI_SILENCE_RULE = `
 
@@ -2231,7 +2242,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         // com a resposta.
         if (await aiReplySupersededBy(phone, incomingWamid, triggerTs)) return;
 
-        if (replyText.startsWith(WHATSAPP_AI_QUALIFIED_TOKEN)) {
+        if (isQualifiedSilenceToken(replyText)) {
             const aiMode = await getWhatsappAiMode();
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
             await tagLeadAsQualified(leadId);
