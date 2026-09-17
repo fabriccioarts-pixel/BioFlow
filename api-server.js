@@ -1099,6 +1099,49 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
     return resultJson;
 }
 
+// Manda um arquivo já salvo na Biblioteca de Mídia (crm_media) por um caminho
+// interno (agente de IA) — mesmo pipeline de upload+envio do /api/whatsapp/send
+// pra mídia, só que sem passar pela rota HTTP (chamada direto do servidor).
+async function sendWhatsappMediaLibraryInternal(to, mediaLibId, caption, sentBy = 'ia') {
+    const phone_id = process.env.META_WA_PHONE_ID;
+    const token = process.env.META_WA_ACCESS_TOKEN;
+    if (!phone_id || !token) throw new Error('Credenciais do WhatsApp não configuradas no servidor.');
+
+    const rows = await queryD1('SELECT nome, mime, data_base64, legenda_padrao FROM crm_media WHERE id = ?', [mediaLibId]);
+    const media = rows && rows[0];
+    if (!media) throw new Error('Mídia da biblioteca não encontrada.');
+
+    const mediaType = mediaTipoFromMime(media.mime);
+    const uploadMime = String(media.mime || '').split(';')[0].trim();
+    const buffer = Buffer.from(media.data_base64, 'base64');
+    const metaMediaId = await uploadMediaToMeta(buffer, uploadMime, media.nome || `file.${uploadMime.split('/')[1] || 'bin'}`);
+
+    const captionFinal = caption || media.legenda_padrao || undefined;
+    const data = { messaging_product: 'whatsapp', to, type: mediaType, [mediaType]: { id: metaMediaId } };
+    if (captionFinal && (mediaType === 'image' || mediaType === 'video' || mediaType === 'document')) {
+        data[mediaType].caption = captionFinal;
+    }
+
+    const sendRes = await postMetaMessage(phone_id, token, data);
+    const resultJson = sendRes.resultJson;
+    if (!sendRes.ok) throw new Error(resultJson.error ? resultJson.error.message : 'Erro desconhecido na Meta API');
+    const finalTo = (resultJson.contacts && resultJson.contacts[0] && resultJson.contacts[0].wa_id) || sendRes.usedTo || to;
+    if (finalTo !== to) await migrateChatPhone(to, finalTo);
+
+    const msg_id = resultJson.messages ? resultJson.messages[0].id : Date.now().toString();
+    const ext = (media.nome && media.nome.includes('.')) ? media.nome.split('.').pop() : (uploadMime.split('/')[1] || 'bin');
+    const db_message_body = `[FILE:${media.nome || 'arquivo'}]/api/whatsapp/media/${metaMediaId}.${ext}${captionFinal ? `[CAPTION:${captionFinal}]` : ''}`;
+    await queryD1(
+        'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [msg_id, finalTo, 'out', db_message_body, 'sent', sentBy]
+    );
+    try {
+        const v = phoneVariants(finalTo);
+        await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+    } catch (e) {}
+    return resultJson;
+}
+
 // Cache curto dos metadados de template da Meta (nome -> idioma / nº de variáveis
 // no corpo). Evita bater na Graph API a cada tick do follow-up; TTL de 5 min é
 // suficiente porque template aprovado quase nunca muda.
@@ -1357,6 +1400,20 @@ FORMATO DA RESPOSTA (OBRIGATÓRIO):
 - No máximo UMA pergunta na resposta inteira, sempre na última mensagem.
 - Escreva como no WhatsApp: direto, sem "Prezado(a)", sem listas, sem títulos.`;
 
+// Só anexada quando whatsapp_ai_media_enabled está ligado (ver
+// getWhatsappAiMediaEnabled). Mesma cautela da regra de agendamento: só usa
+// depois de interesse de verdade, nunca cedo demais, e nunca inventa se a
+// busca não achar nada — a ferramenta já cobre esse caso (encontrada: false).
+const WHATSAPP_AI_MEDIA_RULE = `
+
+REGRA DE IMAGEM DE EXEMPLO:
+Você tem a ferramenta buscar_imagem_resultado, que busca uma foto de exemplo/resultado de um procedimento na biblioteca da clínica.
+- Só use depois que o paciente já demonstrou interesse CONCRETO num procedimento específico (não na primeira ou segunda mensagem, não só por ele ter perguntado "o que vocês fazem").
+- Ao usar, inclua no "procedimento" da busca qualquer detalhe que o paciente tenha dado (região do corpo/rosto, queixa) além do nome do procedimento — melhora muito a chance de achar a imagem certa entre várias parecidas.
+- Se a busca não encontrar nada (encontrada: false), NÃO invente nem diga que vai mandar uma imagem — só continue a conversa normalmente, sem mencionar a tentativa.
+- Nunca use mais de uma vez na mesma conversa a não ser que o paciente pergunte por outro procedimento diferente.
+- Não descreva a imagem em texto nem coloque um placeholder tipo "[imagem]" na sua resposta — o sistema anexa a foto de verdade logo depois da sua mensagem. Só fale naturalmente que vai mandar um exemplo.`;
+
 async function getWhatsappAiContext() {
     try {
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_context'");
@@ -1392,6 +1449,17 @@ async function getWhatsappAiAudio() {
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_audio'");
         return !(rows && rows[0] && rows[0].value === '0');
     } catch (e) { return true; }
+}
+
+// Agente manda imagem de exemplo da Biblioteca de Mídia? Ao contrário de
+// vision/audio, começa DESLIGADO por padrão — precisa de opt-in consciente do
+// admin (ainda não tem checagem de consentimento de uso de imagem de paciente,
+// e o casamento procedimento->arquivo depende de nome/legenda bem preenchidos).
+async function getWhatsappAiMediaEnabled() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_media'");
+        return !!(rows && rows[0] && rows[0].value === '1');
+    } catch (e) { return false; }
 }
 
 const AI_MAX_IMAGES = 2;                       // quantas imagens recentes o agente enxerga
@@ -1925,6 +1993,11 @@ function getNowContextForPrompt() {
     return `\n\n[AGORA] Hoje é ${parts.weekday}, ${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute} (horário de Brasília).${avisoHorario} Quando mencionar um dia da semana que é HOJE, deixe isso explícito ("hoje" ou "ainda hoje") — nunca cite o nome do dia sozinho nesse caso, senão o paciente pode entender como uma data futura.`;
 }
 
+// Devolve { text, mediaId } — mediaId só vem preenchido quando o agente usou a
+// ferramenta de imagem e achou uma correspondência de verdade (ver
+// WHATSAPP_AI_MEDIA_RULE e getWhatsappAiMediaEnabled). handleWhatsappAiAutoReply
+// manda o texto pelo caminho humanizado de sempre e, se tiver mediaId, a foto
+// logo em seguida.
 async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
@@ -1935,20 +2008,51 @@ async function callGeminiForWhatsappReply(phone) {
     const adContext = await getAdContextForPhone(phone);
     const mode = await getWhatsappAiMode();
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
-    const systemPrompt = context + nowContext + adContext + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
-        body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents: history
-        })
-    });
-    const json = await response.json();
-    if (!response.ok) throw new Error(json.error ? json.error.message : 'Erro desconhecido na API do Gemini');
+    const mediaEnabled = await getWhatsappAiMediaEnabled();
+    const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
+    const systemPrompt = context + nowContext + adContext + behaviorRule + mediaRule + WHATSAPP_AI_FORMAT_RULE;
 
-    const text = json.candidates?.[0]?.content?.parts?.map(p => p.text).join('').trim() || '';
-    return normalizeAiReply(text);
+    const body = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: history
+    };
+    if (mediaEnabled) body.tools = [{ functionDeclarations: [MEDIA_TOOL_DECLARATION] }];
+
+    const call = async (b) => {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify(b)
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ? j.error.message : 'Erro desconhecido na API do Gemini');
+        return j;
+    };
+
+    const first = await call(body);
+    const parts = first.candidates?.[0]?.content?.parts || [];
+    const fnCallPart = mediaEnabled ? parts.find(p => p.functionCall) : null;
+    const fnCall = fnCallPart?.functionCall;
+
+    if (!fnCall) {
+        const text = parts.map(p => p.text || '').join('').trim();
+        return { text: normalizeAiReply(text), mediaId: null };
+    }
+
+    let midia = null;
+    try { midia = await matchMediaForProcedure(fnCall.args.procedimento); } catch (e) { /* segue sem mídia */ }
+
+    const contentsWithFnResult = [
+        ...history,
+        { role: 'model', parts: [fnCallPart] },
+        { role: 'user', parts: [{ functionResponse: {
+            name: 'buscar_imagem_resultado',
+            response: midia ? { encontrada: true, nome: midia.nome } : { encontrada: false }
+        } }] }
+    ];
+    const second = await call({ ...body, contents: contentsWithFnResult });
+    const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+    return { text: normalizeAiReply(text2), mediaId: midia ? midia.id : null };
 }
 
 // Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
@@ -2407,7 +2511,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         // Meta etc.), desiste na hora — a invocação da mensagem mais nova cuida.
         if (await aiReplySupersededBy(phone, incomingWamid, triggerTs)) return;
 
-        const replyText = await callGeminiForWhatsappReply(phone);
+        const { text: replyText, mediaId } = await callGeminiForWhatsappReply(phone);
         if (!replyText) return;
 
         // A chamada ao Gemini acima já deu tempo de uma mensagem-irmã da mesma
@@ -2463,6 +2567,15 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         const replyDelay = await getWhatsappAiReplyDelay();
         await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
             () => aiReplySupersededBy(phone, incomingWamid, triggerTs));
+
+        // Imagem de exemplo (se a ferramenta achou uma) vai DEPOIS do texto — a
+        // resposta já fala naturalmente que vai mandar um exemplo, a foto chega
+        // logo em seguida completando a promessa. Falha aqui não derruba nada:
+        // o paciente já recebeu a resposta de texto de qualquer forma.
+        if (mediaId) {
+            try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
+            catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
+        }
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
     }
@@ -4073,7 +4186,7 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
         const timing = await getWhatsappAiTiming();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio() });
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -4108,7 +4221,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                 [mode]
             );
         }
-        for (const k of ['human', 'typing', 'vision', 'audio']) {
+        for (const k of ['human', 'typing', 'vision', 'audio', 'media']) {
             if (req.body?.[k] !== undefined) {
                 await queryD1(
                     `INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_${k}', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -4117,7 +4230,7 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
             }
         }
         const timing = await getWhatsappAiTiming();
-        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio() });
+        res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
     } catch (e) {
         console.error('Erro ao salvar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao salvar configuração.' });
