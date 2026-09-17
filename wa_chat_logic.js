@@ -1416,10 +1416,20 @@ function filterChatContacts(query) {
     let filtered = allChatsList;
 
     if (q) {
+        // Número de telefone com/sem o "9" transicional, ou com/sem DDI, nunca
+        // batem num includes() de texto puro (ex.: número salvo sem o 9, tipo
+        // "556196351852", não contém a busca "61996351852", com 9 — e o 9 fica
+        // NO MEIO do número, então nem comparar os últimos N dígitos resolve).
+        // canonicalPhoneBR já existe pra isso (remove o 9 transicional quando
+        // aplicável) — usa a mesma normalização dos dois lados da comparação.
+        const qDigits = q.replace(/\D/g, '');
+        const qCanon = qDigits.length >= 8 ? canonicalPhoneBR(qDigits) : null;
+
         filtered = filtered.filter(chat => {
             const name = (chat.nome || '').toLowerCase();
             const phone = (chat.phone || '').toLowerCase();
             const msg = (chat.message || '').toLowerCase();
+            const phoneMatch = phone.includes(q) || (qCanon && canonicalPhoneBR(chat.phone).includes(qCanon));
 
             let tagNames = '';
             if (typeof leads !== 'undefined' && Array.isArray(leads)) {
@@ -1434,7 +1444,7 @@ function filterChatContacts(query) {
                 }
             }
 
-            return name.includes(q) || phone.includes(q) || msg.includes(q) || tagNames.includes(q);
+            return name.includes(q) || phoneMatch || msg.includes(q) || tagNames.includes(q);
         });
     }
 
