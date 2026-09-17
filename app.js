@@ -6740,17 +6740,17 @@ function renderDashboard() {
     const tempoMedioResposta = responseCount > 0 ? responseMinutesTotal / responseCount : NaN;
 
     const el = id => document.getElementById(id);
-    if (el('dash-receita-prevista')) el('dash-receita-prevista').innerText = 'R$ ' + receitaPrevista.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-    if (el('dash-receita-realizada')) el('dash-receita-realizada').innerText = 'R$ ' + receitaRealizada.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-    if (el('dash-ticket-medio')) el('dash-ticket-medio').innerText = 'R$ ' + ticketMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-    if (el('dash-ltv-medio')) el('dash-ltv-medio').innerText = 'R$ ' + ltvMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-receita-prevista')) el('dash-receita-prevista').innerText = 'R$ ' + receitaPrevista.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (el('dash-receita-realizada')) el('dash-receita-realizada').innerText = 'R$ ' + receitaRealizada.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (el('dash-ticket-medio')) el('dash-ticket-medio').innerText = 'R$ ' + ticketMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (el('dash-ltv-medio')) el('dash-ltv-medio').innerText = 'R$ ' + ltvMedio.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     if (el('dash-ltv-pacientes')) el('dash-ltv-pacientes').innerText = ltvPatients + (ltvPatients === 1 ? ' paciente' : ' pacientes');
     if (el('dash-compras-paciente')) el('dash-compras-paciente').innerText = comprasPorPaciente.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '×';
     if (el('dash-leads-ativos')) el('dash-leads-ativos').innerText = leadsAtivos;
     if (el('dash-taxa-resposta')) el('dash-taxa-resposta').innerText = taxaConversao + '%';
     if (el('dash-agendamentos-total')) el('dash-agendamentos-total').innerText = agendadosTotal + ganhosTotal;
     if (el('dash-leads-hoje')) el('dash-leads-hoje').innerText = leadsContatados;
-    if (el('dash-perdas-total')) el('dash-perdas-total').innerText = 'R$ ' + perdasTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (el('dash-perdas-total')) el('dash-perdas-total').innerText = 'R$ ' + perdasTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     if (el('dash-sem-responsavel')) el('dash-sem-responsavel').innerText = semResponsavel;
     if (el('dash-aguardando-resposta')) el('dash-aguardando-resposta').innerText = aguardandoResposta;
     if (el('dash-tempo-resposta')) el('dash-tempo-resposta').innerText = formatResponseTime(tempoMedioResposta);
@@ -6792,7 +6792,7 @@ function renderDashboard() {
 
                     <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;">
                         <span style="font-size: 0.72rem; color: var(--text-muted);">${r.leads} leads &middot; ${conv}% conv.</span>
-                        <span style="font-weight: 700; color: #10b981; font-size: 0.85rem; white-space: nowrap;">R$ ${r.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        <span style="font-weight: 700; color: #10b981; font-size: 0.85rem; white-space: nowrap;">R$ ${r.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
 
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
@@ -6863,9 +6863,9 @@ function renderDashboardGoal(receitaTotal) {
     const currentEl = document.getElementById('dash-goal-current');
     const pctEl = document.getElementById('dash-goal-pct');
     const targetEl = document.getElementById('dash-goal-target');
-    if (currentEl) currentEl.textContent = 'R$ ' + receitaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (currentEl) currentEl.textContent = 'R$ ' + receitaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     if (pctEl) pctEl.textContent = Math.round(pct) + '%';
-    if (targetEl) targetEl.textContent = 'Meta: R$ ' + cachedDashGoal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    if (targetEl) targetEl.textContent = 'Meta: R$ ' + cachedDashGoal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function openDashGoalEditor() {
@@ -7779,7 +7779,7 @@ async function loadDispatchHistory() {
                             <td style="padding: 0.5rem; color: var(--text-main);">${escapeHtml(d.template_name || '')}</td>
                             <td style="padding: 0.5rem; color: var(--text-muted);">${escapeHtml(d.category || '')}</td>
                             <td style="padding: 0.5rem; text-align: right; color: var(--text-main);">${d.success_count}/${d.total_leads}</td>
-                            <td style="padding: 0.5rem; text-align: right; color: var(--accent-success); font-weight: 600;">R$ ${Number(d.cost_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                            <td style="padding: 0.5rem; text-align: right; color: var(--accent-success); font-weight: 600;">R$ ${Number(d.cost_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -7952,7 +7952,7 @@ async function dispatchTemplateCampaign(recipients, opts) {
                 success = true;
                 successCount++;
                 costTotal += costPerMessage;
-                if (costText) costText.innerText = 'Custo estimado: R$ ' + costTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+                if (costText) costText.innerText = 'Custo estimado: R$ ' + costTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                 logBox.innerHTML += `<div style="color: var(--accent-success);">[OK] ${lead.nome} (${phone})</div>`;
             } else {
                 failCount++;
