@@ -1508,6 +1508,129 @@ async function getAdContextForPhone(phone) {
     } catch (e) { return ''; }
 }
 
+// ============================================================================
+// TESTE: IA com acesso à agenda do Amigo App (function calling do Gemini).
+// Isolado do fluxo real do paciente (callGeminiForWhatsappReply) de propósito —
+// só é chamado pelo endpoint /api/ai-agenda-test, admin, pra avaliar a
+// qualidade das respostas antes de decidir se vale plugar no agente de verdade.
+// ============================================================================
+
+// Horários já ocupados numa data — sem nome de paciente (não pode vazar pra
+// outro paciente pela resposta da IA), só profissional + intervalo de tempo,
+// que é o suficiente pra ela raciocinar sobre disponibilidade.
+async function amigoOccupiedSlotsForDate(dateStr, unidadeId) {
+    const token = await getAmigoToken(unidadeId);
+    if (!token) throw new Error('Token do Amigo App não configurado.');
+    const url = `https://amigobot-api.amigoapp.com.br/attendances?start_date=${dateStr}&end_date=${dateStr}&status=ALL`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.message || 'Erro ao consultar Amigo App');
+    const rows = j.data || j || [];
+    return (Array.isArray(rows) ? rows : [])
+        .filter(a => a.start_date)
+        .map(a => ({
+            profissional: (a.user && a.user.name) || 'Sem profissional',
+            inicio: a.start_date,
+            fim: a.end_date || null
+        }));
+}
+
+const AGENDA_TOOL_DECLARATION = {
+    name: 'consultar_agenda_do_dia',
+    description: 'Consulta os horários JÁ OCUPADOS na agenda da clínica pra uma data específica, pra saber o que está livre. Use sempre que o paciente perguntar sobre disponibilidade de horário, dia da semana, ou pedir pra agendar/marcar algo.',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            data: { type: 'STRING', description: 'Data no formato AAAA-MM-DD.' }
+        },
+        required: ['data']
+    }
+};
+
+// Roda o ciclo completo de function calling do Gemini: manda a pergunta com a
+// ferramenta disponível; se o modelo pedir a função, executa de verdade contra
+// o Amigo App e manda o resultado de volta pra ele formular a resposta final.
+async function callGeminiWithAgendaTool(systemPrompt, contents, unidadeId) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
+
+    const body = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        tools: [{ functionDeclarations: [AGENDA_TOOL_DECLARATION] }],
+        contents
+    };
+
+    const call = async (b) => {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify(b)
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ? j.error.message : 'Erro desconhecido na API do Gemini');
+        return j;
+    };
+
+    const first = await call(body);
+    const parts = first.candidates?.[0]?.content?.parts || [];
+    const fnCallPart = parts.find(p => p.functionCall);
+    const fnCall = fnCallPart?.functionCall;
+
+    if (!fnCall) {
+        const text = parts.map(p => p.text || '').join('').trim();
+        return { resposta: normalizeAiReply(text), function_called: null, dados_agenda: null };
+    }
+
+    let dadosAgenda, erroAgenda = null;
+    try {
+        dadosAgenda = await amigoOccupiedSlotsForDate(fnCall.args.data, unidadeId);
+    } catch (e) {
+        dadosAgenda = [];
+        erroAgenda = e.message;
+    }
+
+    // Manda o part INTEIRO de volta (não só {functionCall}) — o Gemini 3 exige o
+    // thoughtSignature que veio junto na primeira resposta, senão recusa a
+    // segunda chamada com 400 "missing thought_signature". E a role da resposta
+    // da função é 'user' — 'function' não existe nessa API (erro 400 na cara).
+    const contentsWithFnResult = [
+        ...contents,
+        { role: 'model', parts: [fnCallPart] },
+        { role: 'user', parts: [{ functionResponse: {
+            name: 'consultar_agenda_do_dia',
+            response: erroAgenda ? { erro: erroAgenda } : { ocupados: dadosAgenda }
+        } }] }
+    ];
+
+    const second = await call({ ...body, contents: contentsWithFnResult });
+    const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+    return { resposta: normalizeAiReply(text2), function_called: fnCall.args, dados_agenda: dadosAgenda };
+}
+
+// Admin only. Body: { pergunta, unidade_id? }. Não manda nada pro WhatsApp —
+// só simula uma pergunta avulsa (sem histórico de conversa) pra avaliar a
+// qualidade da resposta com dado real de agenda antes de ligar isso no agente.
+app.post('/api/ai-agenda-test', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const { pergunta, unidade_id } = req.body;
+        if (!pergunta || !pergunta.trim()) return res.status(400).json({ error: 'Manda uma pergunta pra testar.' });
+
+        const hoje = new Date().toISOString().slice(0, 10);
+        const context = await getWhatsappAiContext();
+        const systemPrompt = context + `\n\n[TESTE] Hoje é ${hoje}. Isto é um teste isolado, sem histórico de conversa real.` + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
+
+        const result = await callGeminiWithAgendaTool(systemPrompt, contents, unidade_id);
+        res.json(result);
+    } catch (e) {
+        console.error('ai-agenda-test:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
