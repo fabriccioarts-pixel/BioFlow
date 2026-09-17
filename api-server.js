@@ -1515,35 +1515,171 @@ async function getAdContextForPhone(phone) {
 // qualidade das respostas antes de decidir se vale plugar no agente de verdade.
 // ============================================================================
 
-// Horários já ocupados numa data — sem nome de paciente (não pode vazar pra
-// outro paciente pela resposta da IA), só profissional + intervalo de tempo,
-// que é o suficiente pra ela raciocinar sobre disponibilidade.
-async function amigoOccupiedSlotsForDate(dateStr, unidadeId) {
+// Busca crua de attendances entre duas datas (inclusive), já sem cancelados.
+async function amigoAttendancesRange(startStr, endStr, unidadeId) {
     const token = await getAmigoToken(unidadeId);
     if (!token) throw new Error('Token do Amigo App não configurado.');
-    const url = `https://amigobot-api.amigoapp.com.br/attendances?start_date=${dateStr}&end_date=${dateStr}&status=ALL`;
+    const url = `https://amigobot-api.amigoapp.com.br/attendances?start_date=${startStr}&end_date=${endStr}&status=ALL`;
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.message || 'Erro ao consultar Amigo App');
     const rows = j.data || j || [];
-    return (Array.isArray(rows) ? rows : [])
-        .filter(a => a.start_date)
-        .map(a => ({
-            profissional: (a.user && a.user.name) || 'Sem profissional',
-            inicio: a.start_date,
-            fim: a.end_date || null
-        }));
+    return (Array.isArray(rows) ? rows : []).filter(a => a.start_date && a.end_date && !a.canceled && a.status !== 'canceled');
+}
+
+// "2026-09-18T09:00:00.000Z" -> 540 (minutos desde 00:00). Extrai por texto, não
+// por Date+timezone: o Amigo App manda a hora "de parede" da clínica com um "Z"
+// no fim (não é UTC de verdade) — usar Date.getHours() dependeria do fuso da
+// máquina que roda o servidor e desalinharia o horário mostrado ao paciente.
+function isoToMinutes(iso) {
+    const m = /T(\d{2}):(\d{2})/.exec(iso);
+    return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+}
+function minutesToHHMM(min) {
+    const h = Math.floor(min / 60).toString().padStart(2, '0');
+    const m = (min % 60).toString().padStart(2, '0');
+    return `${h}:${m}`;
+}
+
+function normalizeProcText(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+// Acha, por dado histórico real (não suposição), quem atende um procedimento e
+// quanto tempo ele costuma durar. Sem isso a IA só tinha o nome do profissional
+// pra chutar quem faz o quê, e sugeria horários encaixados sem espaço de verdade
+// (ex.: 11:00 quando um atendimento termina e outro começa no mesmo minuto).
+function matchProcedureFromHistory(historicoRows, procedimentoPedido) {
+    const alvo = normalizeProcText(procedimentoPedido);
+    const porNomeEvento = new Map(); // nome normalizado -> { nomeOriginal, profissionais: Map<nome, count>, duracoes: number[] }
+    for (const a of historicoRows) {
+        const nomeEvento = a.agenda_event && a.agenda_event.name;
+        if (!nomeEvento) continue;
+        const key = normalizeProcText(nomeEvento);
+        if (!porNomeEvento.has(key)) porNomeEvento.set(key, { nomeOriginal: nomeEvento, profissionais: new Map(), duracoes: [] });
+        const entry = porNomeEvento.get(key);
+        const prof = (a.user && a.user.name) || null;
+        if (prof) entry.profissionais.set(prof, (entry.profissionais.get(prof) || 0) + 1);
+        const dur = (isoToMinutes(a.end_date) - isoToMinutes(a.start_date));
+        if (dur > 0) entry.duracoes.push(dur);
+    }
+
+    // match exato primeiro, depois substring nos dois sentidos.
+    let best = porNomeEvento.get(alvo);
+    if (!best) {
+        for (const [key, entry] of porNomeEvento.entries()) {
+            if (key.includes(alvo) || alvo.includes(key)) { best = entry; break; }
+        }
+    }
+    if (!best) return null;
+
+    const profissionalMaisFrequente = Array.from(best.profissionais.entries()).sort((a, b) => b[1] - a[1])[0];
+    const duracoes = best.duracoes.slice().sort((a, b) => a - b);
+    const duracaoMediana = duracoes.length ? duracoes[Math.floor(duracoes.length / 2)] : 30;
+
+    return {
+        procedimentoEncontrado: best.nomeOriginal,
+        profissional: profissionalMaisFrequente ? profissionalMaisFrequente[0] : null,
+        duracaoMinutos: duracaoMediana
+    };
+}
+
+// Calcula os intervalos LIVRES de verdade (com espaço >= duração do
+// procedimento) pro profissional certo, num dia — em vez de devolver os
+// ocupados crus e confiar na IA pra fazer a aritmética de horário sozinha.
+function computeFreeWindows(occupiedIntervals, dayStartMin, dayEndMin, minDurationMin) {
+    const ocupados = occupiedIntervals
+        .map(([ini, fim]) => [Math.max(ini, dayStartMin), Math.min(fim, dayEndMin)])
+        .filter(([ini, fim]) => fim > ini)
+        .sort((a, b) => a[0] - b[0]);
+
+    const livres = [];
+    let cursor = dayStartMin;
+    for (const [ini, fim] of ocupados) {
+        if (ini - cursor >= minDurationMin) livres.push([cursor, ini]);
+        cursor = Math.max(cursor, fim);
+    }
+    if (dayEndMin - cursor >= minDurationMin) livres.push([cursor, dayEndMin]);
+    return livres.map(([ini, fim]) => ({ inicio: minutesToHHMM(ini), fim: minutesToHHMM(fim) }));
+}
+
+// Horário de funcionamento assumido quando não dá pra inferir do próprio dia
+// (ex.: dia sem nenhum agendamento ainda). Ajustar aqui se a clínica mudar.
+const CLINICA_ABERTURA_MIN = 8 * 60;
+const CLINICA_FECHAMENTO_MIN = 18 * 60;
+
+// Dias da semana (0=domingo ... 6=sábado) em que o profissional NÃO atende na
+// unidade padrão (Taguatinga) por estar em outra unidade (ex.: Planaltina).
+// O Amigo App dessa unidade não rastreia a agenda de lá — sem essa lista, um
+// dia sem nenhum registro (porque a pessoa nem está fisicamente aqui) parecia
+// "totalmente livre" em vez de indisponível. Ajustar aqui se a escala mudar.
+const PROFISSIONAL_FORA_NA_UNIDADE_PADRAO = {
+    'Dr. Julimar de Meneses Barbosa': [4],       // quinta -> Planaltina
+    'Dra. Débora Neres de Oliveira Meneses': [3, 4] // quarta e quinta -> Planaltina
+};
+
+async function amigoFreeSlotsForProcedure(dateStr, procedimentoPedido, unidadeId) {
+    const historicoInicio = new Date(new Date(dateStr + 'T12:00:00Z').getTime() - 60 * 86400000).toISOString().slice(0, 10);
+    const [historico, doDia] = await Promise.all([
+        amigoAttendancesRange(historicoInicio, dateStr, unidadeId),
+        amigoAttendancesRange(dateStr, dateStr, unidadeId)
+    ]);
+
+    const match = matchProcedureFromHistory(historico, procedimentoPedido);
+    if (!match || !match.profissional) {
+        return { encontrado: false, mensagem: `Não achei histórico de um procedimento chamado "${procedimentoPedido}" pra saber quem atende.` };
+    }
+
+    // meio-dia UTC evita virar o dia errado por causa de fuso na hora do parse.
+    const diaSemana = new Date(dateStr + 'T12:00:00Z').getUTCDay();
+    const diasFora = PROFISSIONAL_FORA_NA_UNIDADE_PADRAO[match.profissional];
+    if (diasFora && diasFora.includes(diaSemana)) {
+        return {
+            encontrado: true,
+            procedimento: match.procedimentoEncontrado,
+            profissional: match.profissional,
+            fora_da_unidade: true,
+            mensagem: `${match.profissional} não atende nessa unidade nesse dia — está em outra unidade. Não ofereça horário; pergunte se o paciente pode em outro dia ou se prefere ser atendido na outra unidade.`
+        };
+    }
+
+    // Janela do dia: usa o alcance real dos agendamentos daquele dia (todo mundo,
+    // não só o profissional-alvo) como proxy do horário de funcionamento; sem
+    // nenhum agendamento no dia, cai no padrão fixo.
+    let dayStartMin = CLINICA_ABERTURA_MIN, dayEndMin = CLINICA_FECHAMENTO_MIN;
+    if (doDia.length) {
+        const inicios = doDia.map(a => isoToMinutes(a.start_date)).filter(n => n != null);
+        const fins = doDia.map(a => isoToMinutes(a.end_date)).filter(n => n != null);
+        if (inicios.length) dayStartMin = Math.min(dayStartMin, Math.min(...inicios));
+        if (fins.length) dayEndMin = Math.max(dayEndMin, Math.max(...fins));
+    }
+
+    const ocupadosDoProfissional = doDia
+        .filter(a => (a.user && a.user.name) === match.profissional)
+        .map(a => [isoToMinutes(a.start_date), isoToMinutes(a.end_date)])
+        .filter(([ini, fim]) => ini != null && fim != null);
+
+    const livres = computeFreeWindows(ocupadosDoProfissional, dayStartMin, dayEndMin, match.duracaoMinutos);
+
+    return {
+        encontrado: true,
+        procedimento: match.procedimentoEncontrado,
+        profissional: match.profissional,
+        duracao_minutos: match.duracaoMinutos,
+        horarios_livres: livres
+    };
 }
 
 const AGENDA_TOOL_DECLARATION = {
     name: 'consultar_agenda_do_dia',
-    description: 'Consulta os horários JÁ OCUPADOS na agenda da clínica pra uma data específica, pra saber o que está livre. Use sempre que o paciente perguntar sobre disponibilidade de horário, dia da semana, ou pedir pra agendar/marcar algo.',
+    description: 'Consulta os horários LIVRES de verdade (já descontando a duração típica do procedimento e o profissional certo pra ele, com base no histórico real de agendamentos) pra uma data específica. Sempre passe o procedimento que o paciente pediu, com as palavras mais próximas do que ele usou. Use sempre que o paciente perguntar sobre disponibilidade de horário ou pedir pra agendar/marcar algo.',
     parameters: {
         type: 'OBJECT',
         properties: {
-            data: { type: 'STRING', description: 'Data no formato AAAA-MM-DD.' }
+            data: { type: 'STRING', description: 'Data no formato AAAA-MM-DD.' },
+            procedimento: { type: 'STRING', description: 'Nome do procedimento/serviço que o paciente quer (ex.: "limpeza de pele", "botox").' }
         },
-        required: ['data']
+        required: ['data', 'procedimento']
     }
 };
 
@@ -1583,9 +1719,9 @@ async function callGeminiWithAgendaTool(systemPrompt, contents, unidadeId) {
 
     let dadosAgenda, erroAgenda = null;
     try {
-        dadosAgenda = await amigoOccupiedSlotsForDate(fnCall.args.data, unidadeId);
+        dadosAgenda = await amigoFreeSlotsForProcedure(fnCall.args.data, fnCall.args.procedimento, unidadeId);
     } catch (e) {
-        dadosAgenda = [];
+        dadosAgenda = null;
         erroAgenda = e.message;
     }
 
@@ -1598,7 +1734,7 @@ async function callGeminiWithAgendaTool(systemPrompt, contents, unidadeId) {
         { role: 'model', parts: [fnCallPart] },
         { role: 'user', parts: [{ functionResponse: {
             name: 'consultar_agenda_do_dia',
-            response: erroAgenda ? { erro: erroAgenda } : { ocupados: dadosAgenda }
+            response: erroAgenda ? { erro: erroAgenda } : dadosAgenda
         } }] }
     ];
 
