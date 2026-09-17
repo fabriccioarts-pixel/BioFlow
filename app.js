@@ -7688,10 +7688,12 @@ async function openWhatsappAiSettingsModal() {
         const typingEl = document.getElementById('whatsapp-ai-typing');
         const visionEl = document.getElementById('whatsapp-ai-vision');
         const audioEl = document.getElementById('whatsapp-ai-audio');
+        const mediaEl = document.getElementById('whatsapp-ai-media');
         if (humanEl) humanEl.checked = toggleJson.human !== false;   // liga por padrão
         if (typingEl) typingEl.checked = toggleJson.typing !== false;
         if (visionEl) visionEl.checked = toggleJson.vision !== false;
         if (audioEl) audioEl.checked = toggleJson.audio !== false;
+        if (mediaEl) mediaEl.checked = !!toggleJson.media;            // desliga por padrão
 
         try {
             const oppsJson = await oppsRes.json();
@@ -7718,6 +7720,7 @@ async function saveWhatsappAiSettings() {
     const typing = !!(document.getElementById('whatsapp-ai-typing') || {}).checked;
     const vision = !!(document.getElementById('whatsapp-ai-vision') || {}).checked;
     const audio = !!(document.getElementById('whatsapp-ai-audio') || {}).checked;
+    const media = !!(document.getElementById('whatsapp-ai-media') || {}).checked;
     const oppsAtivo = !!(document.getElementById('opps-ativo') || {}).checked;
     const oppsIntervalo = parseInt((document.getElementById('opps-intervalo') || {}).value, 10) || 8;
     const oppsPalavras = (document.getElementById('opps-palavras') || {}).value || '';
@@ -7726,7 +7729,7 @@ async function saveWhatsappAiSettings() {
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio })
+                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio, media })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',
