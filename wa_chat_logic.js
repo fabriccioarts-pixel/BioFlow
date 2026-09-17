@@ -1698,7 +1698,11 @@ function renderContactsList(chats) {
         const isActive = window.currentActiveChat && window.currentActiveChat.phone === chat.phone ? 'background: rgba(16, 185, 129, 0.1); border-left: 4px solid var(--accent-success);' : 'border-bottom: 1px solid var(--border-color);';
 
         const timeString = formatChatTime(chat.last_interaction);
-        const displayName = chat.nome || ('Contato ' + chat.phone);
+        // Colapsa qualquer espaço/quebra de linha em um só — sem isso, um nome
+        // salvo com \n (ex.: "vittoria_\nvitoria") quebra o onclick="openChat('...')"
+        // do card (quebra de linha dentro de string JS de aspas simples é sintaxe
+        // inválida) e o clique pra abrir a conversa simplesmente não fazia nada.
+        const displayName = (chat.nome || '').replace(/\s+/g, ' ').trim() || ('Contato ' + chat.phone);
         const preview = getMessagePreviewText(chat.message);
         const statusIcon = chat.direction === 'out' ? renderStatusIcon(chat.status) + ' ' : '';
 
