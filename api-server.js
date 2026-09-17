@@ -2247,6 +2247,31 @@ async function aiReplySupersededBy(phone, incomingWamid, triggerTs) {
 
 async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs = null) {
     try {
+        // Trava atômica ANTES de qualquer trabalho pesado (chamada ao Gemini +
+        // simulação de digitação, que juntos podem levar bem mais que os ~20s de
+        // timeout do webhook da Meta). Sem isso, uma reentrega do MESMO webhook
+        // (a rota só responde 200 depois que a IA termina — ver comentário no
+        // handler do webhook) processava a mensagem de novo em paralelo, e como
+        // nenhuma das duas execuções tinha enviado nada ainda, aiReplySupersededBy
+        // não via nada pra "vencer a corrida": as duas chamavam o Gemini de novo
+        // (com respostas ligeiramente diferentes) e as duas mandavam mensagem —
+        // aconteceu de verdade (4 variações da mesma pergunta em ~2 minutos).
+        // INSERT OR IGNORE + meta.changes é atômico: quem chega depois vê
+        // changes=0 (a linha já existe) e desiste sem processar nada.
+        if (incomingWamid) {
+            let claim;
+            try {
+                claim = await queryD1Meta('INSERT OR IGNORE INTO ai_reply_claims (wamid) VALUES (?)', [incomingWamid]);
+            } catch (e) {
+                console.error('IA: trava de wamid falhou, seguindo sem trava:', e.message);
+                claim = null;
+            }
+            if (claim && claim.meta && !claim.meta.changes) {
+                console.log(`IA: wamid ${incomingWamid} já está sendo processado (reentrega do webhook), pulando`);
+                return;
+            }
+        }
+
         const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
         const globalEnabled = globalSetting && globalSetting[0] ? globalSetting[0].value === '1' : true;
         if (!globalEnabled) return;
@@ -3054,6 +3079,13 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_followup_runs (
 )`).catch(() => {});
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_at DATETIME").catch(() => {});
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_direction TEXT").catch(() => {});
+
+// Trava contra reentrega de webhook processando a mesma mensagem duas vezes —
+// ver uso em handleWhatsappAiAutoReply mais abaixo.
+queryD1(`CREATE TABLE IF NOT EXISTS ai_reply_claims (
+    wamid TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
 
 // Web Push: inscrições de notificação nativa (Windows/Android) por dispositivo
 // logado. Uma linha por par (usuário, navegador/dispositivo) — a mesma pessoa
