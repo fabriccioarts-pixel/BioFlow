@@ -1778,16 +1778,43 @@ app.post('/api/ai-agenda-test', async (req, res) => {
     }
 });
 
+// "Agora" em horário de Brasília, pra IA saber com certeza que dia da semana é
+// hoje e que horas são — sem isso ela só inferia por conta própria e chegou a
+// oferecer "quinta ou sexta" (sendo que HOJE já era quinta) e "hoje à tarde"
+// faltando 17 minutos pra fechar o expediente, sem perceber nenhum dos dois.
+// Usa CLINICA_FECHAMENTO_MIN (definida acima, no bloco da agenda) como a
+// mesma fonte de horário de funcionamento — evitando duas verdades diferentes
+// sobre quando a clínica fecha.
+function getNowContextForPrompt() {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]));
+    const minutosAgora = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
+    const minutosAteFechar = CLINICA_FECHAMENTO_MIN - minutosAgora;
+
+    let avisoHorario = '';
+    if (minutosAteFechar <= 60) {
+        avisoHorario = minutosAteFechar <= 0
+            ? ' O expediente de hoje já encerrou — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia útil.'
+            : ` Faltam só ${minutosAteFechar} minutos pra fechar o expediente de hoje — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia útil.`;
+    }
+
+    return `\n\n[AGORA] Hoje é ${parts.weekday}, ${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute} (horário de Brasília).${avisoHorario} Quando mencionar um dia da semana que é HOJE, deixe isso explícito ("hoje" ou "ainda hoje") — nunca cite o nome do dia sozinho nesse caso, senão o paciente pode entender como uma data futura.`;
+}
+
 async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
 
     const history = await getWhatsappAiHistory(phone);
     const context = await getWhatsappAiContext();
+    const nowContext = getNowContextForPrompt();
     const adContext = await getAdContextForPhone(phone);
     const mode = await getWhatsappAiMode();
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
-    const systemPrompt = context + adContext + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
+    const systemPrompt = context + nowContext + adContext + behaviorRule + WHATSAPP_AI_FORMAT_RULE;
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
