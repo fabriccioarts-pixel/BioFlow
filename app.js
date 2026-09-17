@@ -5071,6 +5071,32 @@ function askAiAgentChip(pergunta) {
     sendAiAgentMessage();
 }
 
+// O Gemini responde em markdown leve (**negrito**, listas com "* item") mas a
+// bolha só mostrava texto cru — o paciente via os asteriscos literais em vez
+// de negrito/lista. Escapa primeiro (o texto pode ter < > & de verdade, ex.:
+// "HbA1c < 7") e só depois converte a pontuação de markdown pra HTML — nunca
+// o contrário, senão um "<" do próprio texto vira início de tag.
+function renderAiMarkdownLite(text) {
+    const escaped = escapeHtml(text || '');
+    const withInline = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    const linhas = withInline.split('\n');
+    let html = '';
+    let emLista = false;
+    for (const linha of linhas) {
+        const item = /^\s*[*-]\s+(.+)/.exec(linha);
+        if (item) {
+            if (!emLista) { html += '<ul>'; emLista = true; }
+            html += `<li>${item[1]}</li>`;
+        } else {
+            if (emLista) { html += '</ul>'; emLista = false; }
+            html += (linha.trim() ? linha : '<br>') + '\n';
+        }
+    }
+    if (emLista) html += '</ul>';
+    return html;
+}
+
 function renderAiAgentMessage(role, text) {
     const container = document.getElementById('ai-agent-messages');
     if (!container) return null;
@@ -5079,7 +5105,11 @@ function renderAiAgentMessage(role, text) {
 
     const div = document.createElement('div');
     div.className = `ai-agent-msg ai-agent-msg--${role}`;
-    div.textContent = text;
+    if (role === 'assistant') {
+        div.innerHTML = renderAiMarkdownLite(text);
+    } else {
+        div.textContent = text;
+    }
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
     return div;

@@ -8194,6 +8194,16 @@ h1, h2,
     color: var(--text-main);
     border-bottom-left-radius: 3px;
 }
+.ai-agent-msg--assistant ul {
+    margin: 0.35rem 0;
+    padding-left: 1.1rem;
+}
+.ai-agent-msg--assistant li {
+    margin-bottom: 0.2rem;
+}
+.ai-agent-msg--assistant strong {
+    color: var(--accent-purple);
+}
 .ai-agent-msg--loading {
     align-self: flex-start;
     display: flex;
