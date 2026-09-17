@@ -9578,7 +9578,14 @@ async function followupTick() {
             if (isLast) {
                 await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, run.id]);
             } else {
-                const nextAt = new Date(anchor.getTime() + (steps[nextIdx].atraso_min || 60) * 60000);
+                const delayMs = (steps[nextIdx].atraso_min || 60) * 60000;
+                // max() com Date.now(): se o tick ficou dias sem rodar, a âncora
+                // original já é passado e nextAt nasceria vencido — o tick seguinte
+                // (minutos depois) acharia esse passo "atrasado" de novo e disparava
+                // na hora, estourando a sequência inteira de uma vez no lead. Contar
+                // o atraso a partir de agora quando isso acontece mantém o espaçamento
+                // real entre passos mesmo depois de um atraso longo do tick.
+                const nextAt = new Date(Math.max(anchor.getTime() + delayMs, Date.now() + delayMs));
                 await queryD1("UPDATE crm_followup_runs SET step_idx = ?, attempts = attempts + 1, next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [nextIdx, followupAtSql(nextAt), run.id]);
             }
 
