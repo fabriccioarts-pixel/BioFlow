@@ -1778,6 +1778,127 @@ app.post('/api/ai-agenda-test', async (req, res) => {
     }
 });
 
+// ============================================================================
+// TESTE: IA escolhe uma imagem da biblioteca de mídia (crm_media) pra mandar
+// como "exemplo de resultado" — mesmo espírito do teste de agenda: isolado do
+// fluxo real do paciente, não manda nada de verdade, só mostra qual imagem
+// seria escolhida e o texto que a IA mandaria junto.
+// ============================================================================
+
+function tokenizeProcText(s) {
+    return normalizeProcText(s).split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+// Casa o procedimento pedido com um arquivo da biblioteca por SOBREPOSIÇÃO DE
+// PALAVRAS (score = quantos termos da busca aparecem no nome/legenda), não por
+// igualdade exata ganhando na hora — com várias imagens do mesmo procedimento
+// (ex.: "perfiloplastia", "perfiloplastia mento", "perfiloplastia paciente
+// caso de queixo retraído"), igualdade exata sempre escolhia a mais genérica
+// e ignorava um detalhe que o paciente deu (ex.: "queixo"), mesmo quando
+// existia uma imagem bem mais específica pra esse caso.
+async function matchMediaForProcedure(procedimentoPedido) {
+    const rows = await queryD1('SELECT id, nome, tipo, mime, thumb_base64, legenda_padrao FROM crm_media');
+    const alvoTokens = tokenizeProcText(procedimentoPedido);
+    if (!alvoTokens.length) return null;
+
+    const candidatos = (rows || []).filter(m => m.tipo === 'image');
+    let melhor = null, melhorScore = 0;
+    for (const m of candidatos) {
+        const refTokens = new Set(tokenizeProcText(m.legenda_padrao || m.nome));
+        const score = alvoTokens.filter(t => refTokens.has(t)).length;
+        if (score > melhorScore) { melhor = m; melhorScore = score; }
+    }
+    if (!melhor) return null;
+    return { id: melhor.id, nome: melhor.nome, mime: melhor.mime, thumb_base64: melhor.thumb_base64 || null };
+}
+
+const MEDIA_TOOL_DECLARATION = {
+    name: 'buscar_imagem_resultado',
+    description: 'Busca na biblioteca de mídia da clínica uma imagem de exemplo/resultado de um procedimento, pra mandar pro paciente se identificar visualmente. Use quando o paciente demonstrar interesse num procedimento específico e uma imagem de exemplo ajudar a ilustrar o resultado — não use pra toda mensagem, só quando fizer sentido.',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            procedimento: { type: 'STRING', description: 'Nome do procedimento MAIS qualquer detalhe específico que o paciente tenha mencionado (região do corpo/rosto, queixa específica) — ex.: não "perfiloplastia" sozinho se o paciente falou de queixo, e sim "perfiloplastia queixo". Quanto mais palavras relevantes da conversa, melhor a busca encontra a imagem certa entre várias do mesmo procedimento.' }
+        },
+        required: ['procedimento']
+    }
+};
+
+// Mesmo ciclo de function calling da agenda (ver callGeminiWithAgendaTool),
+// só que com a ferramenta de busca de imagem em vez da de agenda.
+async function callGeminiWithMediaTool(systemPrompt, contents) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
+
+    const body = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        tools: [{ functionDeclarations: [MEDIA_TOOL_DECLARATION] }],
+        contents
+    };
+    const call = async (b) => {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify(b)
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ? j.error.message : 'Erro desconhecido na API do Gemini');
+        return j;
+    };
+
+    const first = await call(body);
+    const parts = first.candidates?.[0]?.content?.parts || [];
+    const fnCallPart = parts.find(p => p.functionCall);
+    const fnCall = fnCallPart?.functionCall;
+
+    if (!fnCall) {
+        const text = parts.map(p => p.text || '').join('').trim();
+        return { resposta: normalizeAiReply(text), function_called: null, midia_encontrada: null };
+    }
+
+    let midia = null, erro = null;
+    try {
+        midia = await matchMediaForProcedure(fnCall.args.procedimento);
+    } catch (e) {
+        erro = e.message;
+    }
+
+    const contentsWithFnResult = [
+        ...contents,
+        { role: 'model', parts: [fnCallPart] },
+        { role: 'user', parts: [{ functionResponse: {
+            name: 'buscar_imagem_resultado',
+            response: erro ? { erro } : (midia ? { encontrada: true, nome: midia.nome } : { encontrada: false })
+        } }] }
+    ];
+
+    const second = await call({ ...body, contents: contentsWithFnResult });
+    const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+    return { resposta: normalizeAiReply(text2), function_called: fnCall.args, midia_encontrada: midia };
+}
+
+// Admin only. Body: { pergunta }. Não manda nada pro WhatsApp — só simula uma
+// pergunta avulsa e devolve qual imagem seria escolhida + o texto da IA.
+app.post('/api/ai-media-test', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const { pergunta } = req.body;
+        if (!pergunta || !pergunta.trim()) return res.status(400).json({ error: 'Manda uma pergunta pra testar.' });
+
+        const context = await getWhatsappAiContext();
+        const systemPrompt = context + '\n\n[TESTE] Isto é um teste isolado, sem histórico de conversa real.' + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
+
+        const result = await callGeminiWithMediaTool(systemPrompt, contents);
+        res.json(result);
+    } catch (e) {
+        console.error('ai-media-test:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // "Agora" em horário de Brasília, pra IA saber com certeza que dia da semana é
 // hoje e que horas são — sem isso ela só inferia por conta própria e chegou a
 // oferecer "quinta ou sexta" (sendo que HOJE já era quinta) e "hoje à tarde"
