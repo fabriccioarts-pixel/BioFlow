@@ -2416,6 +2416,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realizaram procedimentos
                 recentemente. Ideal para pedir feedback e avaliação.</p>
         </div>
+        <div class="form-group" style="max-width: 320px; margin-bottom: 1rem;">
+            <label>Filtrar por procedimento</label>
+            <select class="form-control" id="posvenda-procedimento-filter" onchange="applyRelProcedureFilter('posvenda')">
+                <option value="">Todos os procedimentos</option>
+            </select>
+        </div>
         <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('posvenda', this)" style="align-self: flex-start; margin-bottom: 1rem;">
             <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
         </button>
@@ -2448,6 +2454,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que agendaram mas não compareceram. Tente
                 reagendar a consulta.</p>
         </div>
+        <div class="form-group" style="max-width: 320px; margin-bottom: 1rem;">
+            <label>Filtrar por procedimento</label>
+            <select class="form-control" id="faltantes-procedimento-filter" onchange="applyRelProcedureFilter('faltantes')">
+                <option value="">Todos os procedimentos</option>
+            </select>
+        </div>
         <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('faltantes', this)" style="align-self: flex-start; margin-bottom: 1rem;">
             <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
         </button>
@@ -2479,6 +2491,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </h2>
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes sem novos agendamentos há mais de 45
                 dias. Faça uma campanha de resgate.</p>
+        </div>
+        <div class="form-group" style="max-width: 320px; margin-bottom: 1rem;">
+            <label>Filtrar por procedimento</label>
+            <select class="form-control" id="sumidos-procedimento-filter" onchange="applyRelProcedureFilter('sumidos')">
+                <option value="">Todos os procedimentos</option>
+            </select>
         </div>
         <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('sumidos', this)" style="align-self: flex-start; margin-bottom: 1rem;">
             <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
@@ -2559,6 +2577,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <div class="form-group" style="max-width: 320px; margin-bottom: 1rem;">
+                <label>Filtrar por procedimento já feito</label>
+                <select class="form-control" id="aniversariantes-hoje-procedimento-filter" onchange="renderAniversariantesHoje()">
+                    <option value="">Todos os procedimentos</option>
+                </select>
+            </div>
             <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('aniversariantes-hoje', this)" style="margin-bottom: 1rem;">
                 <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
             </button>
@@ -2608,6 +2632,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
             </div>
 
+            <div class="form-group" style="max-width: 320px; margin-bottom: 1rem;">
+                <label>Filtrar por procedimento já feito</label>
+                <select class="form-control" id="aniversariantes-mes-procedimento-filter" onchange="renderAniversariantesMes()">
+                    <option value="">Todos os procedimentos</option>
+                </select>
+            </div>
             <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('aniversariantes-mes', this)" style="margin-bottom: 1rem;">
                 <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
             </button>

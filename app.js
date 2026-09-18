@@ -3519,6 +3519,7 @@ function switchTab(tabId) {
             if (tabId === 'aniversariantes') {
                 fetchAniversariantesHoje();
                 fetchAniversariantesMes();
+                fetchRelacionamento(); // também traz por_procedimento pro filtro cruzado por telefone
             } else {
                 fetchRelacionamento();
             }
@@ -3729,13 +3730,32 @@ async function fetchRelacionamento() {
         const res = await fetch('/api/relacionamento');
         if (!res.ok) throw new Error("Erro ao buscar dados de relacionamento");
         const data = await res.json();
-        
-        renderRelacionamentoList('posvenda', data.pos_venda, renderPosVendaCard);
-        renderRelacionamentoList('faltantes', data.faltantes, renderFaltantesCard);
-        renderRelacionamentoList('sumidos', data.sumidos, renderSumidosCard);
 
         window._relacionamentoData = data;
-        renderProcedimentoDropdown(data.procedimentos_lista || [], data.por_procedimento || {});
+        // Guarda a lista CRUA de cada aba — o filtro de procedimento reaplica em
+        // cima dela, em vez de perder os itens fora do procedimento escolhido.
+        window._relRawLists = { posvenda: data.pos_venda || [], faltantes: data.faltantes || [], sumidos: data.sumidos || [] };
+
+        const lista = data.procedimentos_lista || [];
+        const porProcedimento = data.por_procedimento || {};
+        const opcoes = lista.map(nome => `<option value="${escapeHtml(nome)}">${escapeHtml(nome)} (${(porProcedimento[nome] || []).length})</option>`).join('');
+        ['posvenda-procedimento-filter', 'faltantes-procedimento-filter', 'sumidos-procedimento-filter',
+         'aniversariantes-hoje-procedimento-filter', 'aniversariantes-mes-procedimento-filter'].forEach(id => {
+            const sel = document.getElementById(id);
+            if (!sel) return;
+            const atual = sel.value;
+            sel.innerHTML = '<option value="">Todos os procedimentos</option>' + opcoes;
+            if (lista.includes(atual)) sel.value = atual;
+        });
+
+        applyRelProcedureFilter('posvenda');
+        applyRelProcedureFilter('faltantes');
+        applyRelProcedureFilter('sumidos');
+        renderProcedimentoDropdown(lista, porProcedimento);
+        // Os dois blocos de aniversariantes já carregados usam por_procedimento
+        // pra cruzar por telefone — reaplica agora que a lista chegou.
+        if (typeof aniversariantesHojeData !== 'undefined' && aniversariantesHojeData.length) renderAniversariantesHoje();
+        if (typeof aniversariantesMesData !== 'undefined' && aniversariantesMesData.length) renderAniversariantesMes();
 
         relacionamentoFetched = true;
     } catch (e) {
@@ -3747,6 +3767,19 @@ async function fetchRelacionamento() {
         const listProc = document.getElementById('list-procedimento');
         if (listProc) listProc.innerHTML = `<tr><td colspan="5">${errHtml}</td></tr>`;
     }
+}
+
+const REL_PROC_FILTER_RENDERERS = { posvenda: renderPosVendaCard, faltantes: renderFaltantesCard, sumidos: renderSumidosCard };
+
+// Reaplica o filtro de procedimento (dropdown "Filtrar por procedimento") em
+// cima da lista CRUA da aba — cada item já carrega o próprio procedimento
+// (last_attendance.agenda_event.name), então filtrar é só comparar direto.
+function applyRelProcedureFilter(tipo) {
+    const sel = document.getElementById(`${tipo}-procedimento-filter`);
+    const nome = sel ? sel.value : '';
+    const raw = (window._relRawLists && window._relRawLists[tipo]) || [];
+    const filtrada = nome ? raw.filter(item => (item.last_attendance?.agenda_event?.name) === nome) : raw;
+    renderRelacionamentoList(tipo, filtrada, REL_PROC_FILTER_RENDERERS[tipo]);
 }
 
 // Popula o <select> de procedimentos (com contagem de pacientes por opção) e
@@ -4835,20 +4868,35 @@ async function fetchAniversariantesMes() {
     }
 }
 
+// Aniversariantes não têm procedimento no próprio registro (vêm da API de
+// aniversário, não de atendimentos) — pra filtrar por procedimento, cruza por
+// telefone (forma canônica, sem/com o 9) contra quem fez aquele procedimento
+// em por_procedimento (carregado por fetchRelacionamento).
+function procedimentoPhoneSet(nome) {
+    if (!nome) return null;
+    const data = window._relacionamentoData || {};
+    const itens = (data.por_procedimento || {})[nome] || [];
+    return new Set(itens.map(it => canonicalPhoneBR(it.patient.phone || '')).filter(Boolean));
+}
+
 function renderAniversariantesHoje() {
     const list = document.getElementById('list-aniversariantes-hoje');
     if (!list) return;
     resetRelBulkBar('aniversariantes-hoje');
 
-    if (aniversariantesHojeData.length === 0) {
+    const filtroSel = document.getElementById('aniversariantes-hoje-procedimento-filter');
+    const phoneSet = procedimentoPhoneSet(filtroSel ? filtroSel.value : '');
+    const dadosHoje = phoneSet ? aniversariantesHojeData.filter(p => phoneSet.has(canonicalPhoneBR(p.phone || ''))) : aniversariantesHojeData;
+
+    if (dadosHoje.length === 0) {
         list.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">Nenhum aniversariante encontrado hoje pela API.</td></tr>';
         document.getElementById('count-aniversariantes-hoje').innerText = '0';
         return;
     }
 
-    document.getElementById('count-aniversariantes-hoje').innerText = aniversariantesHojeData.length;
+    document.getElementById('count-aniversariantes-hoje').innerText = dadosHoje.length;
 
-    list.innerHTML = aniversariantesHojeData.map(p => {
+    list.innerHTML = dadosHoje.map(p => {
         return `
             <tr style="background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent-warning);">
                 <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="aniversariantes-hoje" data-id="${escapeHtml(p.phone || '')}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('aniversariantes-hoje')"></td>
@@ -4882,15 +4930,19 @@ function renderAniversariantesMes() {
     if (!list) return;
     resetRelBulkBar('aniversariantes-mes');
 
-    if (aniversariantesMesData.length === 0) {
+    const filtroSel = document.getElementById('aniversariantes-mes-procedimento-filter');
+    const phoneSet = procedimentoPhoneSet(filtroSel ? filtroSel.value : '');
+    const dadosMes = phoneSet ? aniversariantesMesData.filter(p => phoneSet.has(canonicalPhoneBR(p.phone || ''))) : aniversariantesMesData;
+
+    if (dadosMes.length === 0) {
         list.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">Planilha vazia ou não importada.</td></tr>';
         document.getElementById('count-aniversariantes-mes').innerText = '0';
         return;
     }
 
-    document.getElementById('count-aniversariantes-mes').innerText = aniversariantesMesData.length;
+    document.getElementById('count-aniversariantes-mes').innerText = dadosMes.length;
 
-    list.innerHTML = aniversariantesMesData.map(p => {
+    list.innerHTML = dadosMes.map(p => {
         const isTodayStyle = p.isToday ? 'background: rgba(16, 185, 129, 0.1); border-left: 3px solid var(--accent-success);' : '';
         const todayBadge = p.isToday ? '<span style="background: var(--accent-success); color: white; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; margin-left: 0.5rem; font-weight: bold;">HOJE</span>' : '';
 
