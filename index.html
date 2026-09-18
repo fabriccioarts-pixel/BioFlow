@@ -508,6 +508,13 @@
                             <div class="sb-flyout-item-desc">Pacientes fazendo aniversário no período</div>
                         </span>
                     </button>
+                    <button class="sb-flyout-item" onclick="switchTab('procedimento')" id="tab-procedimento">
+                        <span class="sb-flyout-item-icon"><i class="fa-solid fa-syringe"></i></span>
+                        <span class="sb-flyout-item-text">
+                            <div class="sb-flyout-item-title">Por Procedimento</div>
+                            <div class="sb-flyout-item-desc">Pacientes que fizeram um procedimento específico</div>
+                        </span>
+                    </button>
                 </div>
             </div>
         </nav>
@@ -2489,6 +2496,45 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </tr>
                 </thead>
                 <tbody id="list-sumidos"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- ABA: POR PROCEDIMENTO -->
+    <main class="relacionamento" id="view-procedimento"
+        style="display: none; padding: 2rem; flex-grow: 1; flex-direction: column;">
+        <div style="margin-bottom: 2rem;">
+            <h2 style="font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i
+                    class="fa-solid fa-syringe" style="color: var(--accent-primary)"></i> Relacionamento: Por
+                Procedimento <span id="count-procedimento"
+                    style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 1rem; margin-left: auto;">0</span>
+            </h2>
+            <p style="color: var(--text-muted); margin-top: 0.5rem;">Pacientes que realmente fizeram um procedimento
+                específico (não só agendaram) nos últimos ~120 dias, via histórico do Amigo App. Escolha o
+                procedimento pra segmentar.</p>
+        </div>
+        <div class="form-group" style="max-width: 420px; margin-bottom: 1rem;">
+            <label>Procedimento</label>
+            <select class="form-control" id="procedimento-select" onchange="renderProcedimentoLista()">
+                <option value="">Selecione um procedimento…</option>
+            </select>
+        </div>
+        <button type="button" class="btn-secondary rel-select-toggle-btn" onclick="toggleRelSelectMode('procedimento', this)" style="align-self: flex-start; margin-bottom: 1rem;">
+            <i class="fa-regular fa-square-check"></i> Selecionar para Disparo
+        </button>
+        <div id="rel-bulk-bar-procedimento" class="rel-bulk-bar" style="display: none;"></div>
+        <div class="table-container">
+            <table class="crm-table" id="rel-table-procedimento">
+                <thead>
+                    <tr>
+                        <th class="rel-select-col" style="width: 36px; text-align: center;"><input type="checkbox" aria-label="Selecionar todos" onclick="toggleRelSelectAll('procedimento', this.checked)"></th>
+                        <th>Paciente</th>
+                        <th>Telefone</th>
+                        <th>Último Atendimento</th>
+                        <th style="width: 220px; text-align: center;">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="list-procedimento"></tbody>
             </table>
         </div>
     </main>

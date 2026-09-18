@@ -3329,6 +3329,7 @@ function switchTab(tabId) {
         faltantes: 'Faltantes',
         sumidos: 'Sumidos',
         aniversariantes: 'Aniversariantes',
+        procedimento: 'Por Procedimento',
         contatos: 'Contatos',
         fluxos: 'Fluxos',
         midias: 'Mídias',
@@ -3359,7 +3360,7 @@ function switchTab(tabId) {
     if(btn) btn.classList.add('active');
     
     // Se for uma sub-aba de relacionamento, manter o dropdown 'pai' ativo também
-    if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes'].includes(tabId)) {
+    if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes', 'procedimento'].includes(tabId)) {
         const mainRelBtn = document.getElementById('tab-relacionamento-main');
         if (mainRelBtn) mainRelBtn.classList.add('active');
     }
@@ -3400,7 +3401,7 @@ function switchTab(tabId) {
         window.dashPollingInterval = null;
     }
     
-    ['posvenda', 'faltantes', 'sumidos', 'aniversariantes'].forEach(t => {
+    ['posvenda', 'faltantes', 'sumidos', 'aniversariantes', 'procedimento'].forEach(t => {
         const el = document.getElementById(`view-${t}`);
         if(el) el.style.display = 'none';
     });
@@ -3505,7 +3506,7 @@ function switchTab(tabId) {
             view.style.display = 'flex';
             if (typeof loadMidias === 'function') loadMidias(null);
         }
-    } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes'].includes(tabId)) {
+    } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes', 'procedimento'].includes(tabId)) {
         const view = document.getElementById(`view-${tabId}`);
         if (view) {
             view.style.display = 'flex';
@@ -3732,7 +3733,10 @@ async function fetchRelacionamento() {
         renderRelacionamentoList('posvenda', data.pos_venda, renderPosVendaCard);
         renderRelacionamentoList('faltantes', data.faltantes, renderFaltantesCard);
         renderRelacionamentoList('sumidos', data.sumidos, renderSumidosCard);
-        
+
+        window._relacionamentoData = data;
+        renderProcedimentoDropdown(data.procedimentos_lista || [], data.por_procedimento || {});
+
         relacionamentoFetched = true;
     } catch (e) {
         console.error(e);
@@ -3740,7 +3744,61 @@ async function fetchRelacionamento() {
         document.getElementById('list-posvenda').innerHTML = errHtml;
         document.getElementById('list-faltantes').innerHTML = errHtml;
         document.getElementById('list-sumidos').innerHTML = errHtml;
+        const listProc = document.getElementById('list-procedimento');
+        if (listProc) listProc.innerHTML = `<tr><td colspan="5">${errHtml}</td></tr>`;
     }
+}
+
+// Popula o <select> de procedimentos (com contagem de pacientes por opção) e
+// mantém a seleção atual se ela ainda existir na lista nova.
+function renderProcedimentoDropdown(lista, porProcedimento) {
+    const sel = document.getElementById('procedimento-select');
+    if (!sel) return;
+    const atual = sel.value;
+    sel.innerHTML = '<option value="">Selecione um procedimento…</option>' +
+        lista.map(nome => `<option value="${escapeHtml(nome)}">${escapeHtml(nome)} (${(porProcedimento[nome] || []).length})</option>`).join('');
+    if (lista.includes(atual)) sel.value = atual;
+    renderProcedimentoLista();
+}
+
+function renderProcedimentoLista() {
+    const sel = document.getElementById('procedimento-select');
+    const nome = sel ? sel.value : '';
+    const data = window._relacionamentoData || {};
+    const lista = nome ? ((data.por_procedimento || {})[nome] || []) : [];
+    renderRelacionamentoList('procedimento', lista, renderProcedimentoCard);
+}
+
+function renderProcedimentoCard(item) {
+    const p = item.patient;
+    const dateStr = item.last_attendance ? new Date(item.last_attendance.start_date).toLocaleDateString('pt-BR') : '-';
+    const service = escapeHtml(item.last_attendance?.agenda_event?.name || '-');
+
+    return `
+        <tr>
+            <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="procedimento" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('procedimento')"></td>
+            <td style="font-weight: 500;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
+                        <i class="fa-solid fa-user"></i>
+                    </div>
+                    ${escapeHtml(p.name)}
+                </div>
+            </td>
+            <td>${formatPhone(p.phone)}</td>
+            <td>${dateStr} <br><small style="color: var(--text-muted);">${service}</small></td>
+            <td style="text-align: center;">
+                ${item.contacted ?
+                    `<button disabled class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(255, 255, 255, 0.05); color: var(--text-muted); cursor: not-allowed; border: none; padding: 0.5rem;">
+                        <i class="fa-solid fa-check"></i> Já Contactado
+                    </button>` :
+                    `<a href="${getWhatsAppLink(p.phone, p.name, 'procedimento')}" onclick="registerMessageSent('${p.id}', 'procedimento', this)" target="_blank" class="btn-secondary" style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.15); color: var(--accent-success); border-color: rgba(16, 185, 129, 0.3); text-decoration: none; padding: 0.5rem;">
+                        <i class="fa-brands fa-whatsapp"></i> Falar com Paciente
+                    </a>`
+                }
+            </td>
+        </tr>
+    `;
 }
 
 function renderRelacionamentoList(idSuffix, list, cardRenderer) {
@@ -3768,7 +3826,8 @@ const REL_TIPO_TO_BACKEND = {
     faltantes: 'faltantes',
     sumidos: 'sumidos',
     'aniversariantes-hoje': 'aniversariante',
-    'aniversariantes-mes': 'aniversariante'
+    'aniversariantes-mes': 'aniversariante',
+    procedimento: 'procedimento'
 };
 
 function resetRelBulkBar(tipo) {
@@ -3850,7 +3909,7 @@ function updateRelBulkBar(tipo) {
 }
 
 function reloadRelSource(tipo) {
-    if (tipo === 'posvenda' || tipo === 'faltantes' || tipo === 'sumidos') {
+    if (tipo === 'posvenda' || tipo === 'faltantes' || tipo === 'sumidos' || tipo === 'procedimento') {
         relacionamentoFetched = false;
         fetchRelacionamento();
     } else if (tipo === 'aniversariantes-hoje') {
@@ -3986,6 +4045,8 @@ function getWhatsAppLink(phone, name, type) {
             text = `Olá ${firstName}, tudo bem? Faz um tempinho que não te vemos aqui na Natuclinic...`;
         } else if (type === 'aniversariante') {
             text = `Parabéns ${firstName}! 🎉 Que seu dia seja cheio de alegrias e muita saúde! Um grande abraço de toda a equipe Natuclinic!`;
+        } else if (type === 'procedimento') {
+            text = `Olá ${firstName}, tudo bem? Aqui é da Natuclinic!`;
         }
     }
     

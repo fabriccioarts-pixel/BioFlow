@@ -9268,6 +9268,33 @@ app.get('/api/relacionamento', async (req, res) => {
 
         // Removemos o limitador antigo de 50 itens para enviar todos os pacientes encontrados
 
+        // 4. Por Procedimento — segmenta por procedimento REALMENTE feito (done/arrived,
+        // não só agendado), reaproveitando os mesmos atendimentos já buscados acima
+        // (sem chamada extra à API). Só cobre a mesma janela de ~120 dias das outras
+        // categorias — não é o histórico completo do paciente.
+        const porProcedimento = {};
+        Array.from(patientsMap.values()).forEach(p => {
+            const maisRecentePorNome = new Map(); // nome do procedimento -> atendimento mais recente
+            p.attendances.forEach(att => {
+                if (att.status !== 'done' && att.status !== 'arrived') return;
+                const nome = att.agenda_event && att.agenda_event.name;
+                if (!nome) return;
+                const atual = maisRecentePorNome.get(nome);
+                if (!atual || new Date(att.start_date) > new Date(atual.start_date)) {
+                    maisRecentePorNome.set(nome, att);
+                }
+            });
+            maisRecentePorNome.forEach((att, nome) => {
+                if (!porProcedimento[nome]) porProcedimento[nome] = [];
+                porProcedimento[nome].push({
+                    patient: p,
+                    last_attendance: att,
+                    contacted: !!(contactedMap[String(p.id)] && contactedMap[String(p.id)]['procedimento'])
+                });
+            });
+        });
+        result.por_procedimento = porProcedimento;
+        result.procedimentos_lista = Object.keys(porProcedimento).sort((a, b) => porProcedimento[b].length - porProcedimento[a].length);
 
         res.status(200).json(result);
     } catch (error) {
