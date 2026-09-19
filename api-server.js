@@ -1853,8 +1853,18 @@ app.post('/api/ai-agenda-test', async (req, res) => {
 // seria escolhida e o texto que a IA mandaria junto.
 // ============================================================================
 
+// Palavras de ligação não contam como correspondência: "axila E virilha"
+// casava com a imagem "antes E depois hipro" só pelo "e" (score 1, primeiro
+// empate da lista) e a IA mandou foto de HiPRO numa conversa de depilação.
+const MEDIA_MATCH_STOPWORDS = new Set([
+    'a', 'e', 'o', 'as', 'os', 'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
+    'um', 'uma', 'com', 'sem', 'para', 'pra', 'por', 'ao', 'que', 'ou', 'se', 'meu', 'minha',
+    // genéricas: aparecem no nome de várias imagens e não dizem QUAL procedimento é
+    'antes', 'depois', 'resultado', 'resultados', 'exemplo', 'foto', 'fotos', 'imagem', 'tratamento', 'procedimento'
+]);
+
 function tokenizeProcText(s) {
-    return normalizeProcText(s).split(/[^a-z0-9]+/).filter(Boolean);
+    return normalizeProcText(s).split(/[^a-z0-9]+/).filter(t => t && !MEDIA_MATCH_STOPWORDS.has(t));
 }
 
 // Casa o procedimento pedido com um arquivo da biblioteca por SOBREPOSIÇÃO DE
