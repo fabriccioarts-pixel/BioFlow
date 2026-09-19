@@ -10008,7 +10008,7 @@ async function followupApplyFinal(cfg, lead) {
 async function followupTick() {
     const cfg = await followupGetConfig();
     let opened = 0, processed = 0;
-    const dbg = { ativo: !!cfg.ativo, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, mesma_ancora: 0, flow_esperando: 0 };
+    const dbg = { ativo: !!cfg.ativo, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, ja_concluiu_antes: 0, mesma_ancora: 0, flow_esperando: 0 };
     // 'col-ganho' (lead fechado) e 'col-agendado' (já marcou horário) sempre param; o resto é escolha do admin.
     const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho', 'col-agendado']);
 
@@ -10060,10 +10060,17 @@ async function followupTick() {
                 ? await queryD1(`SELECT lead_id, status, anchor_out_ts FROM crm_followup_runs WHERE lead_id IN (${idPh})`, ids)
                 : [];
             const openLeads = new Set();
+            const jaConcluiuAntes = new Set();
             const anchorsByLead = new Map();
             for (const r of runsRows) {
                 const lid = String(r.lead_id);
                 if (r.status === 'agendado' || r.status === 'enviando') openLeads.add(lid);
+                // Já rodou a sequência inteira uma vez (qualquer anchor, qualquer época)
+                // -> nunca mais abre outra pra esse lead, mesmo que ele volte a ficar
+                // quieto meses depois. Sem isso, cada novo silêncio do lead reabria a
+                // sequência do zero pra sempre — o pedido era limitar a UMA rodada
+                // completa por lead, não repetir indefinidamente.
+                if (r.status === 'concluido') jaConcluiuAntes.add(lid);
                 if (!anchorsByLead.has(lid)) anchorsByLead.set(lid, new Set());
                 anchorsByLead.get(lid).add(r.anchor_out_ts);
             }
@@ -10084,6 +10091,7 @@ async function followupTick() {
                 try {
                     const lid = String(lead.id);
                     if (openLeads.has(lid)) { dbg.ja_tem_run++; continue; }
+                    if (jaConcluiuAntes.has(lid)) { dbg.ja_concluiu_antes++; continue; }
                     const anchors = anchorsByLead.get(lid);
                     if (anchors && anchors.has(lead.last_msg_at)) { dbg.mesma_ancora++; continue; }
 
