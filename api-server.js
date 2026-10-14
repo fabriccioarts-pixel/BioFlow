@@ -2574,7 +2574,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
             const motivo = aiMode === 'vendas'
                 ? 'IA de vendas conduziu a conversa — lead pronto pra fechar/agendar'
                 : 'IA identificou lead qualificado';
-            const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR')} — assumir conversa.`;
+            const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}🤖 ${motivo} em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} — assumir conversa.`;
             await queryD1('UPDATE leads SET notas = ? WHERE id = ?', [novaNota, leadId]);
             logLeadEvent(leadId, 'lead_qualificado_ia', 'ia', motivo);
             const infoRows = await queryD1('SELECT nome, telefone FROM leads WHERE id = ?', [leadId]);
@@ -3283,7 +3283,7 @@ app.get('/api/agenda', async (req, res) => {
     if (!AMIGO_API_TOKEN) return res.status(500).json({ error: 'Token não configurado' });
 
     // Pegar as datas da query ou usar a data de hoje como fallback
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // fuso da clínica, não UTC
     const startDate = req.query.start_date || today;
     const endDate = req.query.end_date || startDate;
 
@@ -7170,6 +7170,9 @@ app.put('/api/leads/:id', async (req, res) => {
         if (column_id !== undefined) {
             updates.push('column_id = ?');
             params.push(column_id || 'col-entrada');
+            // Saiu da fila de "quentes" (agendou, fechou ou foi descartado): limpa a
+            // marca, senão o aviso vermelho contava o lead pra sempre.
+            if (['col-agendado', 'col-ganho', 'col-perdido'].includes(column_id)) updates.push('qualificado_em = NULL');
         }
         if (notas !== undefined) {
             updates.push('notas = ?');
@@ -7709,7 +7712,7 @@ app.post('/api/leads/:id/end-service', async (req, res) => {
         const lead = rows && rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
 
-        const carimbo = `✅ Atendimento encerrado por ${username} em ${new Date().toLocaleString('pt-BR')} — devolvido pra fila e pra IA.`;
+        const carimbo = `✅ Atendimento encerrado por ${username} em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} — devolvido pra fila e pra IA.`;
         const notaAtual = lead.notas || '';
         const novaNota = `${notaAtual}${notaAtual ? '\n' : ''}${carimbo}`;
 
@@ -7763,7 +7766,7 @@ app.post('/api/leads/:id/discard', async (req, res) => {
         const curTags = (lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
         if (!curTags.includes(discardedTagId)) curTags.push(discardedTagId);
 
-        const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR')} — lead descartado: IA e follow-up desligados, campanhas bloqueadas.`;
+        const carimbo = `🚫 Atendimento finalizado por ${username} em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} — lead descartado: IA e follow-up desligados, campanhas bloqueadas.`;
         const novaNota = `${lead.notas || ''}${lead.notas ? '\n' : ''}${carimbo}`;
 
         logLeadEvent(id, 'lead_descartado', username);
@@ -7771,7 +7774,7 @@ app.post('/api/leads/:id/discard', async (req, res) => {
             logLeadEvent(id, 'mudanca_coluna', username, JSON.stringify({ de: lead.column_id, para: 'col-perdido' }));
         }
         await queryD1(
-            "UPDATE leads SET ai_enabled = 0, owner_id = NULL, assigned_at = NULL, campaign_opt_out = 1, column_id = 'col-perdido', tags = ?, notas = ? WHERE id = ?",
+            "UPDATE leads SET ai_enabled = 0, owner_id = NULL, assigned_at = NULL, campaign_opt_out = 1, column_id = 'col-perdido', qualificado_em = NULL, tags = ?, notas = ? WHERE id = ?",
             [curTags.join(','), novaNota, id]
         );
 
@@ -9669,9 +9672,9 @@ app.get('/api/relacionamento', async (req, res) => {
 // --- ROTAS DE ANIVERSARIANTES ---
 app.get('/api/aniversariantes', async (req, res) => {
     try {
-        const today = new Date();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
+        // "Hoje" no fuso da clínica — a Vercel roda em UTC e, depois das 21h de
+        // Brasília, já estaria no dia seguinte.
+        const [, mm, dd] = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-');
         const dateStr = `${mm}-${dd}`;
 
         const amigoToken = process.env.AMIGO_API_TOKEN;
@@ -9726,8 +9729,9 @@ app.get('/api/aniversariantes/month', async (req, res) => {
     try {
         const rows = await queryD1('SELECT nome, data_nasc, celular FROM aniversariantes');
 
-        const currentMonth = new Date().getMonth() + 1;
-        const currentDay = new Date().getDate();
+        const [, mesSP, diaSP] = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-');
+        const currentMonth = Number(mesSP);
+        const currentDay = Number(diaSP);
         let found = [];
 
         for (const row of rows) {
@@ -10362,7 +10366,7 @@ function followupAtSql(date) { return date.toISOString().slice(0, 19).replace('T
 async function followupApplyFinal(cfg, lead) {
     try {
         if (cfg.acao_final === 'mover:col-perdido') {
-            await queryD1("UPDATE leads SET column_id = 'col-perdido' WHERE id = ?", [lead.id]);
+            await queryD1("UPDATE leads SET column_id = 'col-perdido', qualificado_em = NULL WHERE id = ?", [lead.id]);
         } else if (cfg.acao_final === 'tag:sem-resposta') {
             const cur = lead.tags ? String(lead.tags).split(',').map(s => s.trim()).filter(Boolean) : [];
             if (!cur.includes('sem-resposta')) {
@@ -10890,7 +10894,7 @@ async function apptDetectLeads(atendimentos) {
         if (!claim || !claim.meta || !claim.meta.changes) continue;
 
         const de = lead.column_id || 'col-entrada';
-        const upd = await queryD1Meta("UPDATE leads SET column_id = 'col-agendado', data_valor = ? WHERE id = ? AND column_id IS ?", [flowDbTime(), lead.id, lead.column_id]);
+        const upd = await queryD1Meta("UPDATE leads SET column_id = 'col-agendado', data_valor = ?, qualificado_em = NULL WHERE id = ? AND column_id IS ?", [flowDbTime(), lead.id, lead.column_id]);
         if (!upd || !upd.meta || !upd.meta.changes) {
             await queryD1("UPDATE crm_appt_detected SET acao = 'mudou_antes' WHERE id = ?", [at.key]).catch(() => {});
             continue;

@@ -1439,6 +1439,13 @@ function reapplyChatFilters() {
     filterChatContacts(searchInput ? searchInput.value : '');
 }
 
+// "Lead quente": a IA qualificou e ninguém atendeu ainda. Quem já foi pra
+// Agendado/Ganho/Follow Up não está mais esperando, mesmo com a marca antiga.
+// Mesma regra pro aviso vermelho, pro filtro e pra exclusão do "Aguardando".
+function isLeadQuente(lead) {
+    return !!(lead && lead.qualificado_em && !['col-agendado', 'col-ganho', 'col-perdido'].includes(lead.column || lead.column_id));
+}
+
 // Minúsculas e sem acento: "fabricio" acha "Fabrício", "conceicao" acha "Conceição".
 function normalizeChatSearch(s) {
     return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -1513,7 +1520,7 @@ function filterChatContacts(query) {
                 if (dir !== 'in') return false;
                 if (typeof leads !== 'undefined' && Array.isArray(leads)) {
                     const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
-                    if (lead && lead.qualificado_em) return false;
+                    if (isLeadQuente(lead)) return false;
                 }
                 return true;
             });
@@ -1527,10 +1534,23 @@ function filterChatContacts(query) {
             // Leads que a IA marcou como qualificados e que ainda ninguém atendeu
             // (tag ia-qualificado + qualificado_em setado). Mesmo critério do badge
             // abaixo da busca.
-            filtered = filtered.filter(chat => {
-                if (typeof leads === 'undefined' || !Array.isArray(leads)) return false;
-                const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
-                return !!(lead && lead.qualificado_em);
+            const leadsArr = (typeof leads !== 'undefined' && Array.isArray(leads)) ? leads : [];
+            filtered = filtered.filter(chat => isLeadQuente(leadsArr.find(l => isSamePhone(l.telefone, chat.phone))));
+            // A lista de conversas só traz as 500 mais recentes: lead qualificado
+            // há semanas, sem resposta desde então, ficava fora dela — o aviso
+            // contava ele e o filtro mostrava "nenhum". Monta a linha pelo lead.
+            leadsArr.filter(isLeadQuente).forEach(l => {
+                if (!l.telefone || allChatsList.some(c => isSamePhone(c.phone, l.telefone))) return;
+                if (q && !normalizeChatSearch(l.nome).includes(q) && !String(l.telefone).includes(q.replace(/\D/g, '') || '\u0000')) return;
+                filtered.push({
+                    phone: l.telefone,
+                    nome: l.nome,
+                    message: 'Qualificado pela IA — conversa antiga, abra pra ver o histórico',
+                    direction: l.last_msg_direction || 'in',
+                    last_direction: l.last_msg_direction || 'in',
+                    last_interaction: l.last_msg_at || l.qualificado_em,
+                    unread_count: 0,
+                });
             });
             // Última mensagem mais recente no topo — mesmo horário que aparece em
             // cada linha, pra lista bater com o que os olhos veem.

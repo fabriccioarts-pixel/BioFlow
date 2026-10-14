@@ -5481,7 +5481,7 @@ function renderHotLeadsBadge() {
     const textEl = document.getElementById('hot-leads-badge-text');
     if (!el || !textEl || typeof leads === 'undefined' || !Array.isArray(leads)) return;
 
-    const quentes = leads.filter(l => l.qualificado_em);
+    const quentes = leads.filter(isLeadQuente);
     if (quentes.length === 0) {
         el.style.display = 'none';
         return;
@@ -5510,15 +5510,25 @@ function renderHotLeadsBadge() {
     const icon = el.querySelector('i');
     if (icon) icon.style.animation = atrasado ? 'hotLeadPulse 1.5s ease-in-out infinite' : 'none';
 
+    // Espera do mais antigo em linguagem honesta: "há 35 dias" em vez de
+    // "há mais de 15min" quando a fila tem lead esquecido há semanas.
+    const espera = (ms) => {
+        const min = Math.floor(ms / 60000);
+        if (min < 60) return `${min}min`;
+        const h = Math.floor(min / 60);
+        if (h < 24) return `${h}h`;
+        const d = Math.floor(h / 24);
+        return `${d} dia${d > 1 ? 's' : ''}`;
+    };
     const plural = quentes.length > 1;
     if (quentes.length === 1 && quentes[0].nome) {
         const nome = quentes[0].nome.replace(' [MKT]', '');
         textEl.textContent = atrasado
-            ? `${nome} está quente há mais de 15min sem atendimento!`
+            ? `${nome} está quente há ${espera(piorEsperaMs)} sem atendimento!`
             : `${nome} está pronto(a) pra ser atendido(a)`;
     } else {
         textEl.textContent = atrasado
-            ? `${quentes.length} leads quentes esperando — alguns há mais de 15min!`
+            ? `${quentes.length} leads quentes esperando — o mais antigo há ${espera(piorEsperaMs)}`
             : `${quentes.length} lead${plural ? 's' : ''} quente${plural ? 's' : ''} esperando atendimento`;
     }
 }
@@ -5549,7 +5559,7 @@ function computeAiAgentFunnel() {
         const label = kanbanStageInfo(col, l.pipeline_id).label;
         counts[label] = (counts[label] || 0) + 1;
     });
-    const quentes = leads.filter(l => l.qualificado_em).length;
+    const quentes = leads.filter(isLeadQuente).length;
     if (quentes > 0) counts['Quentes (IA) esperando atendimento'] = quentes;
     return counts;
 }
@@ -9192,15 +9202,23 @@ function lppFormatDateTime(str) {
     });
 }
 
+// Horário do banco (D1) vem em UTC sem fuso ("2026-10-14 19:52:00"). Ler isso
+// como hora local jogava o momento 3h pro futuro e dava "há -1 dias".
 function lppRelativeTime(str) {
     if (!str) return null;
-    const d = new Date(str.includes('T') ? str : str + 'T12:00:00');
+    const s = String(str).trim();
+    let d;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) d = new Date(s + 'T12:00:00');
+    else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/.test(s)) d = new Date(s.replace(' ', 'T') + 'Z');
+    else d = new Date(s);
     if (isNaN(d)) return null;
-    const diff = Date.now() - d.getTime();
-    const days = Math.floor(diff / 86400000);
+    // Por dia de calendário, não por blocos de 24h: ontem às 23h é "ontem".
+    const dia = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((dia(new Date()) - dia(d)) / 86400000);
     if (days === 0) return 'hoje';
     if (days === 1) return 'ontem';
-    return `há ${days} dias`;
+    if (days === -1) return 'amanhã';
+    return days > 0 ? `há ${days} dias` : `em ${-days} dias`;
 }
 
 function lppBirthdayInfo(bornStr) {
