@@ -1442,8 +1442,11 @@ function reapplyChatFilters() {
 // "Lead quente": a IA qualificou e ninguém atendeu ainda. Quem já foi pra
 // Agendado/Ganho/Follow Up não está mais esperando, mesmo com a marca antiga.
 // Mesma regra pro aviso vermelho, pro filtro e pra exclusão do "Aguardando".
+// Conversa arquivada também sai: arquivar é a equipe dizendo "deixei de lado".
 function isLeadQuente(lead) {
-    return !!(lead && lead.qualificado_em && !['col-agendado', 'col-ganho', 'col-perdido'].includes(lead.column || lead.column_id));
+    if (!lead || !lead.qualificado_em) return false;
+    if (['col-agendado', 'col-ganho', 'col-perdido'].includes(lead.column || lead.column_id)) return false;
+    return !(lead.telefone && isArchivedChat(lead.telefone));
 }
 
 // Minúsculas e sem acento: "fabricio" acha "Fabrício", "conceicao" acha "Conceição".
@@ -1612,16 +1615,58 @@ function toggleChatSelection(phone) {
 }
 
 function updateChatSelectionBar() {
-    const countEl = document.getElementById('chat-selection-count');
-    const deleteBtn = document.getElementById('chat-selection-delete-btn');
-    const readBtn = document.getElementById('chat-selection-read-btn');
     const n = selectedChatPhones.size;
-    if (countEl) countEl.textContent = `${n} selecionada(s)`;
-    [deleteBtn, readBtn].forEach(btn => {
-        if (!btn) return;
-        btn.disabled = n === 0;
-        btn.style.opacity = n === 0 ? '0.5' : '1';
+    const visiveis = window._lastFilteredChats || [];
+    const todas = visiveis.length > 0 && visiveis.every(c => selectedChatPhones.has(c.phone));
+
+    const countEl = document.getElementById('chat-selection-count');
+    if (countEl) countEl.textContent = n === 0 ? 'Selecionar todas' : `${n} selecionada${n > 1 ? 's' : ''}`;
+    const check = document.querySelector('#chat-selection-bar .csb-check');
+    if (check) check.dataset.state = n === 0 ? 'none' : (todas ? 'all' : 'some');
+    const allBtn = document.getElementById('chat-select-all-btn');
+    if (allBtn) allBtn.setAttribute('aria-pressed', String(todas));
+
+    // Na aba "Arquivadas" a ação natural é tirar do arquivo.
+    const arqLabel = document.getElementById('chat-selection-archive-label');
+    if (arqLabel) arqLabel.textContent = activeChatFilter === 'archived' ? 'Desarquivar' : 'Arquivar';
+
+    ['chat-selection-read-btn', 'chat-selection-archive-btn', 'chat-selection-delete-btn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = n === 0;
     });
+}
+
+async function archiveSelectedConversations() {
+    const phones = Array.from(selectedChatPhones);
+    if (phones.length === 0) return;
+    const arquivar = activeChatFilter !== 'archived';
+    const keys = phones.map(p => canonicalPhoneBR(p));
+
+    // Otimista: some da lista na hora; o servidor grava em seguida.
+    keys.forEach(key => {
+        if (!chatSettingsMap[key]) chatSettingsMap[key] = { phone: key, is_favorite: 0, is_pinned: 0, is_archived: 0, marked_unread: 0 };
+        chatSettingsMap[key].is_archived = arquivar ? 1 : 0;
+    });
+    toggleChatSelectMode();
+    if (typeof renderHotLeadsBadge === 'function') renderHotLeadsBadge();
+
+    try {
+        const res = await fetch('/api/chat-settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phones: keys, field: 'is_archived', value: arquivar ? 1 : 0 })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'falha');
+        if (typeof showToast === 'function') {
+            showToast(`${phones.length} conversa${phones.length > 1 ? 's' : ''} ${arquivar ? 'arquivada' : 'desarquivada'}${phones.length > 1 ? 's' : ''}.`, 'success');
+        }
+    } catch (e) {
+        // Desfaz o otimista pra tela não mentir.
+        keys.forEach(key => { if (chatSettingsMap[key]) chatSettingsMap[key].is_archived = arquivar ? 0 : 1; });
+        reapplyChatFilters();
+        if (typeof renderHotLeadsBadge === 'function') renderHotLeadsBadge();
+        if (typeof showToast === 'function') showToast('Não foi possível arquivar as conversas.', 'danger');
+    }
 }
 
 // Volta a área principal de chat pro estado vazio (usado quando a conversa aberta é apagada,

@@ -2997,6 +2997,30 @@ app.patch('/api/chat-settings/:phone', async (req, res) => {
     }
 });
 
+// Mesma coisa em lote (seleção múltipla no chat: arquivar várias de uma vez).
+// Uma gravação por bloco de 40 telefones em vez de uma requisição por conversa.
+app.patch('/api/chat-settings', async (req, res) => {
+    try {
+        const { phones, field, value } = req.body || {};
+        if (!CHAT_SETTINGS_FIELDS.includes(field)) return res.status(400).json({ error: 'Campo inválido.' });
+        const lista = Array.from(new Set((Array.isArray(phones) ? phones : []).map(p => String(p || '').replace(/\D/g, '')).filter(Boolean))).slice(0, 500);
+        if (!lista.length) return res.status(400).json({ error: 'Nenhuma conversa informada.' });
+        const intValue = value ? 1 : 0;
+        for (let i = 0; i < lista.length; i += 40) {
+            const bloco = lista.slice(i, i + 40);
+            await queryD1(
+                `INSERT INTO crm_chat_settings (phone, ${field}) VALUES ${bloco.map(() => '(?, ?)').join(', ')}
+                 ON CONFLICT(phone) DO UPDATE SET ${field} = excluded.${field}, updated_at = CURRENT_TIMESTAMP`,
+                [].concat(...bloco.map(p => [p, intValue]))
+            );
+        }
+        res.json({ success: true, total: lista.length });
+    } catch (e) {
+        console.error('Erro ao atualizar preferências em lote:', e);
+        res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
 // Gera as variantes possíveis de um número (com/sem DDI 55, com/sem o 9º dígito
 // transicional) pra achar/apagar todas as mensagens de uma conversa, já que o
 // mesmo contato pode ter sido salvo em formatos diferentes ao longo do tempo.
