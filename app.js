@@ -308,6 +308,7 @@ function initApp() {
         if (typeof loadAvailableTags === 'function') {
             loadAvailableTags().then(() => fetchLeadsFromServer());
         } else {
+            fetchPipelines();
             fetchLeadsFromServer(); // Busca na nuvem e renderiza todos os leads compartilhados
         }
         fetchApiOptions();
@@ -567,6 +568,10 @@ function initKanbanSSE() {
             if (loggedUser && ['created', 'updated', 'deleted'].includes(action)) {
                 fetchLeadsFromServer(true);
             }
+            // Alguém criou/editou/excluiu um funil — recarrega etapas pra todo mundo.
+            if (loggedUser && action === 'pipelines') {
+                fetchPipelines();
+            }
             // Alguém entrou/saiu de uma conversa — atualiza os avatares nos cards do chat na hora.
             if (action === 'presence' && typeof refreshChatPresence === 'function') {
                 refreshChatPresence();
@@ -621,6 +626,7 @@ async function fetchLeadsFromServer(silent = false) {
         leads = newLeads;
         renderBoard();
         if (typeof renderHotLeadsBadge === 'function') renderHotLeadsBadge();
+        if (typeof syncChatNamesFromLeads === 'function') syncChatNamesFromLeads();
     } catch (e) {
         if (!silent) {
             console.error('Erro ao buscar leads:', e);
@@ -989,9 +995,413 @@ function switchKanbanOwnerTab(tabType) {
 // Para evitar conflito caso a aba "Meus Leads" seja clicada antes das options renderizarem.
 let _kanbanTabInitialized = false;
 
+// === FUNIS (vários Kanbans, cada um com suas etapas) ===
+// Espelha api-server.js: as 6 etapas do sistema usam o mesmo column_id em todo
+// funil (é isso que mantém CAPI/Financeiro/IA/follow-up funcionando); etapas
+// livres têm id stg_... e existem só no funil onde foram criadas.
+const DEFAULT_PIPELINE_ID = 'principal';
+const PIPELINE_SYSTEM_IDS = ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho', 'col-perdido'];
+const DEFAULT_PIPELINE_STAGES = [
+    { id: 'col-entrada',   nome: 'Entrada',   cor: '#64748b', icone: 'fa-solid fa-inbox' },
+    { id: 'col-contatado', nome: 'Contatado', cor: '#fbbf24', icone: 'fa-brands fa-whatsapp' },
+    { id: 'col-orcado',    nome: 'Orçado',    cor: '#E03720', icone: 'fa-solid fa-file-invoice-dollar' },
+    { id: 'col-agendado',  nome: 'Agendado',  cor: '#2dd4bf', icone: 'fa-solid fa-calendar-check' },
+    { id: 'col-ganho',     nome: 'Ganho',     cor: '#10b981', icone: 'fa-solid fa-trophy' },
+    { id: 'col-perdido',   nome: 'Follow Up', cor: '#fb923c', icone: 'fa-solid fa-arrow-rotate-left' },
+];
+let pipelines = [{ id: DEFAULT_PIPELINE_ID, nome: 'Principal', stages: DEFAULT_PIPELINE_STAGES }];
+let currentPipelineId = (() => {
+    try { return localStorage.getItem('kanban_pipeline') || DEFAULT_PIPELINE_ID; } catch (_) { return DEFAULT_PIPELINE_ID; }
+})();
+
+function getPipeline(id) {
+    return pipelines.find(p => p.id === id) || pipelines.find(p => p.id === DEFAULT_PIPELINE_ID) || pipelines[0];
+}
+function getCurrentPipeline() { return getPipeline(currentPipelineId); }
+
+// Funil em que o lead aparece. pipeline_id apontando pra um funil que este
+// navegador ainda não conhece (recém-criado por outra pessoa) cai no principal
+// até o SSE trazer a lista nova — melhor que o card sumir.
+function leadPipelineId(lead) {
+    const id = (lead && lead.pipeline_id) || DEFAULT_PIPELINE_ID;
+    return pipelines.some(p => p.id === id) ? id : DEFAULT_PIPELINE_ID;
+}
+
+function getStageMeta(columnId, pipelineId) {
+    const p = getPipeline(pipelineId || DEFAULT_PIPELINE_ID);
+    let s = p && p.stages.find(x => x.id === columnId);
+    if (!s) for (const pp of pipelines) { s = pp.stages.find(x => x.id === columnId); if (s) break; }
+    if (!s) s = DEFAULT_PIPELINE_STAGES.find(x => x.id === columnId);
+    return s || { id: columnId, nome: columnId || '—', cor: '#64748b', icone: 'fa-solid fa-circle' };
+}
+
+// Próxima etapa na ordem do funil do lead (Follow Up fica de fora, igual antes).
+function nextStageFor(lead) {
+    const order = getPipeline(leadPipelineId(lead)).stages.map(s => s.id).filter(id => id !== 'col-perdido');
+    const i = order.indexOf(lead.column);
+    return i >= 0 && i < order.length - 1 ? order[i + 1] : null;
+}
+
+async function fetchPipelines() {
+    try {
+        const res = await fetch('/api/pipelines');
+        if (res.ok) {
+            const rows = await res.json();
+            if (Array.isArray(rows) && rows.length) pipelines = rows;
+        }
+    } catch (e) {
+        console.error('Erro ao carregar funis:', e);
+    }
+    if (!pipelines.some(p => p.id === currentPipelineId)) currentPipelineId = DEFAULT_PIPELINE_ID;
+    renderPipelineSelect();
+    renderBoard();
+}
+
+function renderPipelineSelect() {
+    const p = getCurrentPipeline();
+    const cur = document.getElementById('kpl-current');
+    if (cur) cur.textContent = p.nome;
+    const list = document.getElementById('kpl-list');
+    if (list) {
+        list.innerHTML = pipelines.map(pp => `
+            <button type="button" class="kpl-item${pp.id === p.id ? ' is-active' : ''}" role="menuitemradio"
+                aria-checked="${pp.id === p.id}" onclick="closeKplMenu(); switchKanbanPipeline('${pp.id}');">
+                <i class="fa-solid fa-check kpl-check" aria-hidden="true"></i>
+                <span>${escapeHtml(pp.nome)}</span>
+            </button>`).join('');
+    }
+    populateCampaignStageOptions();
+}
+
+function toggleKplMenu(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('kpl-menu');
+    if (!menu) return;
+    if (menu.hidden) {
+        renderPipelineSelect();
+        menu.hidden = false;
+        document.getElementById('kpl-trigger')?.setAttribute('aria-expanded', 'true');
+        menu.querySelector('.kpl-item.is-active, .kpl-item')?.focus();
+    } else {
+        closeKplMenu();
+    }
+}
+
+function closeKplMenu() {
+    const menu = document.getElementById('kpl-menu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    document.getElementById('kpl-trigger')?.setAttribute('aria-expanded', 'false');
+}
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest || !e.target.closest('#kpl')) closeKplMenu();
+});
+document.addEventListener('keydown', (e) => {
+    const menu = document.getElementById('kpl-menu');
+    if (!menu || menu.hidden) return;
+    if (e.key === 'Escape') {
+        closeKplMenu();
+        document.getElementById('kpl-trigger')?.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = [...menu.querySelectorAll('.kpl-item')];
+        const i = items.indexOf(document.activeElement);
+        const next = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+        items[next]?.focus();
+    }
+});
+
+// Público do disparo: com um funil só, as etapas dele (valor = id da etapa, igual
+// antes); com vários, um grupo por funil (valor = "stage:<funil>:<etapa>").
+function populateCampaignStageOptions() {
+    const sel = document.getElementById('campaign-target');
+    if (!sel) return;
+    const current = sel.value;
+    sel.querySelectorAll('[data-stage-opt], option[value^="col-"]').forEach(el => el.remove());
+    const frag = document.createDocumentFragment();
+    if (pipelines.length <= 1) {
+        getPipeline(DEFAULT_PIPELINE_ID).stages.forEach(s => {
+            const o = new Option(s.nome, s.id);
+            o.dataset.stageOpt = '1';
+            frag.appendChild(o);
+        });
+    } else {
+        pipelines.forEach(p => {
+            const g = document.createElement('optgroup');
+            g.label = `Funil: ${p.nome}`;
+            g.dataset.stageOpt = '1';
+            p.stages.forEach(s => g.appendChild(new Option(s.nome, `stage:${p.id}:${s.id}`)));
+            frag.appendChild(g);
+        });
+    }
+    sel.insertBefore(frag, sel.querySelector('option[value="all"]') || sel.firstChild);
+
+    let target = current;
+    if (pipelines.length > 1 && /^(col-|stg_)/.test(current)) target = `stage:${DEFAULT_PIPELINE_ID}:${current}`;
+    if (pipelines.length <= 1 && current.startsWith('stage:')) target = current.split(':')[2];
+    if ([...sel.options].some(o => o.value === target)) sel.value = target;
+}
+
+function switchKanbanPipeline(id) {
+    currentPipelineId = pipelines.some(p => p.id === id) ? id : DEFAULT_PIPELINE_ID;
+    try { localStorage.setItem('kanban_pipeline', currentPipelineId); } catch (_) {}
+    renderPipelineSelect();
+    renderBoard();
+}
+
+// Monta as colunas do funil atual. Só reconstrói quando o funil/etapas mudam —
+// o renderBoard roda a cada SSE e refazer o DOM das colunas toda vez faria o
+// scroll horizontal do board pular.
+let _kanbanColumnsSig = '';
+function renderKanbanColumns() {
+    const board = document.getElementById('kanban-board');
+    if (!board) return;
+    const p = getCurrentPipeline();
+    const sig = p.id + '|' + JSON.stringify(p.stages);
+    if (sig === _kanbanColumnsSig && board.children.length) return;
+    _kanbanColumnsSig = sig;
+    board.innerHTML = p.stages.map(s => {
+        const suffix = s.id.replace(/^col-/, '');
+        const isSystem = PIPELINE_SYSTEM_IDS.includes(s.id);
+        return `<div class="column ${isSystem ? s.id : 'col-custom'}" style="--stage-color: ${s.cor};">
+            <div class="column-header">
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <div class="column-title"><i class="${s.icone}" style="color: ${s.cor};"></i> ${escapeHtml(s.nome)}</div>
+                </div>
+                <div class="column-stats" id="stats-${suffix}">
+                    <span class="column-stats-patients" id="count-${suffix}">0 pacientes</span>
+                    <span class="column-stats-value" id="value-${suffix}">R$ 0,00</span>
+                </div>
+            </div>
+            <div class="card-list" id="${s.id}"></div>
+            <button class="column-add-card-btn" onclick="openNewLeadModal('${s.id}')" title="Adicionar lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
+        </div>`;
+    }).join('');
+}
+
+function renderCardCtxPipelines(leadId) {
+    const lead = leads.find(l => l.id === leadId);
+    const main = document.getElementById('card-ctx-main');
+    const box = document.getElementById('card-ctx-tags');
+    if (!lead || !box) return;
+    const atual = leadPipelineId(lead);
+    box.innerHTML = `
+        <div class="card-ctx-tags-head">
+            <button type="button" onclick="backToCardCtxMain()" title="Voltar"><i class="fa-solid fa-chevron-left"></i></button>
+            <span><i class="fa-solid fa-diagram-next"></i> Mover para funil</span>
+        </div>
+        ${pipelines.map(p => `<button type="button" class="card-ctx-tag" aria-checked="${p.id === atual}" ${p.id === atual ? 'disabled' : ''}
+                onclick="moveLeadToPipeline('${leadId}','${p.id}')">
+                <i class="fa-solid fa-check card-ctx-tag-check"></i>
+                <span>${escapeHtml(p.nome)}</span>
+            </button>`).join('')}
+        <div class="card-ctx-sep"></div>
+        <button type="button" class="card-ctx-item" onclick="closeCardMenu(); createPipelinePrompt();">
+            <i class="fa-solid fa-plus" style="color: var(--text-muted);"></i> Novo funil
+        </button>
+    `;
+    if (main) main.style.display = 'none';
+    box.style.display = 'block';
+    const menu = document.getElementById('card-global-dropdown');
+    const r = menu.getBoundingClientRect();
+    if (r.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px';
+}
+
+async function moveLeadToPipeline(leadId, pipelineId) {
+    closeCardMenu();
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    lead.pipeline_id = pipelineId === DEFAULT_PIPELINE_ID ? null : pipelineId;
+    if (String(lead.column || '').startsWith('stg_')) lead.column = 'col-entrada';
+    renderBoard();
+    try {
+        const res = await fetch(`/api/leads/${leadId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pipeline_id: pipelineId, no_auto_assign: true })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível mover o lead.');
+        showToast(`Lead movido para o funil "${getPipeline(pipelineId).nome}".`, 'success');
+    } catch (e) {
+        showToast(e.message, 'danger');
+        fetchLeadsFromServer(true);
+    }
+}
+
+async function createPipelinePrompt() {
+    try {
+        const res = await fetch('/api/pipelines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome: 'Novo funil' })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Não foi possível criar o funil.');
+        if (!pipelines.some(p => p.id === json.id)) pipelines.push(json);
+        switchKanbanPipeline(json.id);
+        openPipelineEditor();
+        const nameEl = document.getElementById('ple-name');
+        if (nameEl) { nameEl.focus(); nameEl.select(); }
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+}
+
+// --- Editor de funil (#modalPipeline) ---
+const PLE_ICONS = [
+    ['fa-solid fa-circle', 'Ponto'], ['fa-solid fa-inbox', 'Caixa de entrada'], ['fa-brands fa-whatsapp', 'WhatsApp'],
+    ['fa-solid fa-comments', 'Conversa'], ['fa-solid fa-phone', 'Telefone'], ['fa-solid fa-file-invoice-dollar', 'Orçamento'],
+    ['fa-solid fa-calendar-check', 'Agenda'], ['fa-solid fa-user-doctor', 'Avaliação'], ['fa-solid fa-syringe', 'Procedimento'],
+    ['fa-solid fa-spa', 'Estética'], ['fa-solid fa-clipboard-check', 'Checklist'], ['fa-solid fa-hourglass-half', 'Aguardando'],
+    ['fa-solid fa-handshake', 'Negociação'], ['fa-solid fa-money-bill-wave', 'Pagamento'], ['fa-solid fa-trophy', 'Ganho'],
+    ['fa-solid fa-star', 'Destaque'], ['fa-solid fa-fire', 'Quente'], ['fa-solid fa-flag', 'Marco'],
+    ['fa-solid fa-arrow-rotate-left', 'Retorno'], ['fa-solid fa-hand-holding-heart', 'Pós-venda'],
+];
+const PLE_SYSTEM_HINT = {
+    'col-entrada': 'Leads novos do WhatsApp entram aqui e a IA atende',
+    'col-contatado': 'O lead vem pra cá quando alguém responde; a IA atende',
+    'col-orcado': 'Criar um orçamento move o lead pra cá',
+    'col-agendado': 'Abre o agendamento e avisa o Meta (Schedule)',
+    'col-ganho': 'Entra no Financeiro e avisa o Meta (Purchase)',
+    'col-perdido': 'Destino de leads inativados e do follow-up automático',
+};
+let _pleDraft = null;
+
+function openPipelineEditor() {
+    const p = getCurrentPipeline();
+    _pleDraft = { id: p.id, nome: p.nome, stages: p.stages.map(s => ({ ...s })) };
+    document.getElementById('ple-name').value = p.nome;
+    const del = document.getElementById('ple-delete-btn');
+    if (del) del.style.visibility = p.id === DEFAULT_PIPELINE_ID ? 'hidden' : 'visible';
+    pleRender();
+    document.getElementById('modalPipeline').classList.add('active');
+}
+
+function pleRender() {
+    const box = document.getElementById('ple-stages');
+    if (!box || !_pleDraft) return;
+    const last = _pleDraft.stages.length - 1;
+    box.innerHTML = _pleDraft.stages.map((s, i) => {
+        const sys = PIPELINE_SYSTEM_IDS.includes(s.id);
+        const known = PLE_ICONS.some(([c]) => c === s.icone);
+        const iconOptions = (known ? '' : `<option value="${s.icone}" selected>Atual</option>`)
+            + PLE_ICONS.map(([c, label]) => `<option value="${c}" ${c === s.icone ? 'selected' : ''}>${label}</option>`).join('');
+        return `<div class="ple-row">
+            <div class="ple-move">
+                <button type="button" onclick="pleMove(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Subir" aria-label="Subir etapa"><i class="fa-solid fa-chevron-up"></i></button>
+                <button type="button" onclick="pleMove(${i}, 1)" ${i === last ? 'disabled' : ''} title="Descer" aria-label="Descer etapa"><i class="fa-solid fa-chevron-down"></i></button>
+            </div>
+            <label class="ple-color" title="Cor da etapa" style="--c: ${s.cor};">
+                <i class="${s.icone}"></i>
+                <input type="color" value="${s.cor}" oninput="pleSet(${i}, 'cor', this.value, this)" aria-label="Cor da etapa">
+            </label>
+            <input type="text" class="ple-name" value="${escapeHtml(s.nome)}" maxlength="40" oninput="pleSet(${i}, 'nome', this.value)" aria-label="Nome da etapa">
+            <select class="ple-icon" onchange="pleSet(${i}, 'icone', this.value, this)" aria-label="Ícone da etapa">${iconOptions}</select>
+            ${sys
+                ? `<span class="ple-lock" title="${PLE_SYSTEM_HINT[s.id] || 'Etapa com automação'}"><i class="fa-solid fa-bolt"></i></span>`
+                : `<button type="button" class="ple-remove" onclick="pleRemove(${i})" title="Remover etapa" aria-label="Remover etapa"><i class="fa-solid fa-trash"></i></button>`}
+        </div>`;
+    }).join('');
+}
+
+function pleSet(i, field, value, el) {
+    if (!_pleDraft || !_pleDraft.stages[i]) return;
+    _pleDraft.stages[i][field] = value;
+    // Atualiza só a prévia da linha — re-renderizar tudo tiraria o foco do campo.
+    const row = el && el.closest('.ple-row');
+    if (!row) return;
+    if (field === 'cor') row.querySelector('.ple-color').style.setProperty('--c', value);
+    if (field === 'icone') row.querySelector('.ple-color i').className = value;
+}
+
+function pleMove(i, dir) {
+    const j = i + dir;
+    const st = _pleDraft && _pleDraft.stages;
+    if (!st || j < 0 || j >= st.length) return;
+    [st[i], st[j]] = [st[j], st[i]];
+    pleRender();
+}
+
+function pleAddStage() {
+    if (!_pleDraft) return;
+    const rand = Array.from(crypto.getRandomValues(new Uint8Array(6))).map(b => b.toString(16).padStart(2, '0')).join('');
+    const novo = { id: 'stg_' + rand, nome: 'Nova etapa', cor: '#8b5cf6', icone: 'fa-solid fa-circle' };
+    // Entra antes do Follow Up se ele for a última coluna (posição mais comum).
+    const st = _pleDraft.stages;
+    const pos = st.length && st[st.length - 1].id === 'col-perdido' ? st.length - 1 : st.length;
+    st.splice(pos, 0, novo);
+    pleRender();
+    const inputs = document.querySelectorAll('#ple-stages .ple-name');
+    const input = inputs[pos];
+    if (input) { input.focus(); input.select(); }
+}
+
+async function pleRemove(i) {
+    const s = _pleDraft && _pleDraft.stages[i];
+    if (!s || PIPELINE_SYSTEM_IDS.includes(s.id)) return;
+    const n = leads.filter(l => l.column === s.id).length;
+    if (n > 0 && !await customConfirm(`${n} lead(s) estão em "${s.nome}". Ao salvar, eles voltam para a Entrada. Remover a etapa?`, 'Remover etapa')) return;
+    _pleDraft.stages.splice(i, 1);
+    pleRender();
+}
+
+async function pleSave() {
+    if (!_pleDraft) return;
+    const nome = document.getElementById('ple-name').value.trim();
+    if (!nome) { showToast('Dê um nome pro funil.', 'danger'); return; }
+    if (_pleDraft.stages.some(s => !String(s.nome || '').trim())) { showToast('Toda etapa precisa de um nome.', 'danger'); return; }
+    const btn = document.getElementById('ple-save-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(`/api/pipelines/${encodeURIComponent(_pleDraft.id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome, stages: _pleDraft.stages })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Não foi possível salvar o funil.');
+        const idx = pipelines.findIndex(p => p.id === json.id);
+        if (idx >= 0) pipelines[idx] = { ...pipelines[idx], ...json }; else pipelines.push(json);
+        // Leads de etapas removidas: o servidor já mandou pra Entrada; espelha local.
+        const ids = new Set(json.stages.map(s => s.id));
+        leads.forEach(l => { if (String(l.column || '').startsWith('stg_') && leadPipelineId(l) === json.id && !ids.has(l.column)) l.column = 'col-entrada'; });
+        closeModals();
+        renderPipelineSelect();
+        renderBoard();
+        showToast('Funil salvo.', 'success');
+    } catch (e) {
+        showToast(e.message, 'danger');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function pleDeletePipeline() {
+    if (!_pleDraft || _pleDraft.id === DEFAULT_PIPELINE_ID) return;
+    const n = leads.filter(l => leadPipelineId(l) === _pleDraft.id).length;
+    const msg = n > 0
+        ? `Excluir o funil "${_pleDraft.nome}"? Os ${n} lead(s) dele vão para o funil Principal (quem estiver numa etapa personalizada volta para a Entrada).`
+        : `Excluir o funil "${_pleDraft.nome}"?`;
+    if (!await customConfirm(msg, 'Excluir funil')) return;
+    try {
+        const res = await fetch(`/api/pipelines/${encodeURIComponent(_pleDraft.id)}`, { method: 'DELETE' });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || 'Não foi possível excluir o funil.');
+        pipelines = pipelines.filter(p => p.id !== _pleDraft.id);
+        closeModals();
+        switchKanbanPipeline(DEFAULT_PIPELINE_ID);
+        fetchLeadsFromServer(true);
+        showToast('Funil excluído.', 'success');
+    } catch (e) {
+        showToast(e.message, 'danger');
+    }
+}
+
 function renderBoard() {
 updateKanbanEntradaBadge();
-document.querySelectorAll('.card-list').forEach(col => col.innerHTML = '');
+renderKanbanColumns();
+document.querySelectorAll('#kanban-board .card-list').forEach(col => col.innerHTML = '');
 
 // Popular filtro de responsáveis com TODOS os atendentes cadastrados (não só
 // quem já tem lead atribuído — senão quem ainda não recebeu nenhum lead some do filtro).
@@ -1012,6 +1422,33 @@ optionsHTML += `<option value="${escapeHtml(owner)}">${escapeHtml(resolveDisplay
 if (ownerSelect.innerHTML !== optionsHTML) {
 ownerSelect.innerHTML = optionsHTML;
 ownerSelect.value = currentOwnerVal; // Restore selection if it existed
+}
+}
+
+// Popular filtro de Origem dinamicamente a partir dos leads reais — antes era uma
+// lista fixa no HTML, então uma origem nova (ex: um canal de anúncio diferente)
+// ficava invisível no filtro mesmo estando nos leads. A comparação em renderBoard
+// é por prefixo (startsWith), então agrupamos "Meta Ads: Campanha X" sob a família
+// "Meta Ads" — senão o dropdown vira uma lista enorme de nomes de campanha.
+const origemSelect = document.getElementById('filter-origem');
+if (origemSelect) {
+const currentOrigemVal = origemSelect.value;
+const origemFamilies = Array.from(new Set(
+    leads.filter(l => l.origem).map(l => {
+        const o = l.origem.trim();
+        const idx = o.indexOf(':');
+        return idx > -1 ? o.slice(0, idx).trim() : o;
+    })
+)).sort((a, b) => a.localeCompare(b));
+
+let origemOptionsHTML = '<option value="">🎯 Todas as Origens</option>';
+origemFamilies.forEach(origem => {
+origemOptionsHTML += `<option value="${escapeHtml(origem)}">${escapeHtml(origem)}</option>`;
+});
+
+if (origemSelect.innerHTML !== origemOptionsHTML) {
+origemSelect.innerHTML = origemOptionsHTML;
+origemSelect.value = currentOrigemVal;
 }
 }
 
@@ -1052,7 +1489,9 @@ const dateStart = document.getElementById('filter-date-start')?.value || '';
 const dateEnd = document.getElementById('filter-date-end')?.value || '';
 const hasSchedule = document.getElementById('filter-has-schedule')?.checked || false;
 
+const activePipelineId = getCurrentPipeline().id;
 const filteredLeads = leads.filter(lead => {
+if (leadPipelineId(lead) !== activePipelineId) return false;
 // Busca textual
 if (searchVal) {
 const nome = (lead.nome || '').toLowerCase();
@@ -1088,7 +1527,9 @@ if (sortSel && sortSel.value !== sortKey) sortSel.value = sortKey;
 const sortedLeads = sortLeadsForBoard(filteredLeads, sortKey);
 
 sortedLeads.forEach(lead => {
-const col = document.getElementById(lead.column);
+// Coluna que não existe neste funil (ex.: id antigo) cai na Entrada em vez de sumir.
+const col = document.querySelector(`#kanban-board .card-list[id="${CSS.escape(lead.column || '')}"]`)
+    || document.getElementById('col-entrada');
 if (col) {
 const card = document.createElement('div');
 // Dentro de "Follow Up" (col-perdido), diferencia visualmente quem foi
@@ -1137,7 +1578,7 @@ if (lead.notas) {
 metadataIconsHTML += `<i class="fa-regular fa-note-sticky" style="color: var(--accent-warning); margin-right: 4px;" title="Possui observações salvas"></i> `;
 }
 if (orcItems.length > 0) {
-metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: #38bdf8; margin-right: 4px;" title="Orçamento Gerado"></i> `;
+metadataIconsHTML += `<i class="fa-solid fa-file-invoice-dollar" style="color: var(--accent-primary); margin-right: 4px;" title="Orçamento Gerado"></i> `;
 }
 if (lead.agendamento) {
 metadataIconsHTML += `<i class="fa-regular fa-calendar-check" style="color: #2dd4bf; margin-right: 4px;" title="Agendamento Marcado: ${lead.agendamento.data} às ${lead.agendamento.hora}"></i> `;
@@ -1196,7 +1637,7 @@ card.innerHTML = `
 ${avatarHTML}
 <div style="overflow: hidden; flex: 1; min-width: 0;">
 <div class="card-title" title="${escapeHtml(lead.nome)}">${escapeHtml(lead.nome)}</div>
-<div style="font-size: 0.8rem; font-weight: 500; color: #38bdf8; margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px;"></i> ${procedimentoName}</div>
+<div style="font-size: 0.8rem; font-weight: 500; color: var(--accent-primary); margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px;"></i> ${procedimentoName}</div>
 </div>
 </div>
 
@@ -1218,18 +1659,28 @@ col.appendChild(card);
 }
 });
 
-// Atualiza contadores e estatísticas de oportunidades
-['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho', 'col-perdido'].forEach(id => {
-const columnLeads = leads.filter(l => l.column === id);
+// Coluna sem nenhum lead: mostra a mascote da Gonecta em vez de ficar em branco.
+document.querySelectorAll('#kanban-board .card-list').forEach(col => {
+    if (col.children.length === 0) {
+        col.innerHTML = `<div class="kanban-column-empty">
+            <img src="vendor/illustrations/gonecta-bird-neutro.png" alt="" class="kanban-column-empty-bird" onerror="this.remove()">
+            <span>Nenhum lead aqui ainda</span>
+        </div>`;
+    }
+});
+
+// Contadores e soma de oportunidades por etapa — só os leads deste funil.
+const pipelineLeads = leads.filter(l => leadPipelineId(l) === activePipelineId);
+getCurrentPipeline().stages.forEach(stage => {
+const suffix = stage.id.replace(/^col-/, '');
+const columnLeads = pipelineLeads.filter(l => l.column === stage.id);
 const count = columnLeads.length;
 
-// Pacientes count
-const countEl = document.getElementById('count-' + id.replace('col-', ''));
+const countEl = document.getElementById('count-' + suffix);
 if (countEl) {
 countEl.innerText = count === 1 ? '1 paciente' : `${count} pacientes`;
 }
 
-// Soma valores potenciais
 let totalVal = 0;
 columnLeads.forEach(l => {
 let val = 0;
@@ -1241,7 +1692,7 @@ val = parseOrcamentoArray(l.orcamento).reduce((sum, item) => sum + (parseFloat(i
 totalVal += val;
 });
 
-const valEl = document.getElementById('value-' + id.replace('col-', ''));
+const valEl = document.getElementById('value-' + suffix);
 if (valEl) {
 if (totalVal > 0) {
 valEl.innerText = totalVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ' em oportunidades';
@@ -1249,27 +1700,6 @@ valEl.style.display = 'inline';
 } else {
 valEl.style.display = 'none';
 }
-}
-
-// Se a coluna estiver vazia, renderiza o estado vazio
-const colList = document.getElementById(id);
-if (colList && colList.children.length === 0) {
-const emptyMessages = {
-'col-entrada': { title: 'Nenhuma nova oportunidade', desc: 'Novos pacientes aparecerão aqui conforme entrarem no CRM.', icon: 'fa-inbox' },
-'col-contatado': { title: 'Nenhum contato recente', desc: 'Pacientes que já receberam mensagem comercial ficarão aqui.', icon: 'fa-comment-medical' },
-'col-orcado': { title: 'Nenhum orçamento enviado', desc: 'Pacientes com valores em negociação aparecerão nesta etapa.', icon: 'fa-file-invoice-dollar' },
-'col-agendado': { title: 'Nenhum agendamento marcado', desc: 'Pacientes com consulta ou procedimento agendado ficarão aqui.', icon: 'fa-calendar-check' },
-'col-ganho': { title: 'Sem conversões recentes', desc: 'Os pacientes com pacotes fechados aparecerão aqui.', icon: 'fa-circle-check' },
-'col-perdido': { title: 'Nada em follow up', desc: 'Leads que precisam de acompanhamento / retomada de contato ficarão nesta etapa.', icon: 'fa-arrow-rotate-left' }
-};
-const msg = emptyMessages[id] || { title: 'Sem registros', desc: 'Nenhum paciente nesta etapa.', icon: 'fa-folder-open' };
-colList.innerHTML = `
-<div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 1.5rem 0.85rem; color: var(--text-muted); opacity: 0.6; min-height: 120px; border: 1.5px dashed var(--border-color); border-radius: 8px; margin: 0.5rem 0; width: 100%; box-sizing: border-box;">
-<i class="fa-solid ${msg.icon}" style="font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--border-color);"></i>
-<div style="font-size: 0.8rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.15rem;">${msg.title}</div>
-<div style="font-size: 0.72rem; line-height: 1.3;">${msg.desc}</div>
-</div>
-`;
 }
 });
 }
@@ -1805,7 +2235,8 @@ async function saveNewLead() {
         born,
         email,
         fb_click_id,
-        column: window.currentNewLeadColumn || 'col-entrada'
+        column: window.currentNewLeadColumn || 'col-entrada',
+        pipeline_id: currentPipelineId === DEFAULT_PIPELINE_ID ? null : currentPipelineId
     };
 
     leads.push(newLead);
@@ -2725,7 +3156,7 @@ async function addOrcamentoItem() {
         if (!res.ok) throw new Error(data.error || 'Erro ao adicionar orçamento');
 
         lead.orcamento = JSON.stringify(data.items);
-        lead.column = 'col-orcado';
+        if (!String(lead.column || '').startsWith('stg_')) lead.column = 'col-orcado';
         renderBoard();
         cancelEditOrcamentoItem();
         renderOrcamentoItemsList(id);
@@ -3641,9 +4072,9 @@ function renderContatos() {
     }
 
     tbody.innerHTML = rows.map(r => {
-        const col = KANBAN_COLUMNS[r.column];
+        const col = kanbanStageInfo(r.column, r.pipeline_id);
         const etapa = col
-            ? `<span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:${col.color};"><i class="fa-solid ${col.icon}" style="font-size:0.7rem;"></i> ${col.label}</span>`
+            ? `<span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:${col.color};"><i class="${col.icon}" style="font-size:0.7rem;"></i> ${escapeHtml(col.label)}</span>`
             : `<span style="color:var(--text-muted);">—</span>`;
         const nomeRaw = (r.nome || 'Lead WhatsApp').trim();
         const nomeSafe = escapeHtml(nomeRaw);
@@ -3702,7 +4133,7 @@ function exportContatosCSV() {
     };
     const lines = [header.join(',')];
     contatosData.forEach(r => {
-        const col = KANBAN_COLUMNS[r.column];
+        const col = kanbanStageInfo(r.column, r.pipeline_id);
         lines.push([
             r.nome || '', r.phone || '', r.origem || '', col ? col.label : '',
             fmtContatoDate(r.first_contact), fmtContatoDate(r.last_contact),
@@ -3812,7 +4243,7 @@ function renderProcedimentoCard(item) {
             <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="procedimento" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('procedimento')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 10%, transparent); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
                         <i class="fa-solid fa-user"></i>
                     </div>
                     ${escapeHtml(p.name)}
@@ -4105,7 +4536,7 @@ function renderPosVendaCard(item) {
             <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="posvenda" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('posvenda')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 10%, transparent); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
                         <i class="fa-solid fa-user"></i>
                     </div>
                     ${escapeHtml(p.name)}
@@ -4137,7 +4568,7 @@ function renderFaltantesCard(item) {
             <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="faltantes" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('faltantes')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 10%, transparent); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
                         <i class="fa-solid fa-user"></i>
                     </div>
                     ${escapeHtml(p.name)}
@@ -4168,7 +4599,7 @@ function renderSumidosCard(item) {
             <td style="text-align: center;" class="rel-select-col"><input type="checkbox" class="rel-select" data-tipo="sumidos" data-id="${escapeHtml(String(p.id))}" data-nome="${escapeHtml(p.name)}" data-telefone="${escapeHtml(p.phone || '')}" onchange="updateRelBulkBar('sumidos')"></td>
             <td style="font-weight: 500;">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 10%, transparent); display: flex; align-items: center; justify-content: center; color: var(--accent-primary);">
                         <i class="fa-solid fa-user"></i>
                     </div>
                     ${escapeHtml(p.name)}
@@ -5025,6 +5456,7 @@ function finishLogin(user) {
         btnAiAgent.style.display = (loggedUser.role === 'admin' || loggedUser.username === 'admin') ? 'flex' : 'none';
     }
 
+    fetchPipelines();
     fetchLeadsFromServer();
     fetchApiOptions();
     startNotificationPolling();
@@ -5066,13 +5498,17 @@ function renderHotLeadsBadge() {
     const atrasado = piorEsperaMs >= HOT_LEAD_SLA_MS;
 
     el.style.display = 'flex';
-    // Faixa de largura total, fundo cheio: vermelho forte quando atrasado,
-    // laranja forte caso contrário. Texto e ícone brancos.
-    el.style.background = atrasado ? '#dc2626' : '#ea580c';
+    // Faixa tingida (não chapada): o vermelho cheio competia com a cor da marca
+    // e gritava mais que a própria lista. Só o ícone pulsa quando há atraso.
+    const tone = atrasado ? 'var(--accent-danger)' : 'var(--accent-warning)';
+    el.style.background = `color-mix(in srgb, ${tone} 12%, var(--bg-card))`;
     el.style.border = 'none';
-    el.style.borderTop = el.style.borderBottom = '1px solid rgba(0, 0, 0, 0.18)';
-    el.style.color = '#fff';
-    el.style.animation = atrasado ? 'hotLeadPulse 1.5s ease-in-out infinite' : 'none';
+    el.style.borderTop = el.style.borderBottom = `1px solid color-mix(in srgb, ${tone} 28%, transparent)`;
+    el.style.boxShadow = `inset 3px 0 0 ${tone}`;
+    el.style.color = tone;
+    el.style.animation = 'none';
+    const icon = el.querySelector('i');
+    if (icon) icon.style.animation = atrasado ? 'hotLeadPulse 1.5s ease-in-out infinite' : 'none';
 
     const plural = quentes.length > 1;
     if (quentes.length === 1 && quentes[0].nome) {
@@ -5110,7 +5546,7 @@ function computeAiAgentFunnel() {
     const counts = {};
     leads.forEach(l => {
         const col = l.column_id || l.column || 'col-entrada';
-        const label = (typeof KANBAN_COLUMNS !== 'undefined' && KANBAN_COLUMNS[col]) ? KANBAN_COLUMNS[col].label : col;
+        const label = kanbanStageInfo(col, l.pipeline_id).label;
         counts[label] = (counts[label] || 0) + 1;
     });
     const quentes = leads.filter(l => l.qualificado_em).length;
@@ -5739,7 +6175,7 @@ async function submitForceChangePassword() {
     }
 }
 
-let seenNotifications = new Set();
+let seenNotifications = new Map(); // id -> versão (created_at|count)
 let unreadNotifications = 0;
 let isFirstLoad = true;
 
@@ -5767,25 +6203,82 @@ async function logout() {
     location.reload();
 }
 
+// Notificação "lead respondeu": uma por lead, atualizada a cada mensagem nova.
+function buildReplyNotifItem(n, timeStr) {
+    let x = {};
+    try { x = JSON.parse(n.extra || '{}') || {}; } catch (e) {}
+    const nome = x.nome || 'Lead';
+    const count = Number(n.count) || 1;
+    const avatar = typeof renderAvatarHTML === 'function'
+        ? renderAvatarHTML(nome, null, null, 32)
+        : `<span class="notif-icon notif-icon--lead"><i class="fa-solid fa-comment"></i></span>`;
+    const dono = x.responsavel
+        ? `<span class="notif-reply-owner"><i class="fa-solid fa-user"></i> ${escapeHtml(x.responsavel)}</span>`
+        : `<span class="notif-reply-owner notif-reply-owner--none"><i class="fa-solid fa-user-slash"></i> Sem responsável</span>`;
+
+    const item = document.createElement('div');
+    item.className = 'notif-item notif-item--reply notif-item--click';
+    item.setAttribute('role', 'button');
+    item.tabIndex = 0;
+    item.dataset.phone = n.action_phone || '';
+    item.innerHTML = `
+        <div class="notif-reply-avatar">${avatar}</div>
+        <div class="notif-body">
+            <div class="notif-reply-head">
+                <span class="notif-reply-name">${escapeHtml(nome)}</span>
+                ${count > 1 ? `<span class="notif-reply-count" title="${count} mensagens novas">${count > 99 ? '99+' : count}</span>` : ''}
+                <span class="notif-time">${timeStr}</span>
+            </div>
+            <p class="notif-text notif-reply-preview">${escapeHtml(x.preview || '')}</p>
+            ${dono}
+        </div>`;
+    const go = () => { item.remove(); notifOpenChat(n.action_phone); };
+    item.addEventListener('click', go);
+    item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+    return item;
+}
+
+// Abriu a conversa por outro caminho (lista do chat, Kanban...): o servidor já
+// apaga a notificação no mark-read; aqui só tira da tela sem esperar o poll.
+function dismissReplyNotif(phone) {
+    if (!phone || typeof isSamePhone !== 'function') return;
+    document.querySelectorAll('#notifications-list .notif-item--reply').forEach(el => {
+        if (el.dataset.phone && isSamePhone(el.dataset.phone, phone)) el.remove();
+    });
+}
+
 async function fetchNotifications() {
     try {
         const res = await fetch('/api/notifications');
         const data = await res.json();
         const listContainer = document.getElementById('notifications-list');
-        
+
         // Os mais novos vêm primeiro (DESC no backend), vamos reverter pra mostrar em ordem pro user
         data.reverse().forEach(n => {
-            if (!seenNotifications.has(n.id)) {
-                seenNotifications.add(n.id);
-                // Apenas preenchemos a lista (sem popup toast)
-                
+            // Versão: a notificação agrupada de resposta mantém o id e muda
+            // horário/contador — versão nova = redesenha e sobe pro topo.
+            const versao = `${n.created_at}|${n.count || 1}`;
+            if (seenNotifications.get(n.id) !== versao) {
+                seenNotifications.set(n.id, versao);
+                if (listContainer) {
+                    const antigo = listContainer.querySelector(`[data-notif-id="${CSS.escape(String(n.id))}"]`);
+                    if (antigo) antigo.remove();
+                }
+
                 // Remove o placeholder se existir
                 if (listContainer && listContainer.innerHTML.includes('Nenhuma notificação')) {
                     listContainer.innerHTML = '';
                 }
-                
+
                 // Adiciona na lista do menu
-                if (listContainer) {
+                if (listContainer && n.kind === 'reply') {
+                    let timeStr = '';
+                    const ms = (typeof parseD1TimestampMs === 'function') ? parseD1TimestampMs(n.created_at) : NaN;
+                    if (ms) timeStr = new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const item = buildReplyNotifItem(n, timeStr);
+                    item.dataset.notifId = String(n.id);
+                    listContainer.prepend(item);
+                } else if (listContainer) {
                     // created_at vem em UTC do D1 (CURRENT_TIMESTAMP) — precisa converter
                     // pro fuso do navegador, não só recortar a string (senão fica 3h adiantado).
                     let timeStr = '';
@@ -5827,6 +6320,7 @@ async function fetchNotifications() {
                         item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
                     }
                     item.innerHTML = `${iconHTML}<div class="notif-body"><span class="notif-time">${timeStr}</span><p class="notif-text">${escapeHtml(cleanMsg)}</p>${isHandoff ? '<span class="notif-cta">Abrir conversa →</span>' : ''}</div>`;
+                    item.dataset.notifId = String(n.id);
                     listContainer.prepend(item);
 
                     if (!isFirstLoad && isHandoff) playQualifiedChime();
@@ -5846,6 +6340,17 @@ async function fetchNotifications() {
                 }
             }
         });
+        // Notificação de resposta que sumiu do servidor (alguém abriu a conversa):
+        // tira da lista aqui também.
+        if (listContainer) {
+            const vivas = new Set(data.filter(n => n.kind === 'reply').map(n => String(n.id)));
+            listContainer.querySelectorAll('.notif-item--reply').forEach(el => {
+                if (!vivas.has(el.dataset.notifId)) {
+                    seenNotifications.delete(el.dataset.notifId);
+                    el.remove();
+                }
+            });
+        }
         isFirstLoad = false;
     } catch(e) {}
 }
@@ -7231,10 +7736,10 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
         return v || fallback;
     };
-    const accent = cssVar('--accent-primary', '#38bdf8');
+    const accent = cssVar('--accent-primary', '#E03720');
     const accentFill = isDark
-        ? ['rgba(56,189,248,0.38)', 'rgba(56,189,248,0.08)', 'rgba(56,189,248,0)']
-        : ['rgba(2,132,199,0.22)', 'rgba(2,132,199,0.05)', 'rgba(2,132,199,0)'];
+        ? ['rgba(224,55,32,0.38)', 'rgba(224,55,32,0.08)', 'rgba(224,55,32,0)']
+        : ['rgba(224,55,32,0.22)', 'rgba(224,55,32,0.05)', 'rgba(224,55,32,0)'];
     // Alternativa textual dos gráficos <canvas> — leitor de tela não lê pixels.
     const setChartAria = (id, label) => {
         const c = document.getElementById(id);
@@ -7384,7 +7889,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 return `<div style="display:flex;align-items:center;gap:0.75rem;">
                     <span style="flex:0 0 78px;font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${d.label}</span>
                     <div style="flex:1;height:20px;background:var(--bg-hover);border-radius:6px;overflow:hidden;">
-                        <div style="width:${Math.max(pct,2)}%;height:100%;background:linear-gradient(90deg,#7dd3fc,#0284c7);"></div>
+                        <div style="width:${Math.max(pct,2)}%;height:100%;background:linear-gradient(90deg,#f3836f,#E03720);"></div>
                     </div>
                     <span style="flex:0 0 auto;min-width:3ch;text-align:right;font-size:0.85rem;font-weight:700;color:var(--text-main);">${formatValue(d.value)}</span>
                 </div>`;
@@ -7395,8 +7900,8 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
             <defs>
                 <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%"   stop-color="#7dd3fc"/>
-                    <stop offset="100%" stop-color="#0284c7"/>
+                    <stop offset="0%"   stop-color="#f3836f"/>
+                    <stop offset="100%" stop-color="#E03720"/>
                 </linearGradient>
             </defs>`;
         
@@ -7489,7 +7994,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     // Origem Doughnut Chart
     const origemLabels = Object.keys(origemMap);
     const origemValues = Object.values(origemMap);
-    const origemColors = ['#60a5fa', '#f59e0b', '#10b981', '#2dd4bf', '#38bdf8', '#fb923c', '#f472b6'];
+    const origemColors = ['#E03720', '#f59e0b', '#10b981', '#2dd4bf', '#711100', '#fb923c', '#f472b6'];
 
     const ctxOrigem = document.getElementById('origemChart');
     if (ctxOrigem) {
@@ -7567,6 +8072,10 @@ async function getEligibleCampaignLeads(targetCol, templateName, skipRepeated) {
         candidateLeads = audience
             ? filterLeadsByAudience(audience).filter(l => l.telefone && l.telefone.trim() !== '')
             : [];
+    } else if (targetCol.startsWith('stage:')) {
+        // "stage:<funil>:<etapa>" — com vários funis, "Contatado" sozinho misturaria todos.
+        const [, pid, colId] = targetCol.split(':');
+        candidateLeads = leads.filter(l => leadPipelineId(l) === pid && l.column === colId && l.telefone && l.telefone.trim() !== '');
     } else {
         candidateLeads = leads.filter(l => l.column === targetCol && l.telefone && l.telefone.trim() !== '');
     }
@@ -8255,9 +8764,6 @@ async function deleteWhatsappTemplate(name) {
 // === CONTROLE DE MENU DE OPÇÕES DO CARD (⋮ e botão direito) ===
 let activeCardMenuId = null;
 
-// Ordem do funil pra "mover pra próxima etapa" (Follow Up / col-perdido fica de fora).
-const KANBAN_FUNNEL_ORDER = ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho'];
-
 function closeCardMenu() {
     const menu = document.getElementById('card-global-dropdown');
     if (menu) menu.style.display = 'none';
@@ -8287,9 +8793,8 @@ function showCardMenu(leadId, x, y) {
     // rótulo do "avançar" com o nome da próxima etapa
     const avLabel = document.getElementById('card-ctx-avancar-label');
     if (avLabel && lead) {
-        const i = KANBAN_FUNNEL_ORDER.indexOf(lead.column);
-        const next = i >= 0 && i < KANBAN_FUNNEL_ORDER.length - 1 ? KANBAN_FUNNEL_ORDER[i + 1] : null;
-        avLabel.textContent = next ? `Mover p/ ${(KANBAN_COLUMNS[next] || {}).label || 'próxima etapa'}` : 'Já na última etapa';
+        const next = nextStageFor(lead);
+        avLabel.textContent = next ? `Mover p/ ${getStageMeta(next, leadPipelineId(lead)).nome}` : 'Já na última etapa';
         avLabel.parentElement.disabled = !next;
     }
 
@@ -8336,8 +8841,9 @@ window.triggerCardAction = async function(action) {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
 
-    // Etiquetas abre um submenu — não fecha o menu.
+    // Etiquetas e Funil abrem um submenu — não fecham o menu.
     if (action === 'etiquetas') { renderCardCtxTags(leadId); return; }
+    if (action === 'funil') { renderCardCtxPipelines(leadId); return; }
 
     closeCardMenu();
 
@@ -8362,12 +8868,11 @@ window.triggerCardAction = async function(action) {
 async function advanceLeadStage(leadId) {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
-    const i = KANBAN_FUNNEL_ORDER.indexOf(lead.column);
-    if (i < 0 || i >= KANBAN_FUNNEL_ORDER.length - 1) {
+    const target = nextStageFor(lead);
+    if (!target) {
         showToast('Este lead já está na última etapa.', 'success');
         return;
     }
-    const target = KANBAN_FUNNEL_ORDER[i + 1];
     lead.column = target;
     renderBoard();
     await updateLeadColumnOnServer(leadId, target);
@@ -8575,13 +9080,11 @@ document.addEventListener('visibilitychange', () => {
                 if (loggedUser) fetchLeadsFromServer(true);
             }, 90000);
         }
-        if (!window.globalChatCheckInterval) {
-            window.globalChatCheckInterval = setInterval(() => {
-                if (typeof loadChats === 'function') loadChats(true);
-                if (window.currentActiveChat && document.getElementById('view-chat')?.style.display !== 'none') {
-                    if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
-                }
-            }, 45000);
+        // Voltou pra aba: busca a lista na hora (pode ter chegado mensagem com ela
+        // escondida) e retoma o ciclo normal.
+        if (!window.globalChatCheckInterval && typeof startGlobalChatCheck === 'function') {
+            if (typeof loadChats === 'function') loadChats(true);
+            startGlobalChatCheck();
         }
         if (loggedUser && !window.notifPollInterval && typeof startNotificationPolling === 'function') {
             startNotificationPolling();
@@ -8596,21 +9099,13 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // === LEAD PROFILE PANEL ===
-// Cores alinhadas com o Kanban (index.html/style.css) e o badge de estágio do
-// chat (wa_chat_logic.js stageMap) — antes esse mapa tinha valores próprios,
-// divergentes dos outros 3 lugares, e a ficha completa do lead (openLeadProfile)
-// mostrava uma cor de etapa diferente da que aparecia no board e no chat.
-// "Entrada" saiu do verde (idêntico ao "Ganho") pra um neutro — a etapa de
-// chegada não deveria visualmente "roubar" a cor reservada pra sucesso.
-const KANBAN_COLUMNS = {
-    'col-entrada':     { label: 'Novo Lead',    color: '#64748b',  icon: 'fa-inbox' },
-    'col-contatado':   { label: 'Contatado',    color: '#fbbf24',  icon: 'fa-phone' },
-    'col-orcado':      { label: 'Orçado',       color: '#38bdf8',  icon: 'fa-file-invoice-dollar' },
-    'col-agendado':    { label: 'Agendado',     color: '#2dd4bf',  icon: 'fa-calendar-check' },
-    'col-ganho':       { label: 'Ganho',        color: '#10b981',  icon: 'fa-trophy' },
-    'col-perdido':     { label: 'Follow Up',    color: '#fb923c',  icon: 'fa-arrow-rotate-left' },
-    'col-atendimento': { label: 'Em Atendimento', color: '#2dd4bf', icon: 'fa-headset' },
-};
+// Nome/cor/ícone de uma etapa no formato que relatórios, ficha e histórico usam.
+// Vem do funil (que é renomeável e pode ter etapas próprias), não de um mapa fixo.
+function kanbanStageInfo(colId, pipelineId) {
+    if (!colId) return null;
+    const s = getStageMeta(colId, pipelineId);
+    return { label: s.nome, color: s.cor, icon: s.icone };
+}
 
 let _lppCurrentLeadId = null;
 
@@ -8794,7 +9289,9 @@ async function openLeadProfile(leadId) {
 
     // Avatar
     const avatarEl = document.getElementById('lpp-avatar');
-    avatarEl.textContent = lppInitials(lead.nome);
+    avatarEl.innerHTML = typeof renderAvatarHTML === 'function'
+        ? renderAvatarHTML(lead.nome, null, null, 56)
+        : escapeHtml(lppInitials(lead.nome));
 
     // Nome e contato
     document.getElementById('lpp-name').textContent = lead.nome || '—';
@@ -8818,13 +9315,15 @@ async function openLeadProfile(leadId) {
     }
 
     // Coluna/etapa
-    const colInfo = KANBAN_COLUMNS[lead.column] || { label: lead.column, color: 'var(--text-muted)', icon: 'fa-circle' };
-    document.getElementById('lpp-column-badge').innerHTML =
-        `<i class="fa-solid ${colInfo.icon}" style="color:${colInfo.color}"></i>
-         <span style="color:${colInfo.color}">${colInfo.label}</span>`;
-    document.getElementById('lpp-column-badge').style.background = colInfo.color + '18';
-    document.getElementById('lpp-column-badge').style.border = `1px solid ${colInfo.color}40`;
-    document.getElementById('lpp-column-badge').style.color = colInfo.color;
+    const colInfo = kanbanStageInfo(lead.column || 'col-entrada', leadPipelineId(lead));
+    const pipelineNome = pipelines.length > 1 ? `<span style="opacity:0.7;">${escapeHtml(getPipeline(leadPipelineId(lead)).nome)} ·</span> ` : '';
+    const badge = document.getElementById('lpp-column-badge');
+    badge.innerHTML =
+        `<i class="${colInfo.icon}" style="color:${colInfo.color}"></i>
+         <span style="color:${colInfo.color}">${pipelineNome}${escapeHtml(colInfo.label)}</span>`;
+    badge.style.background = `color-mix(in srgb, ${colInfo.color} 10%, transparent)`;
+    badge.style.border = `1px solid color-mix(in srgb, ${colInfo.color} 25%, transparent)`;
+    badge.style.color = colInfo.color;
 
     // Origem
     const origemEl = document.getElementById('lpp-origem');
@@ -9026,7 +9525,7 @@ function lppEventDetailLabel(tipo, detalhe) {
     if (tipo === 'mudanca_coluna') {
         try {
             const { de, para } = JSON.parse(detalhe);
-            const label = (colId) => (typeof KANBAN_COLUMNS !== 'undefined' && KANBAN_COLUMNS[colId]) ? KANBAN_COLUMNS[colId].label : (colId || '—');
+            const label = (colId) => (kanbanStageInfo(colId) || { label: '—' }).label;
             return `${label(de)} → ${label(para)}`;
         } catch (e) { return ''; }
     }

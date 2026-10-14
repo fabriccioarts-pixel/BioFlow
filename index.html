@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BioFlow</title>
+    <title>Gonecta</title>
 
     <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
 
@@ -13,19 +13,19 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=9">
-    <link rel="icon" type="image/svg+xml" href="Favicon.svg">
+    <link rel="stylesheet" href="style.css?v=22">
+    <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
     <link rel="manifest" href="manifest.webmanifest">
-    <link rel="apple-touch-icon" href="icon.svg">
-    <meta name="theme-color" content="#12141c">
+    <link rel="apple-touch-icon" href="favicon.png">
+    <meta name="theme-color" content="#E03720">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Clínica CRM">
+    <meta name="apple-mobile-web-app-title" content="Gonecta">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
-        .sb-logo-full { height: 42px; width: auto; max-width: 230px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-full { height: 24px; width: auto; max-width: 178px; object-fit: contain; object-position: left center; display: block; flex-shrink: 0; }
         .sb-logo-mark { height: 36px; width: 36px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
@@ -338,10 +338,12 @@
         style="z-index: 100001; background: var(--bg-main); display: flex; align-items: center; justify-content: center; padding: 1rem;">
         
         <div class="auth-card-container">
+            <img src="vendor/illustrations/gonecta-bird-estilo.png" alt="" aria-hidden="true" class="auth-mascot"
+                onerror="this.remove()">
             <div class="auth-brand">
-                <img src="bioflow%20logo.svg" alt="BioFlow" class="auth-logo-img"
-                    style="height: 54px; width: auto; max-width: 320px; object-fit: contain; display: block;"
-                    onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'BioFlow'}))">
+                <img src="vendor/illustrations/gonecta-logo-dark.png" alt="Gonecta" class="auth-logo-img"
+                    style="height: 42px; width: auto; max-width: 320px; object-fit: contain; display: block;"
+                    onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'Gonecta'}))">
             </div>
 
             <div class="auth-card-outer">
@@ -413,9 +415,9 @@
 
     <header>
         <div class="sb-logo">
-            <img src="bioflow%20logo.svg" alt="BioFlow" class="sb-logo-img sb-logo-full"
-                onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-dna'}))">
-            <img src="Favicon.svg" alt="" aria-hidden="true" class="sb-logo-mark"
+            <img src="vendor/illustrations/gonecta-logo-dark.png" alt="Gonecta" class="sb-logo-img sb-logo-full"
+                onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'Gonecta'}))">
+            <img src="favicon.png" alt="" aria-hidden="true" class="sb-logo-mark"
                 onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">
@@ -672,9 +674,30 @@
     <div class="view-section" id="view-kanban"
         style="display: none; flex-direction: column; min-height: 0; background: var(--bg-main);">
         <!-- KANBAN OWNER TABS -->
-        <div class="kanban-owner-tabs" style="padding: 1rem 2rem 0; display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
+        <div class="kanban-owner-tabs" style="padding: 1rem 2rem 0; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
             <button id="ktab-all" onclick="switchKanbanOwnerTab('all')" class="kanban-tab-btn active">Todos os Leads</button>
             <button id="ktab-me" onclick="switchKanbanOwnerTab('me')" class="kanban-tab-btn">Meus Leads</button>
+
+            <!-- Seletor de funil -->
+            <!-- Seletor de funil: só o nome; trocar/editar/criar ficam no menu -->
+            <div class="kpl" id="kpl">
+                <button type="button" class="kpl-trigger" id="kpl-trigger" onclick="toggleKplMenu(event)"
+                    aria-haspopup="menu" aria-expanded="false" title="Trocar ou editar funil">
+                    <span id="kpl-current">Principal</span>
+                    <i class="fa-solid fa-chevron-down kpl-caret" aria-hidden="true"></i>
+                </button>
+                <div class="kpl-menu" id="kpl-menu" role="menu" hidden>
+                    <div class="kpl-menu-label">Funis</div>
+                    <div id="kpl-list"></div>
+                    <div class="kpl-sep"></div>
+                    <button type="button" class="kpl-item" role="menuitem" onclick="closeKplMenu(); openPipelineEditor();">
+                        <i class="fa-solid fa-pen" aria-hidden="true"></i> Editar etapas
+                    </button>
+                    <button type="button" class="kpl-item" role="menuitem" onclick="closeKplMenu(); createPipelinePrompt();">
+                        <i class="fa-solid fa-plus" aria-hidden="true"></i> Novo funil
+                    </button>
+                </div>
+            </div>
         </div>
         
         <!-- KANBAN FILTERS (Fase 1.2) -->
@@ -754,121 +777,8 @@
 
         </div>
 
-        <div class="board" style="flex-grow: 1; padding: 1.5rem 2rem; overflow-y: auto;">
-            <!-- Coluna: Entrada -->
-            <div class="column col-entrada">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-solid fa-inbox" style="color: #64748b;"></i> Entrada
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-entrada">
-                        <span class="column-stats-patients" id="count-entrada">0 pacientes</span>
-                        <span class="column-stats-value" id="value-entrada">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-entrada" ondragover="allowDrop(event)"
-                    ondrop="drop(event, 'col-entrada')"></div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-entrada')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-
-            <!-- Coluna: Contatado -->
-            <div class="column col-contatado">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-brands fa-whatsapp" style="color: #fbbf24;"></i> Contatado
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-contatado">
-                        <span class="column-stats-patients" id="count-contatado">0 pacientes</span>
-                        <span class="column-stats-value" id="value-contatado">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-contatado" ondragover="allowDrop(event)"
-                    ondrop="drop(event, 'col-contatado')"></div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-contatado')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-
-            <!-- Coluna: Orçado -->
-            <div class="column col-orcado">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-solid fa-file-invoice-dollar" style="color: #38bdf8;"></i> Orçado
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-orcado">
-                        <span class="column-stats-patients" id="count-orcado">0 pacientes</span>
-                        <span class="column-stats-value" id="value-orcado">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-orcado" ondragover="allowDrop(event)" ondrop="drop(event, 'col-orcado')">
-                </div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-orcado')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-
-            <!-- Coluna: Agendado -->
-            <div class="column col-agendado">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-solid fa-calendar-check" style="color: #2dd4bf;"></i> Agendado
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-agendado">
-                        <span class="column-stats-patients" id="count-agendado">0 pacientes</span>
-                        <span class="column-stats-value" id="value-agendado">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-agendado" ondragover="allowDrop(event)"
-                    ondrop="drop(event, 'col-agendado')"></div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-agendado')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-
-            <!-- Coluna: Ganho -->
-            <div class="column col-ganho">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-solid fa-trophy" style="color: #10b981;"></i> Ganho
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-ganho">
-                        <span class="column-stats-patients" id="count-ganho">0 pacientes</span>
-                        <span class="column-stats-value" id="value-ganho">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-ganho" ondragover="allowDrop(event)" ondrop="drop(event, 'col-ganho')">
-                </div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-ganho')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-
-            <!-- Coluna: Follow Up -->
-            <div class="column col-perdido">
-                <div class="column-header">
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <div class="column-title">
-                            <i class="fa-solid fa-arrow-rotate-left" style="color: #fb923c;"></i> Follow Up
-                        </div>
-                    </div>
-                    <div class="column-stats" id="stats-perdido">
-                        <span class="column-stats-patients" id="count-perdido">0 pacientes</span>
-                        <span class="column-stats-value" id="value-perdido">R$ 0,00</span>
-                    </div>
-                </div>
-                <div class="card-list" id="col-perdido" ondragover="allowDrop(event)"
-                    ondrop="drop(event, 'col-perdido')"></div>
-                <button class="column-add-card-btn" onclick="openNewLeadModal('col-perdido')"
-                    title="Adicionar Lead nesta etapa"><i class="fa-solid fa-plus"></i></button>
-            </div>
-        </div>
+        <!-- Colunas montadas pelo JS a partir do funil selecionado (renderKanbanColumns) -->
+        <div class="board" id="kanban-board" style="flex-grow: 1; padding: 1.5rem 2rem; overflow-y: auto;"></div>
     </div>
 
     <!-- ABA: CAMPANHAS -->
@@ -1362,7 +1272,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div
                     style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
                     <div
-                        style="background: rgba(56,189,248,0.12); border-radius: 10px; padding: 0.6rem; color: #38bdf8; font-size: 1.1rem;">
+                        style="background: color-mix(in srgb, var(--accent-primary) 12%, transparent); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;">
                         <i class="fa-solid fa-hourglass-half"></i>
                     </div>
                     <span
@@ -1431,7 +1341,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div
                     style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
                     <div
-                        style="background: rgba(56,189,248,0.12); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;">
+                        style="background: color-mix(in srgb, var(--accent-primary) 12%, transparent); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;">
                         <i class="fa-solid fa-percent"></i>
                     </div>
                     <span
@@ -1526,7 +1436,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <div class="dash-kpi-card"
                 style="background: var(--sb-card-bg); border-radius: 14px; padding: 1.5rem; border: 1px solid var(--header-btn-border); position: relative; overflow: hidden;">
                 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1rem;">
-                    <div style="background: rgba(167,139,250,0.14); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;"><i class="fa-solid fa-gem"></i></div>
+                    <div style="background: color-mix(in srgb, var(--accent-primary) 14%, transparent); border-radius: 10px; padding: 0.6rem; color: var(--accent-primary); font-size: 1.1rem;"><i class="fa-solid fa-gem"></i></div>
                     <span style="font-size: 0.7rem; background: var(--header-btn-bg); color: var(--text-muted); padding: 0.2rem 0.55rem; border-radius: 20px; font-weight: 600;" title="Não muda com o período — é o valor acumulado por paciente ao longo de todo o histórico.">histórico</span>
                 </div>
                 <div id="dash-ltv-medio" style="font-size: 1.6rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.5px;">R$ 0,00</div>
@@ -2773,6 +2683,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     <i class="fa-solid fa-clock-rotate-left" style="color:var(--accent-primary)"></i>
                     <span class="fx-list-name">Follow-up automático</span>
                 </button>
+                <button class="fx-list-item fx-followup-entry" onclick="flowOpenApptReminder()" style="margin-top:0.35rem">
+                    <i class="fa-solid fa-calendar-check" style="color:var(--accent-primary)"></i>
+                    <span class="fx-list-name">Agenda e lembretes</span>
+                </button>
             </aside>
             <section class="fx-editor" id="fx-editor">
                 <div class="fx-empty"><i class="fa-solid fa-diagram-project"></i><span>Selecione um fluxo à esquerda ou crie um novo.</span></div>
@@ -3578,7 +3492,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             style="color: var(--accent-success);"></i> Mensagens</h2>
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                         <button type="button" onclick="openNewMessageModal()" title="Nova conversa a partir de um número"
-                            style="width: 34px; height: 34px; background: var(--accent-success); border: none; color: #fff; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;">
+                            style="width: 34px; height: 34px; background: var(--accent-primary); border: none; color: #fff; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;">
                             <i class="fa-solid fa-plus"></i>
                         </button>
 
@@ -3587,7 +3501,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <button type="button" id="chat-filter-toggle-btn" onclick="toggleChatFilterMenu(event)" title="Filtros e opções"
                                 style="width: 34px; height: 34px; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative;">
                                 <i class="fa-solid fa-ellipsis-vertical"></i>
-                                <span id="chat-filter-active-dot" style="display: none; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-success);"></span>
+                                <span id="chat-filter-active-dot" style="display: none; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary);"></span>
                             </button>
 
                             <div id="chat-filter-menu" class="dropdown-content"
@@ -3661,10 +3575,20 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <span id="hot-leads-badge-text">0 leads quentes esperando atendimento</span>
             </div>
             <!-- Barra de ação em lote (some quando não há seleção ativa) -->
-            <div id="chat-selection-bar" style="display: none; align-items: center; justify-content: space-between; padding: 0.65rem 1.5rem; background: rgba(239, 68, 68, 0.08); border-bottom: 1px solid rgba(239, 68, 68, 0.25); flex-shrink: 0;">
-                <span id="chat-selection-count" style="font-size: 0.82rem; font-weight: 600; color: var(--text-main);">0 selecionada(s)</span>
-                <div style="display: flex; gap: 0.5rem;">
+            <div id="chat-selection-bar" style="display: none; align-items: center; justify-content: space-between; padding: 0.65rem 1.5rem; background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); flex-shrink: 0; gap: 0.75rem; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <button type="button" onclick="selectAllVisibleChats()" title="Selecionar/desmarcar todas as conversas visíveis"
+                        style="background: none; border: 1px solid var(--border-color); color: var(--text-main); font-size: 0.78rem; padding: 0.35rem 0.65rem; border-radius: 6px; cursor: pointer;">
+                        <i class="fa-regular fa-square-check"></i> Todas
+                    </button>
+                    <span id="chat-selection-count" style="font-size: 0.82rem; font-weight: 600; color: var(--text-main);">0 selecionada(s)</span>
+                </div>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <button type="button" onclick="toggleChatSelectMode()" style="background: none; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer;">Cancelar</button>
+                    <button type="button" id="chat-selection-read-btn" onclick="markSelectedConversationsRead()" disabled
+                        style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); font-weight: 600; font-size: 0.78rem; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; opacity: 0.5; display: flex; align-items: center; gap: 0.35rem;">
+                        <i class="fa-solid fa-envelope-open"></i> Marcar como lida
+                    </button>
                     <button type="button" id="chat-selection-delete-btn" onclick="deleteSelectedConversations()" disabled
                         style="background: var(--accent-danger); border: none; color: #fff; font-weight: 600; font-size: 0.78rem; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; opacity: 0.5; display: flex; align-items: center; gap: 0.35rem;">
                         <i class="fa-solid fa-trash"></i> Apagar
@@ -3683,7 +3607,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <!-- Estado Vazio -->
             <div id="chat-empty-state"
                 style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); text-align: center; padding: 2rem;">
-                <img src="vendor/illustrations/undraw_group-chat_nze2.svg" alt=""
+                <img src="vendor/illustrations/gonecta-bird-message.png" alt=""
                     class="chat-empty-illustration" onerror="this.remove()">
                 <i class="fa-brands fa-whatsapp chat-empty-fallback-icon"></i>
                 <h3 class="chat-empty-title">Selecione uma conversa</h3>
@@ -5048,9 +4972,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- Scripts da Aplicação -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
-    <script src="wa_chat_logic.js"></script>
-    <script src="app.js"></script>
-    <script src="flows.js"></script>
+    <script src="wa_chat_logic.js?v=22"></script>
+    <script src="app.js?v=22"></script>
+    <script src="flows.js?v=22"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
     <!-- Menu de Contexto (botão direito) das conversas: não lido, favorito, fixar, arquivar -->
@@ -5164,7 +5088,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <i class="fa-solid fa-pen-to-square" style="color: var(--accent-warning);"></i> Ficha e Notas
             </button>
             <button class="card-ctx-item" id="card-menu-item-orc" onclick="triggerCardAction('orcamento')">
-                <i class="fa-solid fa-file-invoice-dollar" style="color: #38bdf8;"></i> Orçamento
+                <i class="fa-solid fa-file-invoice-dollar" style="color: var(--accent-primary);"></i> Orçamento
             </button>
             <div class="card-ctx-sep"></div>
             <button class="card-ctx-item" onclick="triggerCardAction('avancar')">
@@ -5173,6 +5097,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </button>
             <button class="card-ctx-item" onclick="triggerCardAction('etiquetas')">
                 <i class="fa-solid fa-tags" style="color: #c084fc;"></i> Etiquetas
+                <i class="fa-solid fa-chevron-right card-ctx-caret"></i>
+            </button>
+            <button class="card-ctx-item" id="card-menu-item-funil" onclick="triggerCardAction('funil')">
+                <i class="fa-solid fa-diagram-next" style="color: var(--text-muted);"></i> Mover para outro funil
                 <i class="fa-solid fa-chevron-right card-ctx-caret"></i>
             </button>
             <button class="card-ctx-item" onclick="triggerCardAction('inativar')">
@@ -5184,6 +5112,35 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </button>
         </div>
         <div class="card-ctx-tags" id="card-ctx-tags" style="display: none;"></div>
+    </div>
+
+    <!-- Modal: Editar Funil (etapas do Kanban) -->
+    <div class="modal-overlay" id="modalPipeline">
+        <div class="modal" style="max-width: 560px;">
+            <h2><i class="fa-solid fa-diagram-next" style="color: var(--accent-primary);"></i> Editar funil</h2>
+            <p class="modal-subtitle">Renomeie, recolora e reordene as etapas. Etapas com <i class="fa-solid fa-bolt"></i> têm automação (Meta, Financeiro, IA, follow-up) e não podem ser removidas.</p>
+
+            <div class="form-group">
+                <label for="ple-name">Nome do funil</label>
+                <input type="text" id="ple-name" maxlength="40" placeholder="Ex.: Laser, Harmonização...">
+            </div>
+
+            <div id="ple-stages" class="ple-stages"></div>
+
+            <button type="button" class="btn-secondary ple-add" onclick="pleAddStage()">
+                <i class="fa-solid fa-plus"></i> Adicionar etapa
+            </button>
+
+            <div class="ple-footer">
+                <button type="button" id="ple-delete-btn" class="ple-delete" onclick="pleDeletePipeline()">
+                    <i class="fa-solid fa-trash"></i> Excluir funil
+                </button>
+                <div style="display: flex; gap: 0.5rem; margin-left: auto;">
+                    <button type="button" class="btn-secondary" onclick="closeModals()">Cancelar</button>
+                    <button type="button" class="btn-primary" id="ple-save-btn" onclick="pleSave()">Salvar</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Modal: Editar Etiquetas -->

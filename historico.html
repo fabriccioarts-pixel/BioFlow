@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BioFlow - Histórico Financeiro</title>
+    <title>Gonecta - Histórico Financeiro</title>
     
     <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
     
@@ -14,11 +14,11 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     
-    <link rel="stylesheet" href="style.css?v=5">
-    <link rel="icon" type="image/svg+xml" href="Favicon.svg">
+    <link rel="stylesheet" href="style.css?v=22">
+    <link rel="icon" type="image/png" href="favicon.png">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
-        .sb-logo-full { height: 42px; width: auto; max-width: 230px; object-fit: contain; display: block; flex-shrink: 0; }
+        .sb-logo-full { height: 24px; width: auto; max-width: 178px; object-fit: contain; object-position: left center; display: block; flex-shrink: 0; }
         .sb-logo-mark { height: 36px; width: 36px; object-fit: contain; display: none; flex-shrink: 0; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-full { display: none; }
         header.sb-collapsed:not(:hover):not(.sb-flyout-open):not(.sb-mobile-open) .sb-logo-mark { display: block; }
@@ -91,9 +91,9 @@
 
     <header>
         <div class="sb-logo">
-            <img src="bioflow%20logo.svg" alt="BioFlow" class="sb-logo-img sb-logo-full"
-                onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'fa-solid fa-dna'}))">
-            <img src="Favicon.svg" alt="" aria-hidden="true" class="sb-logo-mark"
+            <img src="vendor/illustrations/gonecta-logo-dark.png" alt="Gonecta" class="sb-logo-img sb-logo-full"
+                onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'auth-wordmark',textContent:'Gonecta'}))">
+            <img src="favicon.png" alt="" aria-hidden="true" class="sb-logo-mark"
                 onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">

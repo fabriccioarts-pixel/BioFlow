@@ -1,15 +1,14 @@
 {
-  "name": "Sistema Clínica CRM",
-  "short_name": "Clínica CRM",
+  "name": "Gonecta",
+  "short_name": "Gonecta",
   "description": "CRM de atendimento, WhatsApp e funil de leads da clínica.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#12141c",
-  "theme_color": "#12141c",
+  "background_color": "#E03720",
+  "theme_color": "#E03720",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/favicon.png", "sizes": "135x121", "type": "image/png", "purpose": "any" }
   ]
 }

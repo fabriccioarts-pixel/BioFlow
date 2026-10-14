@@ -344,9 +344,17 @@ function renderAvatarHTML(name, imgUrl = null, status = 'online', size = 40) {
         initials = '?';
     }
 
+    // Tom fixo por nome — a mesma pessoa sempre tem a mesma cor, e a lista
+    // deixa de ser uma parede de círculos idênticos.
+    const AVATAR_TONES = ['#E03720', '#f59e0b', '#10b981', '#14b8a6', '#6366f1', '#a855f7', '#ec4899', '#0ea5e9'];
+    let hash = 0;
+    for (const ch of cleanName) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+    const tone = AVATAR_TONES[hash % AVATAR_TONES.length];
+    const fontSize = Math.max(10, Math.round(size * 0.36));
+
     const contentHTML = imgUrl
         ? `<div class="avatar-image" data-slot="avatar-image"><img src="${imgUrl}" alt="${escapeHtml(cleanName)}" /></div>`
-        : `<div class="avatar-fallback" data-slot="avatar-fallback">${initials}</div>`;
+        : `<div class="avatar-fallback" data-slot="avatar-fallback" style="--av: ${tone}; font-size: ${fontSize}px;">${escapeHtml(initials)}</div>`;
 
     // Bolinha de presença ("online"/"offline") removida do avatar — a API do
     // WhatsApp não fornece presença real, então era só um palpite pelo horário
@@ -1403,14 +1411,41 @@ let hasLoadedChatsOnce = false;
 
 // Reaplica busca por texto + filtro de categoria ativos — usar sempre no lugar de
 // renderContactsList(allChatsList) direto, senão o filtro ativo é perdido no re-render.
+// Nome da conversa = nome ATUAL do lead. Antes o nome só era colado no momento
+// em que a lista carregava — se a lista chegasse antes dos leads (corrida no
+// login), a conversa ficava sem nome e a busca por nome não achava nada.
+// Devolve true se algum nome mudou.
+function injectLeadNamesIntoChats(chats) {
+    if (!Array.isArray(chats) || typeof leads === 'undefined' || !Array.isArray(leads) || !leads.length) return false;
+    const porTelefone = new Map();
+    leads.forEach(l => { if (l.telefone && l.nome) porTelefone.set(canonicalPhoneBR(l.telefone), l.nome); });
+    let mudou = false;
+    chats.forEach(c => {
+        const nome = porTelefone.get(canonicalPhoneBR(c.phone));
+        if (nome && c.nome !== nome) { c.nome = nome; mudou = true; }
+    });
+    return mudou;
+}
+
+// Chamado quando os leads chegam/mudam: só redesenha a lista se algum nome mudou.
+function syncChatNamesFromLeads() {
+    if (!hasLoadedChatsOnce || typeof allChatsList === 'undefined') return;
+    if (injectLeadNamesIntoChats(allChatsList)) reapplyChatFilters();
+}
+
 function reapplyChatFilters() {
     if (!hasLoadedChatsOnce) return;
     const searchInput = document.getElementById('chat-search-input');
     filterChatContacts(searchInput ? searchInput.value : '');
 }
 
+// Minúsculas e sem acento: "fabricio" acha "Fabrício", "conceicao" acha "Conceição".
+function normalizeChatSearch(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 function filterChatContacts(query) {
-    const q = (query || '').toLowerCase().trim();
+    const q = normalizeChatSearch(query).trim();
     if (!allChatsList) return;
 
     let filtered = allChatsList;
@@ -1426,9 +1461,9 @@ function filterChatContacts(query) {
         const qCanon = qDigits.length >= 8 ? canonicalPhoneBR(qDigits) : null;
 
         filtered = filtered.filter(chat => {
-            const name = (chat.nome || '').toLowerCase();
+            const name = normalizeChatSearch(chat.nome);
             const phone = (chat.phone || '').toLowerCase();
-            const msg = (chat.message || '').toLowerCase();
+            const msg = normalizeChatSearch(chat.message);
             const phoneMatch = phone.includes(q) || (qCanon && canonicalPhoneBR(chat.phone).includes(qCanon));
 
             let tagNames = '';
@@ -1437,10 +1472,10 @@ function filterChatContacts(query) {
                 if (lead && lead.tags) {
                     const tagIds = parseLeadTags(lead.tags);
                     const availableTags = getAvailableTags();
-                    tagNames = tagIds.map(id => {
+                    tagNames = normalizeChatSearch(tagIds.map(id => {
                         const found = availableTags.find(t => t.id === id);
                         return found ? found.label : id;
-                    }).join(' ').toLowerCase();
+                    }).join(' '));
                 }
             }
 
@@ -1521,6 +1556,7 @@ function filterChatContacts(query) {
         return pinnedDiff;
     });
 
+    window._lastFilteredChats = filtered;
     renderContactsList(filtered);
 }
 
@@ -1558,12 +1594,14 @@ function toggleChatSelection(phone) {
 function updateChatSelectionBar() {
     const countEl = document.getElementById('chat-selection-count');
     const deleteBtn = document.getElementById('chat-selection-delete-btn');
+    const readBtn = document.getElementById('chat-selection-read-btn');
     const n = selectedChatPhones.size;
     if (countEl) countEl.textContent = `${n} selecionada(s)`;
-    if (deleteBtn) {
-        deleteBtn.disabled = n === 0;
-        deleteBtn.style.opacity = n === 0 ? '0.5' : '1';
-    }
+    [deleteBtn, readBtn].forEach(btn => {
+        if (!btn) return;
+        btn.disabled = n === 0;
+        btn.style.opacity = n === 0 ? '0.5' : '1';
+    });
 }
 
 // Volta a área principal de chat pro estado vazio (usado quando a conversa aberta é apagada,
@@ -1639,6 +1677,48 @@ async function deleteSelectedConversations() {
         await loadChats();
     } catch (e) {
         if (typeof showToast === 'function') showToast(e.message, 'danger'); else alert(e.message);
+    }
+}
+
+function selectAllVisibleChats() {
+    const visible = window._lastFilteredChats || [];
+    const allSelected = visible.length > 0 && visible.every(c => selectedChatPhones.has(c.phone));
+    if (allSelected) {
+        // Já estavam todas selecionadas — clicar de novo desmarca todas (toggle).
+        visible.forEach(c => selectedChatPhones.delete(c.phone));
+    } else {
+        visible.forEach(c => selectedChatPhones.add(c.phone));
+    }
+    updateChatSelectionBar();
+    reapplyChatFilters();
+}
+
+async function markSelectedConversationsRead() {
+    const phones = Array.from(selectedChatPhones);
+    if (phones.length === 0) return;
+
+    try {
+        await Promise.all(phones.map(phone =>
+            fetch('/api/whatsapp/mark-read', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone })
+            }).then(() => setChatSetting(phone, 'marked_unread', false))
+        ));
+
+        if (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList)) {
+            phones.forEach(phone => {
+                const found = allChatsList.find(c => isSamePhone(c.phone, phone));
+                if (found) found.unread_count = 0;
+            });
+        }
+
+        if (typeof showToast === 'function') showToast(`${phones.length} conversa(s) marcada(s) como lida(s).`, 'success');
+
+        toggleChatSelectMode();
+        reapplyChatFilters();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('Erro ao marcar como lidas.', 'danger'); else alert('Erro ao marcar como lidas.');
     }
 }
 
@@ -1964,25 +2044,49 @@ function patchChatListFromSSE({ phone, preview, ts, leadId }) {
 }
 if (typeof window !== 'undefined') window.patchChatListFromSSE = patchChatListFromSSE;
 
+// A conversa aberta é lida direto do banco (a cada 6s); a lateral vem do cache
+// e pode estar atrás. Se a aberta tem mensagem mais nova, corrige a linha dela.
+function syncSidebarWithOpenChat(phone, lastMsg) {
+    if (!lastMsg || !Array.isArray(allChatsList) || !hasLoadedChatsOnce) return;
+    const ts = String(lastMsg.timestamp || '');
+    if (!ts) return;
+    const idx = allChatsList.findIndex(c => isSamePhone(c.phone, phone));
+    const atual = idx >= 0 ? allChatsList[idx] : null;
+    if (atual && String(atual.last_interaction || atual.timestamp || '') >= ts) return;
+    const entry = atual ? allChatsList.splice(idx, 1)[0] : { phone };
+    entry.message = lastMsg.message;
+    entry.direction = lastMsg.direction;
+    entry.last_direction = lastMsg.direction;
+    entry.status = lastMsg.status;
+    entry.last_interaction = ts;
+    entry.last_timestamp = ts;
+    if (lastMsg.direction === 'in') entry.last_inbound_at = ts;
+    entry.unread_count = 0; // está aberta na tela
+    allChatsList.unshift(entry);
+    injectLeadNamesIntoChats([entry]);
+    reapplyChatFilters();
+}
+
+// Versão da lista que este navegador já tem — o poll manda ela e o servidor
+// responde "unchanged" (sem baixar a lista) quando nada mudou.
+let lastChatsRev = null;
+
 async function loadChats(silent = false) {
     if (!silent) document.getElementById('chat-contacts-list').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-muted);"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando conversas...</div>';
-    
+
     try {
-        const res = await fetch('/api/whatsapp/chats');
+        const url = (silent && hasLoadedChatsOnce && lastChatsRev) ? `/api/whatsapp/chats?rev=${encodeURIComponent(lastChatsRev)}` : '/api/whatsapp/chats';
+        const res = await fetch(url);
         const json = await res.json();
-        
+        if (json.success && json.unchanged) return;
+
         if (json.success) {
+            lastChatsRev = json.rev || null;
             const newChats = json.data || [];
             
-            // Injeta o nome do lead se existir no Kanban
-            newChats.forEach(chat => {
-                if (typeof leads !== 'undefined' && Array.isArray(leads)) {
-                    const lead = leads.find(l => isSamePhone(l.telefone, chat.phone));
-                    if (lead && lead.nome) {
-                        chat.nome = lead.nome;
-                    }
-                }
-            });
+            // Injeta o nome do lead se existir no Kanban (e de novo quando os leads
+            // chegarem, se chegarem depois — ver syncChatNamesFromLeads).
+            injectLeadNamesIntoChats(newChats);
             
             // Notificação Sonora e Bolinha Verde ao receber nova mensagem
             if (newChats.length > 0) {
@@ -2004,38 +2108,54 @@ async function loadChats(silent = false) {
             allChatsList = newChats;
             hasLoadedChatsOnce = true;
             reapplyChatFilters();
+            // Lista mudou = chegou/saiu mensagem: puxa as notificações agora, sem
+            // esperar o poll de 60s delas (a de "lead respondeu" nasce junto).
+            if (silent && typeof fetchNotifications === 'function') fetchNotifications();
         }
     } catch(e) {
         if(!silent) document.getElementById('chat-contacts-list').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--accent-danger);">Erro ao carregar conversas.</div>';
     }
 }
 
+function currentChatLead() {
+    const chat = window.currentActiveChat;
+    if (!chat || typeof leads === 'undefined' || !Array.isArray(leads)) return null;
+    return leads.find(l => isSamePhone(l.telefone, chat.phone)) || null;
+}
+
+// Nome/cor/ícone vêm do funil do lead (app.js), igual ao board — etapa
+// renomeada ou personalizada aparece certa aqui também.
 function updateChatStageUI(columnId) {
     const labelEl = document.getElementById('chat-stage-label');
     const badgeEl = document.getElementById('chat-current-stage-badge');
-    
-    const stageMap = {
-        'col-entrada': { name: '📥 Entrada', border: 'rgba(100, 116, 139, 0.4)', color: '#94a3b8' },
-        'col-contatado': { name: '💬 Contatado', border: 'rgba(251, 191, 36, 0.35)', color: '#fbbf24' },
-        'col-orcado': { name: '📄 Orçado', border: 'rgba(56, 189, 248, 0.35)', color: '#38bdf8' },
-        'col-agendado': { name: '📅 Agendado', border: 'rgba(45, 212, 191, 0.35)', color: '#2dd4bf' },
-        'col-ganho': { name: '✅ Ganho', border: 'rgba(16, 185, 129, 0.35)', color: '#10b981' },
-        'col-perdido': { name: '🔄 Follow Up', border: 'rgba(251, 146, 60, 0.35)', color: '#fb923c' }
-    };
+    const lead = currentChatLead();
+    const meta = getStageMeta(columnId || 'col-entrada', leadPipelineId(lead));
 
-    const current = stageMap[columnId] || stageMap['col-entrada'];
-    if (labelEl) labelEl.textContent = current.name;
+    if (labelEl) labelEl.innerHTML = `<i class="${meta.icone}"></i> ${escapeHtml(meta.nome)}`;
     if (badgeEl) {
-        badgeEl.style.color = current.color;
-        badgeEl.style.borderColor = current.border;
+        badgeEl.style.color = meta.cor;
+        badgeEl.style.borderColor = `color-mix(in srgb, ${meta.cor} 40%, transparent)`;
     }
+}
+
+function renderStageMenuOptions() {
+    const popup = document.getElementById('stage-menu-popup');
+    if (!popup) return;
+    const lead = currentChatLead();
+    const stages = getPipeline(leadPipelineId(lead)).stages;
+    popup.innerHTML = stages.map(s => `
+        <div onclick="selectStageOption('${s.id}')" class="stage-menu-item" role="button" tabindex="0">
+            <i class="${s.icone}" style="color: ${s.cor};"></i> ${escapeHtml(s.nome)}
+        </div>`).join('');
 }
 
 function toggleStageMenu(e) {
     if (e) e.stopPropagation();
     const popup = document.getElementById('stage-menu-popup');
     if (!popup) return;
-    popup.style.display = (popup.style.display === 'block') ? 'none' : 'block';
+    const abrir = popup.style.display !== 'block';
+    if (abrir) renderStageMenuOptions();
+    popup.style.display = abrir ? 'block' : 'none';
 }
 
 function selectStageOption(columnId) {
@@ -4762,6 +4882,7 @@ async function openChat(phone, name, silent = false) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone })
     }).then(() => {
+        if (typeof dismissReplyNotif === 'function') dismissReplyNotif(phone);
         if (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList)) {
             const found = allChatsList.find(c => isSamePhone(c.phone, phone));
             if (found && Number(found.unread_count || 0) !== 0) {
@@ -4883,6 +5004,7 @@ async function openChat(phone, name, silent = false) {
                 const lastMsg = json.data.length ? json.data[json.data.length - 1] : null;
                 renderLeadInfoPanel(targetLead, phone, lastMsg ? { ts: lastMsg.timestamp, dir: lastMsg.direction } : null);
             }
+            syncSidebarWithOpenChat(phone, json.data.length ? json.data[json.data.length - 1] : null);
 
             if (messagesUnchanged) {
                 if (!silent) loadChats(true);
@@ -5636,12 +5758,15 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Polling global em segundo plano para som de notificação e bolinha verde.
-// loadChats faz GROUP BY na wa_messages inteira (query mais cara do sistema) —
-// agora que mensagem nova chega por SSE (evento wa_message, tratado no
-// initKanbanSSE), este poll virou só rede de segurança e vai a ~90s. A conversa
-// ABERTA (openChat refresh) filtra por telefone, é barata, e roda a cada tick (6s).
-if (!window.globalChatCheckInterval) {
+// Polling global em segundo plano (lista de conversas, presença, conversa aberta).
+// A lista vem de um cache no servidor que é remendado a cada mensagem nova
+// (waChatsCacheTouch) e o poll manda a versão que já tem — quando nada mudou o
+// servidor lê uma linha minúscula e não devolve a lista. Por isso dá pra
+// perguntar a cada ~18s: o SSE (evento wa_message) não chega de forma confiável
+// quando o webhook cai noutra instância da Vercel, e antes a lista só se
+// atualizava ao abrir a conversa. A conversa ABERTA roda a cada tick (6s).
+function startGlobalChatCheck() {
+    if (window.globalChatCheckInterval) return;
     let globalChatTick = 0;
     window.globalChatCheckInterval = setInterval(() => {
         globalChatTick++;
@@ -5649,9 +5774,10 @@ if (!window.globalChatCheckInterval) {
         if (window.currentActiveChat && document.getElementById('view-chat') && document.getElementById('view-chat').style.display !== 'none') {
             if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         }
-        if (globalChatTick % 15 === 1 && typeof loadChats === 'function') loadChats(true);
+        if (globalChatTick % 3 === 1 && typeof loadChats === 'function') loadChats(true);
     }, 6000);
 }
+startGlobalChatCheck();
 
 // Primeira carga da presença assim que o script sobe (sem esperar os 6s).
 if (typeof refreshChatPresence === 'function') setTimeout(refreshChatPresence, 800);

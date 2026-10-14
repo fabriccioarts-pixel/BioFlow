@@ -460,6 +460,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     }
                     throw e;
                 }
+                await waChatsCacheTouch(from, msg_body, 'in', msgTimestamp);
 
                 // 2. Verifica se o lead já existe no Kanban — casa qualquer forma equivalente
                 //    do número (com/sem 55, com/sem o 9º dígito), não só substring.
@@ -531,6 +532,14 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [resolvedLeadId]);
                     }
                 } catch (e) { console.error('follow-up: hook de inbound falhou:', e.message); }
+
+                // Lead que já existia respondeu: notificação agrupada por lead (lead
+                // novo já ganhou a de "Novo lead" lá em cima). ANTES do broadcast: quem
+                // está com a conversa aberta recebe o SSE, marca como lida e apaga a
+                // notificação — se ela fosse gravada depois, ficava sobrando.
+                if (resolvedLeadId && leadRows && leadRows.length && msg_type !== 'reaction') {
+                    await notifyLeadReply(resolvedLeadId, from, msg_body).catch(e => console.error('notificação de resposta falhou:', e.message));
+                }
 
                 // Avisa os atendentes conectados NA HORA (mesmo canal SSE do Kanban).
                 // Sem isso, quem não está com essa conversa aberta só via mensagem nova
@@ -1007,6 +1016,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 'INSERT INTO wa_messages (id, phone, direction, message, status, quoted_id, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 [msg_id, finalTo, 'out', db_message_body, 'sent', quoted_id || null, sentBy]
             );
+            await waChatsCacheTouch(finalTo, db_message_body, 'out');
 
             // Essa rota só é chamada pelo atendente logado no CRM (a IA manda mensagem
             // direto por sendWhatsappTextInternal, sem passar por aqui) — então qualquer
@@ -1092,6 +1102,7 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', text, 'sent', sentBy]
     );
+    await waChatsCacheTouch(finalTo, text, 'out');
     try {
         const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
@@ -1135,6 +1146,7 @@ async function sendWhatsappMediaLibraryInternal(to, mediaLibId, caption, sentBy 
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', db_message_body, 'sent', sentBy]
     );
+    await waChatsCacheTouch(finalTo, db_message_body, 'out');
     try {
         const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
@@ -1174,11 +1186,16 @@ async function getWhatsappTemplateMeta(name) {
     const footerComp = (row.components || []).find(c => c.type === 'FOOTER');
     const varMatches = ((bodyComp && bodyComp.text) || '').match(/\{\{\s*[\w\d_]+\s*\}\}/g) || [];
     const bodyVarName = varMatches[0] ? varMatches[0].replace(/[{}\s]/g, '') : null;
+    // Variáveis distintas na ordem em que a Meta espera os parâmetros: posicionais
+    // ({{1}}, {{2}}...) por número; nomeadas na ordem em que aparecem no texto.
+    let bodyVarNames = Array.from(new Set(varMatches.map(v => v.replace(/[{}\s]/g, ''))));
+    if (bodyVarNames.every(n => /^\d+$/.test(n))) bodyVarNames.sort((a, b) => Number(a) - Number(b));
     const meta = {
         language: row.language || 'pt_BR',
         category: row.category || null,
         bodyVarCount: varMatches.length,
         bodyVarName,
+        bodyVarNames,
         isNamedParam: !!bodyVarName && !/^\d+$/.test(bodyVarName),
         bodyText: (bodyComp && bodyComp.text) || '',
         headerText: (headerComp && String(headerComp.format || 'TEXT').toUpperCase() === 'TEXT') ? (headerComp.text || '') : '',
@@ -1222,7 +1239,10 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
 
     const name = String(templateName || '').trim();
     const meta = await getWhatsappTemplateMeta(name);
-    if (meta.bodyVarCount > 1) {
+    // opts.vars: valores pra TODAS as variáveis do corpo, na ordem de meta.bodyVarNames
+    // (usado pelo lembrete de consulta). Sem isso, segue o modo antigo: só o nome.
+    const vars = Array.isArray(opts.vars) ? opts.vars : null;
+    if (!vars && meta.bodyVarCount > 1) {
         throw new Error(`Template "${name}" tem ${meta.bodyVarCount} variáveis no corpo; o follow-up só suporta 0 ou 1.`);
     }
 
@@ -1233,7 +1253,16 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
         template: { name, language: { code: meta.language || 'pt_BR' } },
     };
     let bodyParams = null;
-    if (meta.bodyVarCount === 1) {
+    const varNames = meta.bodyVarNames || [];
+    if (vars && varNames.length) {
+        // A Meta recusa parâmetro vazio — "-" no lugar de um valor que faltou.
+        bodyParams = varNames.map((nm, i) => {
+            const param = { type: 'text', text: String(vars[i] == null ? '' : vars[i]).trim() || '-' };
+            if (meta.isNamedParam) param.parameter_name = nm;
+            return param;
+        });
+        data.template.components = [{ type: 'body', parameters: bodyParams }];
+    } else if (meta.bodyVarCount === 1) {
         const param = { type: 'text', text: String(opts.nome || 'Cliente') };
         if (meta.isNamedParam) param.parameter_name = meta.bodyVarName;
         bodyParams = [param];
@@ -1251,6 +1280,7 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', renderTemplateForHistory(name, meta, bodyParams), 'sent', opts.sentBy || 'followup']
     );
+    await waChatsCacheTouch(finalTo, renderTemplateForHistory(name, meta, bodyParams), 'out');
     try {
         const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
@@ -1280,6 +1310,7 @@ async function sendWhatsappAudioInternal(to, buffer, fileName = 'audio.ogg', sen
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'sent', sentBy]
     );
+    await waChatsCacheTouch(finalTo, `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'out');
     try {
         const v = phoneVariants(finalTo);
         await queryD1(`UPDATE leads SET last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
@@ -2672,31 +2703,133 @@ async function buildWaChatsList() {
     `);
 }
 
-async function refreshWaChatsCache() {
-    const rows = await buildWaChatsList();
-    try {
-        await queryD1(
-            "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [JSON.stringify({ built_at: Date.now(), rows: rows || [] })]
-        );
-    } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
-    return rows || [];
+// ---- Lista de conversas = foto (reconstruída a cada poucos min) + eventos ----
+// Cada mensagem nova (entrando/saindo) e cada "marcar como lida" vira UMA linha
+// em wa_chat_events. A lista servida é a foto do cache com os eventos posteriores
+// a ela aplicados por cima, na ordem. Antes a foto era lida, alterada e regravada
+// a cada mensagem: duas mensagens simultâneas (em instâncias diferentes da Vercel)
+// faziam uma apagar a outra — a conversa "sumia" ou voltava pra prévia antiga.
+// INSERT é atômico, então nada se perde; e é mais barato que regravar a foto.
+let _waChatEventsReady = false;
+async function ensureWaChatEvents() {
+    if (_waChatEventsReady) return;
+    await queryD1(`CREATE TABLE IF NOT EXISTS wa_chat_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        message TEXT,
+        ts TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    _waChatEventsReady = true;
 }
 
+async function waChatEventsMaxId() {
+    await ensureWaChatEvents();
+    const r = await queryD1('SELECT MAX(id) AS m FROM wa_chat_events');
+    return (r && r[0] && r[0].m) || 0;
+}
+
+async function waChatsWriteCache(cached) {
+    // ms * 1000 + aleatório: duas reconstruções no mesmo milissegundo não repetem versão.
+    const rev = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+    cached.rev = rev;
+    await queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [JSON.stringify(cached)]
+    );
+    await queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_rev', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [JSON.stringify({ rev, built_at: cached.built_at })]
+    ).catch(() => {});
+    return rev;
+}
+
+async function refreshWaChatsCache() {
+    // Lê o último evento ANTES da consulta: tudo até ele já está na foto (a
+    // mensagem é gravada em wa_messages antes do evento). Evento que entrar
+    // durante a consulta é reaplicado por cima — repetir é inofensivo.
+    const eventId = await waChatEventsMaxId().catch(() => 0);
+    const rows = await buildWaChatsList();
+    const cached = { built_at: Date.now(), rows: rows || [], event_id: eventId };
+    try {
+        await waChatsWriteCache(cached);
+        // Eventos já embutidos na foto não servem mais. Margem de 10 min pra
+        // não puxar o tapete de uma leitura em andamento noutra instância.
+        queryD1("DELETE FROM wa_chat_events WHERE id <= ? AND created_at < datetime('now', '-10 minutes')", [eventId]).catch(() => {});
+    } catch (e) { /* blob grande demais ou erro de gravação: só não cacheia dessa vez */ }
+    return cached;
+}
+
+async function waChatsCacheTouch(phone, message, direction, ts = null) {
+    try {
+        await ensureWaChatEvents();
+        await queryD1('INSERT INTO wa_chat_events (phone, kind, message, ts) VALUES (?, ?, ?, ?)',
+            [String(phone), direction === 'in' ? 'in' : 'out', message == null ? '' : String(message),
+             ts || new Date().toISOString().slice(0, 19).replace('T', ' ')]);
+    } catch (e) {
+        console.error('wa_chat_events: gravação falhou:', e.message);
+    }
+}
+
+async function waChatsCacheMarkRead(phonesArr) {
+    try {
+        await ensureWaChatEvents();
+        await queryD1("INSERT INTO wa_chat_events (phone, kind) VALUES (?, 'read')", [String(phonesArr[0] || '')]);
+    } catch (e) { /* best-effort */ }
+}
+
+function mergeWaChatEvents(rows, events) {
+    const so = (s) => String(s || '').replace(/\D/g, '');
+    const out = rows.slice();
+    for (const ev of events) {
+        const alvo = new Set(phoneVariants(ev.phone).map(so));
+        const idx = out.findIndex(c => alvo.has(so(c.phone)));
+        if (ev.kind === 'read') {
+            if (idx >= 0) {
+                out[idx] = { ...out[idx], unread_count: 0 };
+                if (out[idx].direction === 'in') out[idx].status = 'read';
+            }
+            continue;
+        }
+        // Nunca volta uma conversa pra uma mensagem mais antiga que a da foto.
+        if (idx >= 0 && String(out[idx].last_interaction || '') > String(ev.ts || '')) continue;
+        const linha = idx >= 0 ? { ...out.splice(idx, 1)[0] } : { phone: ev.phone, unread_count: 0 };
+        linha.message = ev.message;
+        linha.direction = ev.kind;
+        linha.status = ev.kind === 'in' ? 'received' : 'sent';
+        linha.last_interaction = ev.ts;
+        if (ev.kind === 'in') {
+            linha.last_inbound_at = ev.ts;
+            linha.unread_count = (Number(linha.unread_count) || 0) + 1;
+        }
+        out.unshift(linha);
+    }
+    return out;
+}
+
+// Devolve { rows, rev }. rev = "<versão da foto>.<último evento>": muda a cada
+// mensagem e a cada reconstrução — o navegador compara e só baixa se mudou.
 async function getWaChatsList() {
+    let cached = null;
     try {
         const row = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_cache'");
         if (row && row[0] && row[0].value) {
-            const cached = JSON.parse(row[0].value);
-            if (cached && cached.built_at && Array.isArray(cached.rows) &&
-                (Date.now() - cached.built_at) < WA_CHATS_CACHE_TTL_MS) {
-                return cached.rows;
-            }
+            const c = JSON.parse(row[0].value);
+            if (c && c.built_at && Array.isArray(c.rows) && (Date.now() - c.built_at) < WA_CHATS_CACHE_TTL_MS) cached = c;
         }
     } catch (e) {}
     // Cache ausente ou vencido: essa requisição paga a consulta cara na hora.
     // Em uso normal isso quase nunca deveria acontecer — ver waChatsCacheTick().
-    return await refreshWaChatsCache();
+    if (!cached) cached = await refreshWaChatsCache();
+
+    let events = [];
+    try {
+        await ensureWaChatEvents();
+        events = await queryD1('SELECT id, phone, kind, message, ts FROM wa_chat_events WHERE id > ? ORDER BY id ASC LIMIT 2000', [cached.event_id || 0]) || [];
+    } catch (e) {}
+    const ultimo = events.length ? events[events.length - 1].id : (cached.event_id || 0);
+    return { rows: mergeWaChatEvents(cached.rows, events), rev: `${cached.rev || 0}.${ultimo}` };
 }
 
 // Renova o cache da lista de conversas ANTES dela expirar — chamado a cada tick
@@ -2719,37 +2852,26 @@ async function waChatsCacheTick() {
     }
 }
 
-// A lista de conversas é servida de um cache com TTL de 5 min. mark-read grava
-// status='read' em wa_messages, mas sem remendar esse cache a bolinha de não
-// lidas reaparecia num reload até o cache expirar. Aqui zeramos unread_count
-// (e ajustamos o status da última mensagem) das linhas do(s) telefone(s), em vez
-// de invalidar — invalidar forçaria a consulta cara na próxima leitura.
-async function waChatsCacheMarkRead(phonesArr) {
-    try {
-        const row = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_cache'");
-        if (!row || !row[0] || !row[0].value) return;
-        const cached = JSON.parse(row[0].value);
-        if (!cached || !Array.isArray(cached.rows)) return;
-        const alvo = new Set(phonesArr.map(p => String(p).replace(/\D/g, '')));
-        let mudou = false;
-        for (const c of cached.rows) {
-            if (!alvo.has(String(c.phone || '').replace(/\D/g, ''))) continue;
-            if (Number(c.unread_count || 0) !== 0) { c.unread_count = 0; mudou = true; }
-            if (c.direction === 'in' && c.status !== 'read') { c.status = 'read'; mudou = true; }
-        }
-        if (mudou) {
-            await queryD1(
-                "INSERT INTO crm_settings (key, value) VALUES ('wa_chats_cache', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [JSON.stringify(cached)]
-            );
-        }
-    } catch (e) { /* cache é best-effort */ }
-}
-
+// ?rev=<versão que o navegador já tem>: se nada mudou, responde só "unchanged" —
+// duas leituras minúsculas (versão da foto + último evento) em vez da lista.
 app.get('/api/whatsapp/chats', async (req, res) => {
     try {
-        const rows = await getWaChatsList();
-        res.json({ success: true, data: rows });
+        const revCliente = String(req.query.rev || '');
+        if (revCliente) {
+            try {
+                const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'wa_chats_rev'");
+                const foto = r && r[0] && r[0].value ? JSON.parse(r[0].value) : null;
+                if (foto && foto.built_at && (Date.now() - foto.built_at) < WA_CHATS_CACHE_TTL_MS) {
+                    const [revFoto, evCliente] = revCliente.split('.');
+                    const maxEv = await waChatEventsMaxId();
+                    if (String(foto.rev) === revFoto && Number(evCliente) >= maxEv) {
+                        return res.json({ success: true, unchanged: true, rev: revCliente });
+                    }
+                }
+            } catch (e) { /* cai pra lista completa */ }
+        }
+        const { rows, rev } = await getWaChatsList();
+        res.json({ success: true, data: rows, rev });
     } catch(e) {
         console.error(e);
         res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -3145,6 +3267,9 @@ app.post('/api/whatsapp/mark-read', async (req, res) => {
         const placeholders = phonesArr.map(() => '?').join(', ');
         await queryD1(`UPDATE wa_messages SET status = 'read' WHERE phone IN (${placeholders}) AND direction = 'in'`, phonesArr);
         await waChatsCacheMarkRead(phonesArr);
+        // Alguém abriu a conversa: a notificação agrupada "lead respondeu" já
+        // cumpriu o papel — sai da lista de todo mundo.
+        await queryD1(`DELETE FROM crm_notifications WHERE kind = 'reply' AND action_phone IN (${placeholders})`, phonesArr).catch(() => {});
         res.json({ success: true });
     } catch(e) {
         console.error(e);
@@ -5848,6 +5973,55 @@ app.get('/api/notifications', async (req, res) => {
     }
 });
 
+// ---- Notificação "lead respondeu" (uma por lead, sempre atualizada) ----
+// kind = tipo; count = quantas mensagens desde a última vez que alguém abriu a
+// conversa; extra = JSON {nome, preview, responsavel}. Lazy pelo mesmo motivo
+// do ensureCapiColumns (o ALTER do boot nem sempre roda na Vercel).
+let _notifReplyColsReady = false;
+async function ensureNotifReplyColumns() {
+    if (_notifReplyColsReady) return;
+    for (const sql of [
+        'ALTER TABLE crm_notifications ADD COLUMN action_phone TEXT',
+        'ALTER TABLE crm_notifications ADD COLUMN kind TEXT',
+        'ALTER TABLE crm_notifications ADD COLUMN lead_id TEXT',
+        'ALTER TABLE crm_notifications ADD COLUMN count INTEGER DEFAULT 1',
+        'ALTER TABLE crm_notifications ADD COLUMN extra TEXT',
+    ]) {
+        try { await queryD1(sql); } catch (e) { /* já existe */ }
+    }
+    _notifReplyColsReady = true;
+}
+
+async function notifyLeadReply(leadId, phone, texto) {
+    const rows = await queryD1(
+        `SELECT l.nome, l.owner_id, l.ai_enabled, l.column_id, u.display_name
+         FROM leads l LEFT JOIN crm_users u ON u.username = l.owner_id WHERE l.id = ?`, [leadId]);
+    const lead = rows && rows[0];
+    if (!lead) return;
+
+    // Mesma regra do handleWhatsappAiAutoReply: se a IA vai responder, ela é a
+    // responsável e a equipe não precisa ser chamada.
+    if (Number(lead.ai_enabled) === 1 && ['col-entrada', 'col-contatado'].includes(lead.column_id)) {
+        const g = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
+        const iaLigada = g && g[0] ? g[0].value === '1' : true;
+        if (iaLigada) return;
+    }
+
+    await ensureNotifReplyColumns();
+    const nome = (lead.nome && !LEAD_NOME_PLACEHOLDER_RE.test(lead.nome)) ? lead.nome : 'Lead';
+    const preview = String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const responsavel = lead.owner_id ? (lead.display_name || lead.owner_id) : null;
+    const message = `💬 ${nome}: ${preview}${responsavel ? ` · ${responsavel}` : ' · sem responsável'}`;
+    await queryD1(
+        `INSERT INTO crm_notifications (id, message, created_at, action_phone, kind, lead_id, count, extra)
+         VALUES (?, ?, CURRENT_TIMESTAMP, ?, 'reply', ?, 1, ?)
+         ON CONFLICT(id) DO UPDATE SET message = excluded.message, created_at = CURRENT_TIMESTAMP,
+            action_phone = excluded.action_phone, extra = excluded.extra,
+            count = COALESCE(crm_notifications.count, 1) + 1`,
+        [`reply-${leadId}`, message, phone, String(leadId), JSON.stringify({ nome, preview, responsavel })]
+    );
+}
+
 app.post('/api/clear-notif', async (req, res) => {
     try {
         await queryD1('DELETE FROM crm_notifications');
@@ -5905,6 +6079,156 @@ app.get('/api/leads', async (req, res) => {
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+});
+
+// ==== FUNIS (vários Kanbans, cada um com suas etapas) ====
+// As 6 etapas "do sistema" usam o MESMO column_id em todos os funis — é isso que
+// mantém CAPI, Financeiro, follow-up, IA e dashboard funcionando sem saber que
+// existem vários funis: "col-ganho" continua sendo Ganho em qualquer um deles.
+// Elas podem ser renomeadas/recoloridas/reordenadas, mas não removidas.
+// Etapas livres têm id próprio (stg_...) e não disparam automação nenhuma.
+// O funil do lead fica em leads.pipeline_id (NULL = funil principal).
+const DEFAULT_PIPELINE_ID = 'principal';
+const PIPELINE_SYSTEM_STAGES = [
+    { id: 'col-entrada',   nome: 'Entrada',   cor: '#64748b', icone: 'fa-solid fa-inbox' },
+    { id: 'col-contatado', nome: 'Contatado', cor: '#fbbf24', icone: 'fa-brands fa-whatsapp' },
+    { id: 'col-orcado',    nome: 'Orçado',    cor: '#E03720', icone: 'fa-solid fa-file-invoice-dollar' },
+    { id: 'col-agendado',  nome: 'Agendado',  cor: '#2dd4bf', icone: 'fa-solid fa-calendar-check' },
+    { id: 'col-ganho',     nome: 'Ganho',     cor: '#10b981', icone: 'fa-solid fa-trophy' },
+    { id: 'col-perdido',   nome: 'Follow Up', cor: '#fb923c', icone: 'fa-solid fa-arrow-rotate-left' },
+];
+const PIPELINE_SYSTEM_IDS = new Set(PIPELINE_SYSTEM_STAGES.map(s => s.id));
+
+// Lazy, igual ensureCapiColumns: na Vercel o boot nem sempre roda os ALTERs.
+let _pipelinesReady = false;
+async function ensurePipelines() {
+    if (_pipelinesReady) return;
+    await queryD1(`CREATE TABLE IF NOT EXISTS crm_pipelines (
+        id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        ordem INTEGER DEFAULT 0,
+        stages TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    try { await queryD1('ALTER TABLE leads ADD COLUMN pipeline_id TEXT'); } catch (e) { /* já existe */ }
+    await queryD1(
+        'INSERT OR IGNORE INTO crm_pipelines (id, nome, ordem, stages) VALUES (?, ?, 0, ?)',
+        [DEFAULT_PIPELINE_ID, 'Principal', JSON.stringify(PIPELINE_SYSTEM_STAGES)]
+    );
+    _pipelinesReady = true;
+}
+
+function sanitizePipelineStages(input) {
+    if (!Array.isArray(input)) return null;
+    const seen = new Set();
+    const out = [];
+    for (const raw of input.slice(0, 30)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const id = String(raw.id || '');
+        const isSystem = PIPELINE_SYSTEM_IDS.has(id);
+        if (!isSystem && !/^stg_[a-z0-9]{4,24}$/.test(id)) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const def = PIPELINE_SYSTEM_STAGES.find(s => s.id === id);
+        const nome = String(raw.nome || '').trim().slice(0, 40) || (def ? def.nome : 'Etapa');
+        const cor = /^#[0-9a-fA-F]{6}$/.test(raw.cor || '') ? raw.cor : (def ? def.cor : '#64748b');
+        const icone = /^fa-(solid|regular|brands) fa-[a-z0-9-]{1,40}$/.test(raw.icone || '') ? raw.icone : (def ? def.icone : 'fa-solid fa-circle');
+        out.push({ id, nome, cor, icone });
+    }
+    // Etapa do sistema que faltar volta no fim — nunca some de um funil.
+    for (const s of PIPELINE_SYSTEM_STAGES) {
+        if (!seen.has(s.id)) out.push({ ...s });
+    }
+    return out;
+}
+
+function parsePipelineRow(r) {
+    let stages;
+    try { stages = JSON.parse(r.stages); } catch (e) { stages = null; }
+    return { id: r.id, nome: r.nome, ordem: r.ordem, stages: sanitizePipelineStages(stages) || PIPELINE_SYSTEM_STAGES };
+}
+
+app.get('/api/pipelines', async (req, res) => {
+    try {
+        await ensurePipelines();
+        const rows = await queryD1('SELECT * FROM crm_pipelines ORDER BY ordem ASC, nome ASC');
+        res.json((rows || []).map(parsePipelineRow));
+    } catch (e) {
+        console.error('[pipelines] list:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar os funis.' });
+    }
+});
+
+app.post('/api/pipelines', async (req, res) => {
+    try {
+        await ensurePipelines();
+        const nome = String((req.body && req.body.nome) || '').trim().slice(0, 40);
+        if (!nome) return res.status(400).json({ error: 'Dê um nome pro funil.' });
+        const id = 'pl_' + crypto.randomBytes(6).toString('hex');
+        const maxRows = await queryD1('SELECT COALESCE(MAX(ordem), 0) AS m FROM crm_pipelines');
+        const ordem = ((maxRows && maxRows[0] && maxRows[0].m) || 0) + 1;
+        await queryD1('INSERT INTO crm_pipelines (id, nome, ordem, stages) VALUES (?, ?, ?, ?)',
+            [id, nome, ordem, JSON.stringify(PIPELINE_SYSTEM_STAGES)]);
+        broadcastLeadsUpdate('pipelines');
+        res.json({ id, nome, ordem, stages: PIPELINE_SYSTEM_STAGES });
+    } catch (e) {
+        console.error('[pipelines] create:', e.message);
+        res.status(500).json({ error: 'Erro ao criar o funil.' });
+    }
+});
+
+app.put('/api/pipelines/:id', async (req, res) => {
+    try {
+        await ensurePipelines();
+        const rows = await queryD1('SELECT * FROM crm_pipelines WHERE id = ?', [req.params.id]);
+        if (!rows || !rows[0]) return res.status(404).json({ error: 'Funil não encontrado.' });
+        const atual = parsePipelineRow(rows[0]);
+
+        const nome = req.body.nome !== undefined ? String(req.body.nome || '').trim().slice(0, 40) : atual.nome;
+        if (!nome) return res.status(400).json({ error: 'Dê um nome pro funil.' });
+        const stages = req.body.stages !== undefined ? sanitizePipelineStages(req.body.stages) : atual.stages;
+        if (!stages) return res.status(400).json({ error: 'Etapas inválidas.' });
+
+        // Etapa livre removida: os leads dela voltam pra Entrada do mesmo funil.
+        const novos = new Set(stages.map(s => s.id));
+        const removidas = atual.stages.filter(s => !PIPELINE_SYSTEM_IDS.has(s.id) && !novos.has(s.id)).map(s => s.id);
+        if (removidas.length) {
+            await queryD1(
+                `UPDATE leads SET column_id = 'col-entrada' WHERE column_id IN (${removidas.map(() => '?').join(',')})`,
+                removidas
+            );
+        }
+
+        await queryD1('UPDATE crm_pipelines SET nome = ?, stages = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nome, JSON.stringify(stages), req.params.id]);
+        broadcastLeadsUpdate('pipelines');
+        if (removidas.length) broadcastLeadsUpdate('updated');
+        res.json({ id: req.params.id, nome, ordem: atual.ordem, stages });
+    } catch (e) {
+        console.error('[pipelines] update:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar o funil.' });
+    }
+});
+
+app.delete('/api/pipelines/:id', async (req, res) => {
+    try {
+        await ensurePipelines();
+        if (req.params.id === DEFAULT_PIPELINE_ID) return res.status(400).json({ error: 'O funil principal não pode ser excluído.' });
+        // Leads do funil excluído vão pro principal; quem estava numa etapa livre cai em Entrada.
+        await queryD1(
+            `UPDATE leads SET pipeline_id = NULL,
+                column_id = CASE WHEN column_id LIKE 'stg_%' THEN 'col-entrada' ELSE column_id END
+             WHERE pipeline_id = ?`,
+            [req.params.id]
+        );
+        await queryD1('DELETE FROM crm_pipelines WHERE id = ?', [req.params.id]);
+        broadcastLeadsUpdate('pipelines');
+        broadcastLeadsUpdate('updated');
+        res.json({ success: true });
+    } catch (e) {
+        console.error('[pipelines] delete:', e.message);
+        res.status(500).json({ error: 'Erro ao excluir o funil.' });
     }
 });
 
@@ -6767,6 +7091,12 @@ app.post('/api/leads', async (req, res) => {
             'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, tags, valor_recebido, orcamento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [id, nome, telefone ? normalizePhoneBR(telefone) : '', origem || '', born || '', owner_id || null, column_id || 'col-entrada', fb_click_id || '', email || '', notas || '', tags || '', valor_recebido || null, orcamento || '']
         );
+        const pipelineId = req.body.pipeline_id;
+        if (pipelineId && pipelineId !== DEFAULT_PIPELINE_ID) {
+            await ensurePipelines();
+            await queryD1('UPDATE leads SET pipeline_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM crm_pipelines WHERE id = ?)',
+                [pipelineId, id, pipelineId]);
+        }
         broadcastLeadsUpdate('created', id);
         if (valor_recebido || orcamento) await syncLeadPagamento(id);
         res.json({ success: true, id });
@@ -6801,10 +7131,30 @@ app.put('/api/leads/:id', async (req, res) => {
             if (curIdx !== -1 && newIdx !== -1 && curIdx >= newIdx) {
                 column_id = undefined; // mantém a coluna atual, ignora só essa parte do PUT
             }
+            // Etapa livre (stg_...) foi escolha manual de alguém — gatilho automático
+            // não tem como saber se ela vem antes ou depois de Contatado, então não mexe.
+            if (String(lead.column_id || '').startsWith('stg_')) column_id = undefined;
         }
 
         const updates = [];
         const params = [];
+
+        // Troca de funil: null/'principal' = funil principal. Se o lead estava numa
+        // etapa livre do funil antigo (que não existe no novo), cai em Entrada.
+        const { pipeline_id } = req.body;
+        if (pipeline_id !== undefined) {
+            await ensurePipelines();
+            const alvo = !pipeline_id || pipeline_id === DEFAULT_PIPELINE_ID ? null : String(pipeline_id);
+            if (alvo) {
+                const existe = await queryD1('SELECT id FROM crm_pipelines WHERE id = ?', [alvo]);
+                if (!existe || !existe[0]) return res.status(400).json({ error: 'Funil não encontrado.' });
+            }
+            updates.push('pipeline_id = ?');
+            params.push(alvo);
+            if (column_id === undefined && String(lead.column_id || '').startsWith('stg_')) {
+                column_id = 'col-entrada';
+            }
+        }
 
         // Auto-assign: se o lead não tem dono e um usuário logado está trabalhando ele
         // (arrastando, editando, orçando). Abrir a conversa manda no_auto_assign=true —
@@ -6993,7 +7343,9 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
         items.push(newItem);
 
         let updateOwnerSql = '';
-        const params = [JSON.stringify(items), 'col-orcado', newItem.created_at];
+        // Etapa livre (stg_...) foi escolha manual — orçamento novo não arranca o lead dela.
+        const colunaDestino = String(colunaAnterior || '').startsWith('stg_') ? colunaAnterior : 'col-orcado';
+        const params = [JSON.stringify(items), colunaDestino, newItem.created_at];
         
         if (!leadRows[0].owner_id && req.user && req.user.username) {
             updateOwnerSql = ', owner_id = ?, assigned_at = CURRENT_TIMESTAMP';
@@ -7009,7 +7361,7 @@ app.post('/api/leads/:id/orcamentos', async (req, res) => {
         // Histórico estruturado.
         if (updateOwnerSql) logLeadEvent(id, 'atendimento_iniciado', req.user?.username, 'via abertura de orçamento');
         if (eraPrimeiroItem) logLeadEvent(id, 'orcamento_aberto', req.user?.username, newItem.procedimento);
-        if (colunaAnterior !== 'col-orcado') logLeadEvent(id, 'mudanca_coluna', req.user?.username, JSON.stringify({ de: colunaAnterior, para: 'col-orcado' }));
+        if (colunaAnterior !== colunaDestino) logLeadEvent(id, 'mudanca_coluna', req.user?.username, JSON.stringify({ de: colunaAnterior, para: colunaDestino }));
 
         try {
             if (newItem.procedimento) {
@@ -9883,6 +10235,7 @@ app.all('/api/flow-tick', async (req, res) => {
     if (!authed) return res.status(401).json({ error: 'Não autorizado.' });
 
     try {
+        const tickStart = Date.now();
         const now = flowDbTime();
 
         // Heartbeat: guarda quando o tick rodou. Abrir /api/flow-tick logado mostra
@@ -9915,6 +10268,11 @@ app.all('/api/flow-tick', async (req, res) => {
         let followup = { opened: 0, processed: 0 };
         try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
 
+        // Lembrete de consulta — busca a agenda do Amigo só a cada APPT_SYNC_MIN;
+        // o envio da fila vencida roda em todo tick.
+        let lembretes = { skipped: 'erro' };
+        try { lembretes = await apptReminderTick(tickStart); } catch (e) { console.error('Erro no lembrete de consulta:', e); }
+
         // Detector de oportunidades — tem cadência própria por dentro (só roda a
         // varredura cara a cada opps_config.intervalo_horas), então pode ser
         // chamado em todo tick sem custo.
@@ -9936,7 +10294,7 @@ app.all('/api/flow-tick', async (req, res) => {
         let waChats = { skipped: 'erro' };
         try { waChats = await waChatsCacheTick(); } catch (e) { console.error('Erro ao renovar cache de conversas:', e); }
 
-        res.json({ processed, followup, opps, insights, marketing, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        res.json({ processed, followup, lembretes, opps, insights, marketing, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -10257,6 +10615,487 @@ app.put('/api/followup/config', async (req, res) => {
         await queryD1("INSERT INTO crm_settings (key, value) VALUES ('followup_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
         res.json({ success: true, config: clean });
     } catch (e) { console.error('Erro ao salvar config de follow-up:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ==========================================
+// LEMBRETE DE CONSULTA (agendamentos do Amigo App)
+// ==========================================
+// A cada APPT_SYNC_MIN minutos o tick busca no Amigo os agendamentos dos próximos
+// dias (todas as unidades ativas) e mantém uma fila em crm_appt_reminders — uma
+// linha por consulta x lembrete configurado. Todo tick envia as linhas vencidas.
+// Fila no D1 em vez de consultar o Amigo a cada tick: o tick roda a cada minuto
+// e o envio precisa saber, de forma durável, o que já foi mandado.
+// Remarcou (mesmo atendimento, outro horário): a linha volta pra pendente com o
+// horário novo. Cancelou (sumiu da agenda): a linha pendente vira "cancelado".
+const APPT_REMINDER_DEFAULT = {
+    ativo: false,
+    lembretes: [
+        {
+            horas_antes: 24,
+            texto: 'Oi {{nome}}! Passando pra lembrar da sua consulta de {{procedimento}} {{data}} às {{hora}}. Qualquer dúvida, é só responder por aqui 😊',
+            template_name: '',
+            template_vars: ['nome', 'data', 'hora'],
+        },
+    ],
+    quiet_start: '20:00',
+    quiet_end: '08:00',
+    // Achou o telefone de um lead na agenda do Amigo -> move pra Agendado.
+    // Desligado por padrão: ao ligar, move de uma vez todos os leads com consulta
+    // marcada nos próximos APPT_DETECT_DIAS dias (e manda o Schedule pro Meta).
+    detectar_agendados: false,
+};
+const APPT_VAR_KEYS = ['nome', 'data', 'hora', 'procedimento', 'profissional', 'local'];
+const APPT_DETECT_DIAS = 30;
+const APPT_DETECT_MAX_MOVES = 10; // por leitura da agenda — o resto vai na próxima
+const APPT_SYNC_MIN = 15;
+const APPT_MIN_ANTECEDENCIA_MIN = 30; // faltando menos que isso pra consulta, não manda mais
+
+async function apptReminderGetConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'appt_reminder_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, APPT_REMINDER_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return JSON.parse(JSON.stringify(APPT_REMINDER_DEFAULT));
+}
+
+let _apptTableReady = false;
+async function ensureApptReminderTable() {
+    if (_apptTableReady) return;
+    await queryD1(`CREATE TABLE IF NOT EXISTS crm_appt_reminders (
+        id TEXT PRIMARY KEY,
+        unidade_id TEXT,
+        attendance_id TEXT NOT NULL,
+        lembrete_idx INTEGER NOT NULL,
+        phone TEXT NOT NULL,
+        nome TEXT,
+        procedimento TEXT,
+        profissional TEXT,
+        local TEXT,
+        appt_at DATETIME NOT NULL,
+        send_at DATETIME NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pendente',
+        detalhe TEXT,
+        sent_at DATETIME,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    await queryD1('CREATE INDEX IF NOT EXISTS idx_appt_rem_due ON crm_appt_reminders (status, send_at)').catch(() => {});
+    _apptTableReady = true;
+}
+
+// O Amigo manda a hora "de parede" da clínica com um "Z" falso no fim (ver
+// isoToMinutes). Brasil não tem horário de verão desde 2019: Brasília é -03:00 fixo.
+function amigoWallToDate(iso) {
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(iso || ''));
+    if (!m) return null;
+    const d = new Date(`${m[1]}T${m[2]}:00-03:00`);
+    return isNaN(d) ? null : d;
+}
+
+function apptSpDateStr(date) {
+    // YYYY-MM-DD no fuso da clínica (en-CA formata assim).
+    return date.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+}
+
+function apptVarsFromRow(row) {
+    const at = followupParseTs(row.appt_at);
+    return {
+        nome: row.nome || '',
+        data: at ? at.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' }) : '',
+        hora: at ? at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : '',
+        procedimento: row.procedimento || '',
+        profissional: row.profissional || '',
+        local: row.local || '',
+    };
+}
+
+async function apptReminderSync(cfg, { force = false } = {}) {
+    if (!force) {
+        try {
+            const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'appt_reminder_last_sync'");
+            const last = r && r[0] ? followupParseTs(r[0].value) : null;
+            if (last && (Date.now() - last.getTime()) < APPT_SYNC_MIN * 60000) return { skipped: 'cadencia' };
+        } catch (e) {}
+    }
+    // Carimba ANTES de buscar: dois ticks seguidos não disparam duas buscas no Amigo.
+    await queryD1("INSERT INTO crm_settings (key, value) VALUES ('appt_reminder_last_sync', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [flowDbTime()]);
+
+    const lembretes = cfg.ativo && Array.isArray(cfg.lembretes) ? cfg.lembretes : [];
+    if (!lembretes.length && !cfg.detectar_agendados) return { skipped: 'sem_lembretes' };
+    const maxHoras = lembretes.length ? Math.max(...lembretes.map(l => Number(l.horas_antes) || 0)) + 24 : 0;
+    const janelaHoras = Math.max(maxHoras, cfg.detectar_agendados ? APPT_DETECT_DIAS * 24 : 0);
+    const now = new Date();
+    const fim = new Date(now.getTime() + janelaHoras * 3600000);
+    const startStr = apptSpDateStr(now), endStr = apptSpDateStr(fim);
+    const atendimentos = []; // pra detecção de lead agendado
+
+    let unidades = [];
+    try { unidades = await queryD1('SELECT id, nome FROM crm_unidades WHERE ativo = 1'); } catch (e) {}
+    if (!unidades || !unidades.length) unidades = [{ id: null, nome: '' }];
+
+    const desejadas = new Map();
+    const unidadesOk = new Set();
+    let consultas = 0;
+    for (const u of unidades) {
+        let atts;
+        try { atts = await amigoAttendancesRange(startStr, endStr, u.id); }
+        catch (e) { console.error(`lembrete: Amigo falhou na unidade ${u.id}:`, e.message); continue; }
+        unidadesOk.add(String(u.id));
+        for (const a of atts) {
+            // "rescheduled" é o horário ANTIGO de uma consulta remarcada (a nova
+            // vem como outro atendimento) — não pode gerar lembrete nem detecção.
+            if (a.canceled || a.status === 'canceled' || a.status === 'rescheduled') continue;
+            const apptAt = amigoWallToDate(a.start_date);
+            if (!apptAt || apptAt <= now || apptAt > fim) continue;
+            const p = a.patient || {};
+            const phone = normalizePhoneBR(p.contact_cellphone || p.cellphone || p.phone || '');
+            if (!phone || phone.length < 12) continue;
+            consultas++;
+            atendimentos.push({
+                key: `${u.id || 'u'}:${a.id}`, phone, apptAt,
+                nome: p.name || '', procedimento: (a.agenda_event && a.agenda_event.name) || '',
+            });
+            lembretes.forEach((l, idx) => {
+                const sendAt = new Date(apptAt.getTime() - (Number(l.horas_antes) || 24) * 3600000);
+                const id = `${u.id || 'u'}:${a.id}:${idx}`;
+                desejadas.set(id, {
+                    id, unidade_id: u.id, attendance_id: String(a.id), lembrete_idx: idx, phone,
+                    nome: p.name || '',
+                    procedimento: (a.agenda_event && a.agenda_event.name) || '',
+                    profissional: (a.user && a.user.name) || '',
+                    local: (a.place && a.place.name) || u.nome || '',
+                    appt_at: followupAtSql(apptAt),
+                    send_at: followupAtSql(sendAt),
+                });
+            });
+        }
+    }
+
+    let criados = 0, remarcados = 0, cancelados = 0;
+    let deteccao = null;
+    if (cfg.detectar_agendados) {
+        try { deteccao = await apptDetectLeads(atendimentos); }
+        catch (e) { deteccao = { erro: e.message }; console.error('detecção de agendados falhou:', e.message); }
+    }
+    if (!cfg.ativo) return { consultas, deteccao };
+
+    const existentes = await queryD1('SELECT id, unidade_id, appt_at, send_at, status FROM crm_appt_reminders WHERE appt_at >= ?', [flowDbTime()]);
+    const porId = new Map((existentes || []).map(r => [r.id, r]));
+
+    for (const d of desejadas.values()) {
+        const ex = porId.get(d.id);
+        if (!ex) {
+            // Upsert: a linha pode existir com um horário já passado (fora do SELECT
+            // acima) — se a consulta foi remarcada pra frente, rearma com o horário novo.
+            await queryD1(
+                `INSERT INTO crm_appt_reminders (id, unidade_id, attendance_id, lembrete_idx, phone, nome, procedimento, profissional, local, appt_at, send_at, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendente')
+                 ON CONFLICT(id) DO UPDATE SET phone = excluded.phone, nome = excluded.nome, procedimento = excluded.procedimento,
+                    profissional = excluded.profissional, local = excluded.local, appt_at = excluded.appt_at, send_at = excluded.send_at,
+                    status = 'pendente', detalhe = NULL, sent_at = NULL, updated_at = CURRENT_TIMESTAMP
+                 WHERE crm_appt_reminders.appt_at <> excluded.appt_at`,
+                [d.id, d.unidade_id, d.attendance_id, d.lembrete_idx, d.phone, d.nome, d.procedimento, d.profissional, d.local, d.appt_at, d.send_at]);
+            criados++;
+        } else if (ex.appt_at !== d.appt_at || ex.status === 'cancelado' || (ex.status === 'pendente' && ex.send_at !== d.send_at)) {
+            // Remarcado, voltou pra agenda depois de cancelado, ou o admin mudou as
+            // horas de antecedência: rearma.
+            await queryD1(
+                `UPDATE crm_appt_reminders SET phone = ?, nome = ?, procedimento = ?, profissional = ?, local = ?, appt_at = ?, send_at = ?,
+                    status = 'pendente', detalhe = NULL, sent_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+                [d.phone, d.nome, d.procedimento, d.profissional, d.local, d.appt_at, d.send_at, d.id]);
+            remarcados++;
+        }
+    }
+
+    // Pendente que sumiu da agenda (cancelado, ou lembrete removido da config) —
+    // só nas unidades que responderam: falha no Amigo não pode cancelar nada.
+    const fimSql = followupAtSql(fim);
+    for (const ex of (existentes || [])) {
+        if (ex.status !== 'pendente' || desejadas.has(ex.id)) continue;
+        if (!unidadesOk.has(String(ex.unidade_id)) || ex.appt_at > fimSql) continue;
+        await queryD1("UPDATE crm_appt_reminders SET status = 'cancelado', detalhe = 'saiu da agenda', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pendente'", [ex.id]);
+        cancelados++;
+    }
+    return { consultas, criados, remarcados, cancelados, deteccao };
+}
+
+// Cruza os pacientes da agenda com os leads pelo telefone. Cada atendimento é
+// avaliado UMA vez (crm_appt_detected): se alguém tirar o lead de Agendado na
+// mão depois, a próxima leitura não empurra ele de volta.
+let _apptDetectTableReady = false;
+async function apptDetectLeads(atendimentos) {
+    if (!_apptDetectTableReady) {
+        await queryD1(`CREATE TABLE IF NOT EXISTS crm_appt_detected (
+            id TEXT PRIMARY KEY,
+            lead_id TEXT,
+            acao TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
+        _apptDetectTableReady = true;
+    }
+    if (!atendimentos.length) return { novos: 0, movidos: 0 };
+    const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+
+    const vistos = new Set();
+    for (const bloco of chunk(atendimentos.map(a => a.key), 90)) {
+        const rows = await queryD1(`SELECT id FROM crm_appt_detected WHERE id IN (${bloco.map(() => '?').join(',')})`, bloco);
+        (rows || []).forEach(r => vistos.add(r.id));
+    }
+    // Consulta mais próxima primeiro: se o limite de movimentos cortar, sobra o que é mais longe.
+    const novos = atendimentos.filter(a => !vistos.has(a.key)).sort((a, b) => a.apptAt - b.apptAt);
+    if (!novos.length) return { novos: 0, movidos: 0 };
+
+    const variantesPorKey = new Map(novos.map(a => [a.key, phoneVariants(a.phone)]));
+    const todasVariantes = Array.from(new Set([].concat(...variantesPorKey.values())));
+    const leadPorFone = new Map();
+    for (const bloco of chunk(todasVariantes, 90)) {
+        const rows = await queryD1(`SELECT id, nome, telefone, column_id, pipeline_id FROM leads WHERE telefone IN (${bloco.map(() => '?').join(',')})`, bloco);
+        (rows || []).forEach(l => { if (!leadPorFone.has(l.telefone)) leadPorFone.set(l.telefone, l); });
+    }
+
+    await ensurePipelines();
+    const funis = new Map(((await queryD1('SELECT * FROM crm_pipelines')) || []).map(r => { const p = parsePipelineRow(r); return [p.id, p.stages.map(s => s.id)]; }));
+    const ordemDoFunil = (lead) => funis.get(lead.pipeline_id || DEFAULT_PIPELINE_ID) || funis.get(DEFAULT_PIPELINE_ID) || PIPELINE_SYSTEM_STAGES.map(s => s.id);
+
+    // Move só quem ainda não chegou em Agendado no funil dele. Follow Up conta
+    // como "antes" (lead que tinha esfriado e marcou); Ganho nunca é rebaixado.
+    const decidir = (lead) => {
+        if (!lead) return 'sem_lead';
+        const col = lead.column_id || 'col-entrada';
+        if (col === 'col-agendado') return 'ja_agendado';
+        if (col === 'col-ganho') return 'ja_ganho';
+        if (col === 'col-perdido') return 'mover';
+        const ordem = ordemDoFunil(lead);
+        const iCol = ordem.indexOf(col), iAg = ordem.indexOf('col-agendado');
+        return iCol >= 0 && iAg >= 0 && iCol > iAg ? 'etapa_posterior' : 'mover';
+    };
+
+    const t0 = Date.now();
+    const registrar = [];
+    let movidos = 0;
+    for (const at of novos) {
+        if (Date.now() - t0 > 12000) break;
+        const vph = variantesPorKey.get(at.key) || [];
+        let lead = null;
+        for (const v of vph) { if (leadPorFone.has(v)) { lead = leadPorFone.get(v); break; } }
+        const acao = decidir(lead);
+
+        // Sem lead: NÃO registra — quem marcou por telefone e só depois chamou no
+        // WhatsApp vira lead mais tarde, e precisa ser achado na próxima leitura.
+        if (acao === 'sem_lead') continue;
+        if (acao !== 'mover') { registrar.push([at.key, lead.id, acao]); continue; }
+        if (movidos >= APPT_DETECT_MAX_MOVES) continue; // fica sem registro: entra na próxima leitura
+
+        // Registro primeiro (trava): dois ticks juntos não movem nem notificam em dobro.
+        const claim = await queryD1Meta('INSERT OR IGNORE INTO crm_appt_detected (id, lead_id, acao) VALUES (?, ?, ?)', [at.key, lead.id, 'movido']);
+        if (!claim || !claim.meta || !claim.meta.changes) continue;
+
+        const de = lead.column_id || 'col-entrada';
+        const upd = await queryD1Meta("UPDATE leads SET column_id = 'col-agendado', data_valor = ? WHERE id = ? AND column_id IS ?", [flowDbTime(), lead.id, lead.column_id]);
+        if (!upd || !upd.meta || !upd.meta.changes) {
+            await queryD1("UPDATE crm_appt_detected SET acao = 'mudou_antes' WHERE id = ?", [at.key]).catch(() => {});
+            continue;
+        }
+        lead.column_id = 'col-agendado'; // outro atendimento do mesmo lead neste lote vira "ja_agendado"
+        movidos++;
+
+        const v = apptVarsFromRow({ appt_at: followupAtSql(at.apptAt) });
+        const quando = `${v.data} às ${v.hora}`;
+        logLeadEvent(lead.id, 'mudanca_coluna', 'sistema', JSON.stringify({ de, para: 'col-agendado' }));
+        logLeadEvent(lead.id, 'agendamento_detectado', 'sistema', `${quando}${at.procedimento ? ' · ' + at.procedimento : ''} (agenda do Amigo)`);
+        await fireCapiForLead(lead.id, 'Schedule').catch(e => console.error('CAPI Schedule (detecção):', e.message));
+        try { await syncLeadPagamento(lead.id, 'lead-update'); markLeadPagDirty(lead.id); } catch (e) {}
+
+        const nomeLead = (lead.nome && !LEAD_NOME_PLACEHOLDER_RE.test(lead.nome)) ? lead.nome : (at.nome || 'Lead');
+        const msg = `📅 ${nomeLead} agendou ${quando} — movido para Agendado`;
+        const notifId = `appt-det-${lead.id}-${Date.now()}`;
+        try {
+            await queryD1('INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)', [notifId, msg, lead.telefone || null]);
+        } catch (e) {
+            await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)', [notifId, msg]).catch(() => {});
+        }
+    }
+
+    // Decisões sem movimento: grava em lote (uma consulta por 30 linhas).
+    for (const bloco of chunk(registrar, 30)) {
+        await queryD1(
+            `INSERT OR IGNORE INTO crm_appt_detected (id, lead_id, acao) VALUES ${bloco.map(() => '(?, ?, ?)').join(', ')}`,
+            [].concat(...bloco)
+        );
+    }
+    if (movidos) broadcastLeadsUpdate('updated');
+    return { novos: novos.length, movidos, registrados: registrar.length };
+}
+
+async function apptReminderProcess(cfg, budgetMs = 20000) {
+    const quiet = { quiet_start: cfg.quiet_start, quiet_end: cfg.quiet_end, dias_semana: [] };
+    if (followupInBlockedTime(quiet, new Date())) return { aguardando: 'horario_silencio' };
+
+    const due = await queryD1("SELECT * FROM crm_appt_reminders WHERE status = 'pendente' AND send_at <= ? ORDER BY send_at ASC LIMIT 20", [flowDbTime()]);
+    if (!due || !due.length) return { enviados: 0 };
+
+    // Agrupa por consulta: com 24h e 2h vencidos juntos (ex.: sistema ligado
+    // agora), manda UM só — o mais próximo da consulta que dá pra entregar.
+    const grupos = new Map();
+    for (const r of due) {
+        const k = `${r.unidade_id}:${r.attendance_id}`;
+        if (!grupos.has(k)) grupos.set(k, []);
+        grupos.get(k).push(r);
+    }
+
+    const lembretes = Array.isArray(cfg.lembretes) ? cfg.lembretes : [];
+    const limiteMs = APPT_MIN_ANTECEDENCIA_MIN * 60000;
+    const t0 = Date.now();
+    let enviados = 0, pulados = 0, erros = 0;
+    const marcar = (id, status, detalhe) => queryD1(
+        `UPDATE crm_appt_reminders SET status = ?, detalhe = ?, sent_at = ${status === 'enviado' ? 'CURRENT_TIMESTAMP' : 'sent_at'}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [status, detalhe, id]);
+
+    for (const grupo of grupos.values()) {
+        if (Date.now() - t0 > budgetMs) break;
+        let escolhido = null;
+        try {
+            grupo.sort((a, b) => (a.send_at < b.send_at ? 1 : a.send_at > b.send_at ? -1 : 0)); // mais próximo da consulta primeiro
+
+            const apptAt = followupParseTs(grupo[0].appt_at);
+            if (!apptAt || apptAt.getTime() - Date.now() < limiteMs) {
+                for (const r of grupo) await marcar(r.id, 'pulado', 'muito perto do horário da consulta');
+                pulados += grupo.length;
+                continue;
+            }
+
+            const vph = phoneVariants(grupo[0].phone);
+            const ph = vph.map(() => '?').join(', ');
+            const lastIn = await queryD1(`SELECT MAX(timestamp) AS ts FROM wa_messages WHERE direction = 'in' AND phone IN (${ph})`, vph);
+            const lastInDate = followupParseTs(lastIn && lastIn[0] && lastIn[0].ts);
+            const within24 = lastInDate ? (Date.now() - lastInDate.getTime()) < 24 * 3600000 : false;
+
+            // Fora da janela de 24h, texto livre não passa na Meta — só template.
+            const entregavel = (r) => {
+                const l = lembretes[r.lembrete_idx];
+                return !!l && ((within24 && String(l.texto || '').trim()) || String(l.template_name || '').trim());
+            };
+            const iEsc = grupo.findIndex(entregavel);
+            escolhido = iEsc >= 0 ? grupo[iEsc] : null;
+
+            for (let i = 0; i < grupo.length; i++) {
+                const r = grupo[i];
+                if (r === escolhido) continue;
+                if (!lembretes[r.lembrete_idx]) await marcar(r.id, 'cancelado', 'lembrete removido da configuração');
+                else if (escolhido && i > iEsc) { await marcar(r.id, 'pulado', 'substituído por um lembrete mais próximo da consulta'); pulados++; }
+                else { await marcar(r.id, 'pulado', 'fora da janela de 24h e sem template configurado'); pulados++; }
+            }
+            if (!escolhido) continue;
+
+            // Trava atômica: outro tick paralelo não manda o mesmo lembrete de novo.
+            const claim = await queryD1Meta("UPDATE crm_appt_reminders SET status = 'enviando', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pendente'", [escolhido.id]);
+            if (!claim || !claim.meta || !claim.meta.changes) continue;
+
+            const lembrete = lembretes[escolhido.lembrete_idx];
+            const vars = apptVarsFromRow(escolhido);
+            const texto = flowInterpolate(lembrete.texto || '', vars);
+            let via;
+            if (within24 && texto.trim()) {
+                await sendWhatsappTextInternal(escolhido.phone, texto, 'lembrete');
+                via = 'texto';
+            } else {
+                const tvars = (Array.isArray(lembrete.template_vars) ? lembrete.template_vars : [])
+                    .map(k => k === 'nome' ? (safeLeadFirstName(vars.nome) || 'Cliente') : vars[k]);
+                await sendWhatsappTemplateInternal(escolhido.phone, String(lembrete.template_name).trim(), { vars: tvars, sentBy: 'lembrete' });
+                via = 'template';
+            }
+            await marcar(escolhido.id, 'enviado', via);
+            enviados++;
+
+            try {
+                const lr = await queryD1(`SELECT id FROM leads WHERE telefone IN (${ph}) LIMIT 1`, vph);
+                if (lr && lr[0]) logLeadEvent(lr[0].id, 'lembrete_consulta', 'sistema', `${vars.data} ${vars.hora} (${via})`);
+            } catch (e) {}
+            await new Promise(r => setTimeout(r, 150));
+        } catch (e) {
+            erros++;
+            console.error('lembrete: envio falhou:', e.message);
+            if (escolhido) await marcar(escolhido.id, 'erro', String(e.message || 'erro').slice(0, 300)).catch(() => {});
+        }
+    }
+    return { enviados, pulados, erros };
+}
+
+// tickStart: o follow-up roda antes no mesmo tick e pode gastar até ~35s. O
+// lembrete usa só o que sobrar até ~50s — o que não couber vai no próximo tick.
+async function apptReminderTick(tickStart = Date.now()) {
+    const cfg = await apptReminderGetConfig();
+    if (!cfg.ativo && !cfg.detectar_agendados) return { skipped: 'inativo' };
+    const restante = () => 50000 - (Date.now() - tickStart);
+    if (restante() < 8000) return { skipped: 'sem_tempo_no_tick' };
+    await ensureApptReminderTable();
+    let sync = { skipped: 'sem_tempo_no_tick' };
+    if (restante() > 25000) {
+        try { sync = await apptReminderSync(cfg); } catch (e) { console.error('lembrete: sync falhou:', e.message); }
+    }
+    const envio = cfg.ativo
+        ? await apptReminderProcess(cfg, Math.max(3000, Math.min(20000, restante() - 3000)))
+        : { skipped: 'lembretes_desligados' };
+    return { sync, envio };
+}
+
+function sanitizeApptReminderConfig(b) {
+    const hhmm = (v, d) => /^\d{2}:\d{2}$/.test(String(v || '')) ? String(v) : d;
+    return {
+        ativo: !!b.ativo,
+        lembretes: (Array.isArray(b.lembretes) ? b.lembretes : []).slice(0, 3).map(l => ({
+            horas_antes: Math.min(168, Math.max(1, parseInt(l.horas_antes, 10) || 24)),
+            texto: String(l.texto || '').slice(0, 1000),
+            template_name: String(l.template_name || '').trim().slice(0, 120),
+            template_vars: (Array.isArray(l.template_vars) ? l.template_vars : []).slice(0, 6)
+                .map(String).map(k => APPT_VAR_KEYS.includes(k) ? k : 'nome'),
+        })),
+        quiet_start: hhmm(b.quiet_start, '20:00'),
+        quiet_end: hhmm(b.quiet_end, '08:00'),
+        detectar_agendados: !!b.detectar_agendados,
+    };
+}
+
+app.get('/api/appt-reminders/config', async (req, res) => {
+    try { res.json({ config: await apptReminderGetConfig(), vars: APPT_VAR_KEYS }); }
+    catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/appt-reminders/config', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const clean = sanitizeApptReminderConfig(req.body || {});
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('appt_reminder_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        // Mudou antecedência/lembretes: a próxima rodada já recalcula a fila.
+        await queryD1("DELETE FROM crm_settings WHERE key = 'appt_reminder_last_sync'").catch(() => {});
+        res.json({ success: true, config: clean });
+    } catch (e) { console.error('Erro ao salvar lembrete de consulta:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// Fila pra tela: próximos envios + últimos resultados. ?sync=1 (admin) busca a
+// agenda na hora, sem esperar a cadência — pra ver o efeito logo após ativar.
+app.get('/api/appt-reminders/status', async (req, res) => {
+    try {
+        await ensureApptReminderTable();
+        const cfg = await apptReminderGetConfig();
+        let sync = null;
+        if (req.query.sync === '1' && req.user && req.user.role === 'admin' && (cfg.ativo || cfg.detectar_agendados)) {
+            try { sync = await apptReminderSync(cfg, { force: true }); }
+            catch (e) { sync = { erro: e.message }; }
+        }
+        const cols = 'id, lembrete_idx, nome, procedimento, profissional, appt_at, send_at, status, detalhe, sent_at';
+        const proximos = await queryD1(`SELECT ${cols} FROM crm_appt_reminders WHERE status = 'pendente' ORDER BY send_at ASC LIMIT 15`);
+        const recentes = await queryD1(`SELECT ${cols} FROM crm_appt_reminders WHERE status IN ('enviado','pulado','erro','cancelado') ORDER BY updated_at DESC LIMIT 15`);
+        const ls = await queryD1("SELECT value FROM crm_settings WHERE key = 'appt_reminder_last_sync'").catch(() => []);
+        // Últimos leads movidos pra Agendado pela detecção (tabela só existe depois da 1ª leitura).
+        const detectados = await queryD1(
+            `SELECT d.created_at, l.id AS lead_id, l.nome, l.telefone FROM crm_appt_detected d
+             JOIN leads l ON l.id = d.lead_id WHERE d.acao = 'movido' ORDER BY d.created_at DESC LIMIT 10`
+        ).catch(() => []);
+        res.json({ proximos: proximos || [], recentes: recentes || [], detectados: detectados || [], last_sync: (ls && ls[0] && ls[0].value) || null, sync });
+    } catch (e) {
+        console.error('lembrete: status falhou:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar a fila de lembretes.' });
+    }
 });
 
 // ============================================================================

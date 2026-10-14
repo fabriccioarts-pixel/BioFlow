@@ -9,8 +9,8 @@
 // se a requisição falhar (offline / instável). /api/*, o webhook e o SSE
 // (EventSource não passa por "fetch" nem por este arquivo) nunca são
 // interceptados: tudo que é dinâmico segue direto pra rede, sempre.
-const CACHE_NAME = 'crm-shell-v1';
-const APP_SHELL = ['/', '/style.css', '/app.js', '/wa_chat_logic.js', '/flows.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE_NAME = 'crm-shell-v2';
+const APP_SHELL = ['/', '/style.css', '/app.js', '/wa_chat_logic.js', '/flows.js', '/manifest.webmanifest', '/favicon.png'];
 
 self.addEventListener('install', (event) => {
     self.skipWaiting();
@@ -55,8 +55,8 @@ self.addEventListener('push', (event) => {
     event.waitUntil(
         self.registration.showNotification(title, {
             body,
-            icon: '/icon.svg',
-            badge: '/icon.svg',
+            icon: '/favicon.png',
+            badge: '/favicon.png',
             tag: data.phone || undefined, // mesma origem substitui a notificação anterior, não empilha
             data: { phone: data.phone || null }
         })

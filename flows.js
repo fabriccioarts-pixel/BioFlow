@@ -35,12 +35,19 @@ function flowIsAdmin() {
     return typeof loggedUser !== 'undefined' && loggedUser &&
         (loggedUser.role === 'admin' || loggedUser.username === 'admin');
 }
+// Etapas vêm dos funis (app.js): as do sistema com o nome do funil principal,
+// as personalizadas com "Funil · Etapa" pra não confundir duas "Avaliação".
 function flowCols() {
-    if (typeof KANBAN_COLUMNS !== 'undefined' && KANBAN_COLUMNS) return KANBAN_COLUMNS;
-    return {
-        'col-entrada': { label: 'Entrada' }, 'col-contatado': { label: 'Contatado' }, 'col-orcado': { label: 'Orçado' },
-        'col-agendado': { label: 'Agendado' }, 'col-ganho': { label: 'Ganho' }, 'col-perdido': { label: 'Perdido' },
-    };
+    const out = {};
+    if (typeof pipelines === 'undefined' || !Array.isArray(pipelines) || !pipelines.length) {
+        DEFAULT_PIPELINE_STAGES.forEach(s => { out[s.id] = { label: s.nome }; });
+        return out;
+    }
+    getPipeline(DEFAULT_PIPELINE_ID).stages.forEach(s => { out[s.id] = { label: s.nome }; });
+    pipelines.forEach(p => p.stages.forEach(s => {
+        if (!out[s.id]) out[s.id] = { label: pipelines.length > 1 ? `${p.nome} · ${s.nome}` : s.nome };
+    }));
+    return out;
 }
 function flowColOptions(sel) {
     return Object.entries(flowCols())
@@ -776,4 +783,303 @@ async function flowSaveFollowup() {
         fuCfg = j.config;
         showToast('Follow-up salvo.', 'success');
     } catch (e) { showToast('Erro ao salvar follow-up.', 'danger'); }
+}
+
+/* ============================================================================
+   LEMBRETE DE CONSULTA — avisa o paciente antes do agendamento (Amigo App)
+   ========================================================================== */
+let arCfg = null;
+let arQueue = null;
+const AR_VARS = [
+    ['nome', 'Nome do paciente', 'Maria'],
+    ['data', 'Data da consulta', 'quarta-feira, 21/10'],
+    ['hora', 'Hora da consulta', '14:30'],
+    ['procedimento', 'Procedimento', 'Laser'],
+    ['profissional', 'Profissional', 'Dra. Ana'],
+    ['local', 'Unidade / local', 'Taguatinga'],
+];
+const AR_SAMPLE = Object.fromEntries(AR_VARS.map(([k, , ex]) => [k, ex]));
+
+async function flowOpenApptReminder() {
+    try {
+        const r = await fetch('/api/appt-reminders/config').then(x => x.json());
+        arCfg = r.config || {};
+    } catch (e) { showToast('Erro ao carregar o lembrete de consulta.', 'danger'); return; }
+    try {
+        const tr = await fetch('/api/whatsapp/templates').then(x => x.json());
+        fuTemplates = (tr.data || []).filter(t => t.status === 'APPROVED');
+    } catch (e) { fuTemplates = []; }
+    if (!Array.isArray(arCfg.lembretes)) arCfg.lembretes = [];
+    arCfg.lembretes.forEach(l => { if (!Array.isArray(l.template_vars)) l.template_vars = []; });
+    flowDraft = null;
+    arQueue = null;
+    renderFlowList();
+    renderApptReminderEditor();
+    arLoadQueue(false);
+}
+
+// Variáveis distintas do corpo do template, na ordem que a Meta espera.
+function arTemplateVarNames(name) {
+    const names = Array.from(new Set((arTemplateBody(name).match(/\{\{\s*[\w\d_]+\s*\}\}/g) || []).map(v => v.replace(/[{}\s]/g, ''))));
+    if (names.every(n => /^\d+$/.test(n))) names.sort((a, b) => Number(a) - Number(b));
+    return names;
+}
+function arTemplateBody(name) {
+    const t = fuTemplates.find(x => x.name === name);
+    const body = t && (t.components || []).find(c => c.type === 'BODY');
+    return (body && body.text) || '';
+}
+
+// Template novo: variável nomeada ({{nome}}, {{data}}...) casa pelo nome;
+// posicional ({{1}}, {{2}}...) segue a ordem nome, data, hora, procedimento...
+function arDefaultVars(names) {
+    const keys = AR_VARS.map(v => v[0]);
+    return names.map((n, i) => keys.includes(n) ? n : (keys[i] || 'nome'));
+}
+
+function arPreview(text, vars) {
+    return String(text || '').replace(/\{\{\s*([\w]+)\s*\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+}
+function arTemplatePreview(l) {
+    const names = arTemplateVarNames(l.template_name);
+    const vals = {};
+    names.forEach((n, j) => { vals[n] = AR_SAMPLE[l.template_vars[j]] || '-'; });
+    return arPreview(arTemplateBody(l.template_name), vals);
+}
+function arHorasLabel(h) {
+    h = parseInt(h, 10) || 0;
+    if (h % 24 === 0) return `${h / 24} dia${h / 24 > 1 ? 's' : ''} antes da consulta`;
+    return `${h} h antes da consulta`;
+}
+
+function arSet(i, key, val) {
+    const l = arCfg.lembretes[i];
+    if (!l) return;
+    if (key === 'horas_antes') {
+        l.horas_antes = Math.min(168, Math.max(1, parseInt(val, 10) || 1));
+        const el = document.getElementById('ar-when-' + i);
+        if (el) el.textContent = arHorasLabel(l.horas_antes);
+        return;
+    }
+    l[key] = val;
+    if (key === 'template_name') {
+        l.template_vars = arDefaultVars(arTemplateVarNames(val));
+        renderApptReminderEditor();
+    } else if (key === 'texto') {
+        const pv = document.getElementById('ar-preview-' + i);
+        if (pv) pv.textContent = arPreview(val, AR_SAMPLE) || '—';
+    }
+}
+function arSetVar(i, j, val) {
+    const l = arCfg.lembretes[i];
+    if (!l) return;
+    l.template_vars[j] = val;
+    const pv = document.getElementById('ar-tpl-preview-' + i);
+    if (pv) pv.textContent = arTemplatePreview(l);
+}
+function arAdd() {
+    if (arCfg.lembretes.length >= 3) return;
+    const ultimo = arCfg.lembretes[arCfg.lembretes.length - 1];
+    arCfg.lembretes.push({
+        horas_antes: ultimo ? Math.max(1, Math.min(2, ultimo.horas_antes - 1)) : 24,
+        texto: 'Oi {{nome}}! Te esperamos às {{hora}} 😊',
+        template_name: '',
+        template_vars: [],
+    });
+    renderApptReminderEditor();
+}
+function arRemove(i) { arCfg.lembretes.splice(i, 1); renderApptReminderEditor(); }
+
+function renderApptReminderEditor() {
+    const box = document.getElementById('fx-editor');
+    if (!box || !arCfg) return;
+    const c = arCfg;
+    const varChips = AR_VARS.map(([k, label]) => `<code title="${escapeHtml(label)}">{{${k}}}</code>`).join(' ');
+
+    const cards = c.lembretes.map((l, i) => {
+        const tplKnown = !l.template_name || fuTemplates.some(t => t.name === l.template_name);
+        const names = l.template_name && tplKnown ? arTemplateVarNames(l.template_name) : [];
+        const mapping = names.length ? `
+            <div class="ar-map">
+                <div class="fx-mini">Preencher as variáveis do template com:</div>
+                ${names.map((n, j) => `
+                    <label class="ar-map-row"><code>{{${escapeHtml(n)}}}</code>
+                        <select onchange="arSetVar(${i}, ${j}, this.value)">
+                            ${AR_VARS.map(([k, label]) => `<option value="${k}" ${l.template_vars[j] === k ? 'selected' : ''}>${label}</option>`).join('')}
+                        </select>
+                    </label>`).join('')}
+            </div>` : '';
+        return `
+        <div class="fx-node" style="margin-bottom:0.6rem">
+            <div class="fx-node-head" style="cursor:default">
+                <span class="fx-node-id" style="min-width:auto">Lembrete ${i + 1}</span>
+                <span class="fx-node-when" id="ar-when-${i}">${arHorasLabel(l.horas_antes)}</span>
+                <button class="fx-drawer-del" onclick="arRemove(${i})" title="Remover lembrete" aria-label="Remover lembrete"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="fx-node-body" style="padding:0.7rem">
+                <label>Enviar quantas horas antes da consulta
+                    <input type="number" min="1" max="168" value="${l.horas_antes}" oninput="arSet(${i}, 'horas_antes', this.value)">
+                </label>
+                <label>Mensagem <span class="fx-mini">usada se o paciente falou com a clínica nas últimas 24h</span>
+                    <textarea rows="2" oninput="arSet(${i}, 'texto', this.value)">${escapeHtml(l.texto || '')}</textarea>
+                </label>
+                <div class="ar-preview"><span class="fx-mini">Prévia:</span> <span id="ar-preview-${i}">${escapeHtml(arPreview(l.texto, AR_SAMPLE) || '—')}</span></div>
+                <label>Template aprovado <span class="fx-mini">usado fora da janela de 24h (o caso mais comum)</span>
+                    <select onchange="arSet(${i}, 'template_name', this.value)">
+                        <option value="">— sem template: só envia dentro das 24h —</option>
+                        ${fuTemplates.map(t => `<option value="${escapeHtml(t.name)}" ${l.template_name === t.name ? 'selected' : ''}>${escapeHtml(t.name)}${t.category ? ' · ' + escapeHtml(t.category) : ''}</option>`).join('')}
+                    </select>
+                </label>
+                ${tplKnown ? '' : `<div class="fx-mini" style="color:var(--accent-warning)">Template "${escapeHtml(l.template_name)}" não está entre os aprovados da Meta.</div>`}
+                ${mapping}
+                ${l.template_name && tplKnown ? `<div class="ar-preview"><span class="fx-mini">Prévia do template:</span> <span id="ar-tpl-preview-${i}">${escapeHtml(arTemplatePreview(l))}</span></div>` : ''}
+            </div>
+        </div>`;
+    }).join('') || '<div class="fx-mini">Nenhum lembrete. Adicione o primeiro.</div>';
+
+    box.innerHTML = `
+        <div class="fx-editor-head">
+            <div style="flex:1">
+                <b style="font-size:0.95rem"><i class="fa-solid fa-calendar-check"></i> Agenda e lembretes</b>
+                <div class="fx-mini">Lê a agenda do Amigo App pra mover quem agendou e lembrar o paciente antes da consulta.</div>
+            </div>
+            <label class="fx-switch">
+                <span class="ui-switch">
+                    <input type="checkbox" ${c.ativo ? 'checked' : ''} onchange="arCfg.ativo = this.checked">
+                    <span class="ui-switch-track"></span>
+                </span>
+                Lembretes ativos
+            </label>
+            <button class="btn-save" onclick="arSave()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
+        </div>
+
+        <div class="fx-cols">
+        <div class="fx-col-main">
+        <div class="fx-block">
+            <div class="fx-block-title"><i class="fa-solid fa-bell"></i> Lembretes</div>
+            ${cards}
+            ${c.lembretes.length < 3 ? '<button class="fx-add-btn" onclick="arAdd()"><i class="fa-solid fa-plus"></i> Adicionar lembrete</button>' : ''}
+            <div class="fx-mini" style="margin-top:0.6rem">Variáveis: ${varChips}</div>
+            <div class="fx-mini" style="margin-top:0.4rem">O WhatsApp só aceita texto livre até 24h depois da última mensagem do paciente. Fora disso vai o <b>template aprovado</b>; sem template, o lembrete é pulado. Se dois lembretes da mesma consulta vencerem juntos, vai só um.</div>
+        </div>
+        </div>
+
+        <div class="fx-col-side">
+        <div class="fx-block">
+            <div class="fx-block-title"><i class="fa-solid fa-user-check"></i> Detectar quem agendou</div>
+            <label class="ar-toggle">
+                <span class="ui-switch">
+                    <input type="checkbox" ${c.detectar_agendados ? 'checked' : ''} onchange="arCfg.detectar_agendados = this.checked">
+                    <span class="ui-switch-track"></span>
+                </span>
+                <span>Mover o lead para <b>Agendado</b> quando o telefone dele aparecer na agenda do Amigo</span>
+            </label>
+            <div class="fx-mini">Lê os próximos 30 dias a cada 15 min e avisa o Meta (Schedule), como se você tivesse movido na mão. Cada consulta é avaliada uma vez: se você tirar o lead de Agendado depois, ele não volta. Quem está em Ganho não é mexido.</div>
+            <div class="fx-mini" style="margin-top:0.35rem">Ao ligar, quem já tem consulta marcada é movido aos poucos (até 10 por leitura).</div>
+        </div>
+
+        <div class="fx-block">
+            <div class="fx-block-title"><i class="fa-solid fa-moon"></i> Não enviar de madrugada</div>
+            <div class="fx-row">
+                <label>Silêncio a partir de <input type="time" value="${escapeHtml(c.quiet_start || '20:00')}" oninput="arCfg.quiet_start = this.value"></label>
+                <label>Volta a enviar às <input type="time" value="${escapeHtml(c.quiet_end || '08:00')}" oninput="arCfg.quiet_end = this.value"></label>
+            </div>
+            <div class="fx-mini">Um lembrete que cairia no silêncio espera até o horário de voltar. Se a consulta for antes disso, ele é pulado.</div>
+        </div>
+
+        <div class="fx-block">
+            <div class="fx-block-title" style="justify-content:space-between">
+                <span><i class="fa-solid fa-list-check"></i> Fila de envios</span>
+                <button class="ar-refresh" onclick="arLoadQueue(true)" title="Ler a agenda do Amigo agora"><i class="fa-solid fa-rotate"></i> Atualizar</button>
+            </div>
+            <div id="ar-queue"><div class="fx-mini">Carregando…</div></div>
+        </div>
+        </div>
+        </div>`;
+    renderApptReminderQueue();
+}
+
+function arFmt(sqlUtc) {
+    if (!sqlUtc) return '';
+    const d = new Date(String(sqlUtc).replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return '';
+    return d.toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+}
+
+const AR_STATUS = {
+    enviado: ['fa-circle-check', 'var(--accent-success)', 'Enviado'],
+    pulado: ['fa-forward', 'var(--text-muted)', 'Pulado'],
+    erro: ['fa-circle-exclamation', 'var(--accent-danger)', 'Erro'],
+    cancelado: ['fa-ban', 'var(--text-muted)', 'Cancelado'],
+};
+
+function renderApptReminderQueue() {
+    const box = document.getElementById('ar-queue');
+    if (!box) return;
+    if (!arQueue) { box.innerHTML = '<div class="fx-mini">Carregando…</div>'; return; }
+    if (arQueue.error) { box.innerHTML = `<div class="fx-mini" style="color:var(--accent-danger)">${escapeHtml(arQueue.error)}</div>`; return; }
+    const prox = arQueue.proximos || [];
+    const rec = arQueue.recentes || [];
+    const item = (r, linha2) => `
+        <div class="ar-q-item">
+            <div class="ar-q-name">${escapeHtml(r.nome || 'Paciente')}${r.procedimento ? ` <span class="fx-mini">· ${escapeHtml(r.procedimento)}</span>` : ''}</div>
+            <div class="fx-mini">${linha2}</div>
+        </div>`;
+    const proxHtml = prox.length
+        ? prox.map(r => item(r, `Consulta ${escapeHtml(arFmt(r.appt_at))} · envia ${escapeHtml(arFmt(r.send_at))}`)).join('')
+        : `<div class="fx-mini">${arCfg && arCfg.ativo ? 'Nenhum lembrete na fila agora.' : 'Lembretes desligados.'}</div>`;
+    const det = arQueue.detectados || [];
+    const detHtml = det.map(d => `
+        <button type="button" class="ar-q-item ar-q-link" onclick="typeof openLeadChat === 'function' && openLeadChat(${escapeHtml(JSON.stringify(d.telefone || ''))}, ${escapeHtml(JSON.stringify(d.nome || ''))})" title="Abrir conversa">
+            <div class="ar-q-name">${escapeHtml(d.nome || 'Lead')}</div>
+            <div class="fx-mini"><i class="fa-solid fa-calendar-check" style="color:var(--accent-success)"></i> Movido para Agendado · ${escapeHtml(arFmt(d.created_at))}</div>
+        </button>`).join('');
+    const recHtml = rec.map(r => {
+        const [ic, cor, lbl] = AR_STATUS[r.status] || ['fa-circle', 'var(--text-muted)', r.status];
+        const det = r.status === 'enviado' ? (r.detalhe === 'template' ? 'via template' : 'via mensagem') : (r.detalhe || '');
+        return item(r, `<i class="fa-solid ${ic}" style="color:${cor}"></i> ${escapeHtml(lbl)}${det ? ' · ' + escapeHtml(det) : ''} · consulta ${escapeHtml(arFmt(r.appt_at))}`);
+    }).join('');
+    const sync = arQueue.last_sync ? `Agenda lida ${escapeHtml(arFmt(arQueue.last_sync))}` : 'Agenda ainda não lida';
+    box.innerHTML = `
+        ${det.length ? `<div class="ar-q-group">Movidos para Agendado</div>${detHtml}` : ''}
+        <div class="ar-q-group">Próximos lembretes</div>${proxHtml}
+        ${rec.length ? `<div class="ar-q-group">Últimos lembretes</div>${recHtml}` : ''}
+        <div class="fx-mini" style="margin-top:0.6rem">${sync}</div>`;
+}
+
+async function arLoadQueue(sync) {
+    const btn = document.querySelector('.ar-refresh');
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch('/api/appt-reminders/status' + (sync ? '?sync=1' : ''));
+        const j = await r.json();
+        arQueue = r.ok ? j : { error: j.error || 'Erro ao carregar a fila.' };
+        if (sync && j.sync && j.sync.erro) showToast('Amigo App: ' + j.sync.erro, 'danger');
+    } catch (e) {
+        arQueue = { error: 'Erro ao carregar a fila.' };
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+    renderApptReminderQueue();
+}
+
+async function arSave() {
+    if (!arCfg) return;
+    if (arCfg.ativo && arCfg.lembretes.some(l => !String(l.texto || '').trim() && !l.template_name)) {
+        showToast('Cada lembrete precisa de uma mensagem ou de um template.', 'danger');
+        return;
+    }
+    try {
+        const r = await fetch('/api/appt-reminders/config', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(arCfg),
+        });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Erro ao salvar.', 'danger'); return; }
+        arCfg = j.config;
+        const ligados = [arCfg.detectar_agendados && 'detecção', arCfg.ativo && 'lembretes'].filter(Boolean);
+        showToast(ligados.length ? `Salvo — ${ligados.join(' e ')} ligado${ligados.length > 1 ? 's' : ''}.` : 'Salvo — tudo desligado.', 'success');
+        renderApptReminderEditor();
+        if (ligados.length) arLoadQueue(true);
+    } catch (e) { showToast('Erro ao salvar o lembrete.', 'danger'); }
 }
