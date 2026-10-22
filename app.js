@@ -314,6 +314,7 @@ function initApp() {
         fetchApiOptions();
         startNotificationPolling();
         loadAudiences();
+        loadAdCatalog();
 
         // SSE para sincronização instantânea; polling só como rede de segurança
         // (SSE cobre o tempo real, então esse intervalo pode ser bem largo — é
@@ -931,6 +932,155 @@ function filterLeadsByAudience(audience) {
     });
 }
 
+// === ORIGEM DO ANÚNCIO (campanha › conjunto › anúncio) ===
+// O webhook grava em leads.ad_referral o source_id do anúncio de Click-to-WhatsApp;
+// o sync do Meta Ads traz o catálogo (ad_ads/ad_campaigns). Aqui junta os dois.
+let adCatalog = { campaigns: new Map(), adsets: new Map(), ads: new Map(), loaded: false };
+
+async function loadAdCatalog() {
+    try {
+        const res = await fetch('/api/marketing/ad-catalog');
+        if (!res.ok) return;
+        const json = await res.json();
+        adCatalog = {
+            campaigns: new Map((json.campaigns || []).map(c => [String(c.id), c])),
+            adsets: new Map((json.adsets || []).map(s => [String(s.id), s])),
+            ads: new Map((json.ads || []).map(a => [String(a.id), a])),
+            loaded: true
+        };
+        _adAttrCache = new WeakMap();
+    } catch (e) {
+        console.error('Erro ao carregar catálogo de anúncios:', e);
+    }
+    populateCampaignAdSegmentOptions();
+    if (typeof renderBoard === 'function' && leads.length) renderBoard();
+}
+
+// { campaign, adset, ad, headline, sourceId, sourceType } — ou null se o lead não
+// veio de anúncio com referral. Anúncio fora do catálogo (sync ainda não rodou,
+// post impulsionado) ainda devolve headline/sourceId pra mostrar o que tiver.
+// Cache por objeto de lead (WeakMap pra não ir junto no PUT do lead).
+let _adAttrCache = new WeakMap();
+function leadAdAttribution(lead) {
+    if (!lead || !lead.ad_referral) return null;
+    const hit = _adAttrCache.get(lead);
+    if (hit && hit.src === lead.ad_referral) return hit.attr;
+    let ref = null;
+    try { ref = typeof lead.ad_referral === 'string' ? JSON.parse(lead.ad_referral) : lead.ad_referral; } catch (e) {}
+    let out = null;
+    if (ref && (ref.source_id || ref.headline)) {
+        const ad = ref.source_id ? adCatalog.ads.get(String(ref.source_id)) || null : null;
+        const campaign = ad && ad.campaign_id ? adCatalog.campaigns.get(String(ad.campaign_id)) || null : null;
+        const adset = ad && ad.adset_id ? adCatalog.adsets.get(String(ad.adset_id)) || null : null;
+        out = { ad, campaign, adset, headline: ref.headline || '', sourceId: ref.source_id ? String(ref.source_id) : '', sourceType: ref.source_type || '' };
+    }
+    // Só memoriza depois que o catálogo chegou — antes disso campanha ainda é null.
+    if (adCatalog.loaded) _adAttrCache.set(lead, { src: lead.ad_referral, attr: out });
+    return out;
+}
+
+function adAttributionPath(attr) {
+    if (!attr) return '';
+    return [attr.campaign && attr.campaign.name, attr.adset && attr.adset.name, (attr.ad && attr.ad.name) || attr.headline]
+        .filter(Boolean).join(' › ');
+}
+
+// Segmento por anúncio do disparo: lê os 3 selects da tela de campanha.
+function readCampaignAdSegment() {
+    const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    return { campaign: val('campaign-ad-campaign'), adset: val('campaign-ad-adset'), ad: val('campaign-ad-ad') };
+}
+
+function leadMatchesAdSegment(lead, seg) {
+    if (!seg || !seg.campaign) return true;
+    const attr = leadAdAttribution(lead);
+    if (seg.campaign === '__any_ad') {
+        const o = (lead.origem || '').toLowerCase();
+        return !!attr || o.startsWith('meta ads');
+    }
+    if (!attr || !attr.ad) return false;
+    if (String(attr.ad.campaign_id) !== seg.campaign) return false;
+    if (seg.adset && String(attr.ad.adset_id) !== seg.adset) return false;
+    if (seg.ad && String(attr.ad.id) !== seg.ad) return false;
+    return true;
+}
+
+function adSegmentLabel(seg) {
+    if (!seg || !seg.campaign) return '';
+    if (seg.campaign === '__any_ad') return 'Qualquer anúncio Meta';
+    const parts = [adCatalog.campaigns.get(seg.campaign)?.name || seg.campaign];
+    if (seg.adset) parts.push(adCatalog.adsets.get(seg.adset)?.name || seg.adset);
+    if (seg.ad) parts.push(adCatalog.ads.get(seg.ad)?.name || seg.ad);
+    return parts.join(' › ');
+}
+
+// Monta os selects campanha → conjunto → anúncio com a contagem de leads de
+// cada um. Só lista o que tem pelo menos 1 lead atribuído (o resto não serve
+// de público), da campanha com mais leads pra menos.
+function populateCampaignAdSegmentOptions() {
+    const campSel = document.getElementById('campaign-ad-campaign');
+    const setSel = document.getElementById('campaign-ad-adset');
+    const adSel = document.getElementById('campaign-ad-ad');
+    if (!campSel || !setSel || !adSel) return;
+    const cur = readCampaignAdSegment();
+
+    const counts = { campaign: new Map(), adset: new Map(), ad: new Map() };
+    let anyAd = 0;
+    for (const l of leads) {
+        const attr = leadAdAttribution(l);
+        if (attr || (l.origem || '').toLowerCase().startsWith('meta ads')) anyAd++;
+        if (!attr || !attr.ad) continue;
+        const bump = (m, k) => { if (k) m.set(String(k), (m.get(String(k)) || 0) + 1); };
+        bump(counts.campaign, attr.ad.campaign_id);
+        bump(counts.adset, attr.ad.adset_id);
+        bump(counts.ad, attr.ad.id);
+    }
+    const byCount = m => [...m.entries()].sort((a, b) => b[1] - a[1]);
+    const opt = (value, label, n) => `<option value="${escapeHtml(value)}">${escapeHtml(label)} (${n})</option>`;
+
+    campSel.innerHTML = '<option value="">Qualquer origem (não filtrar)</option>'
+        + (anyAd ? opt('__any_ad', 'Qualquer anúncio Meta', anyAd) : '')
+        + byCount(counts.campaign).map(([id, n]) => opt(id, adCatalog.campaigns.get(id)?.name || `Campanha ${id}`, n)).join('');
+    if ([...campSel.options].some(o => o.value === cur.campaign)) campSel.value = cur.campaign;
+
+    const camp = campSel.value;
+    const realCamp = camp && camp !== '__any_ad';
+    const adsets = byCount(counts.adset).filter(([id]) => realCamp && String(adCatalog.adsets.get(id)?.campaign_id) === camp);
+    setSel.innerHTML = '<option value="">Todos os conjuntos</option>'
+        + adsets.map(([id, n]) => opt(id, adCatalog.adsets.get(id)?.name || `Conjunto ${id}`, n)).join('');
+    setSel.disabled = !realCamp;
+    if ([...setSel.options].some(o => o.value === cur.adset)) setSel.value = cur.adset;
+
+    const adset = setSel.value;
+    const ads = byCount(counts.ad).filter(([id]) => {
+        const a = adCatalog.ads.get(id);
+        return realCamp && a && String(a.campaign_id) === camp && (!adset || String(a.adset_id) === adset);
+    });
+    adSel.innerHTML = '<option value="">Todos os anúncios</option>'
+        + ads.map(([id, n]) => opt(id, adCatalog.ads.get(id)?.name || `Anúncio ${id}`, n)).join('');
+    adSel.disabled = !realCamp;
+    if ([...adSel.options].some(o => o.value === cur.ad)) adSel.value = cur.ad;
+
+    const hint = document.getElementById('campaign-ad-hint');
+    if (hint) {
+        hint.textContent = !adCatalog.loaded || !adCatalog.campaigns.size
+            ? 'Campanhas aparecem aqui depois que o sync do Meta Ads rodar (ROI de Anúncios).'
+            : 'Combina com o público acima — ex.: "Orçado" + campanha de Laser = só quem veio desse anúncio e está em Orçado.';
+    }
+}
+
+function onCampaignAdSegmentChange(level) {
+    // Trocar a campanha zera conjunto/anúncio; trocar o conjunto zera o anúncio.
+    if (level === 'campaign') {
+        const s = document.getElementById('campaign-ad-adset'); if (s) s.value = '';
+    }
+    if (level === 'campaign' || level === 'adset') {
+        const a = document.getElementById('campaign-ad-ad'); if (a) a.value = '';
+    }
+    populateCampaignAdSegmentOptions();
+    updateCampaignLeadCount();
+}
+
 // Badge no menu lateral ("CRM Vendas") com a quantidade de leads novos aguardando
 // na coluna Entrada — mesmo visual do badge de mensagens não lidas do chat.
 function updateKanbanEntradaBadge() {
@@ -964,8 +1114,24 @@ const cmp = {
     value_desc:    (a, b) => leadEffectiveValue(b) - leadEffectiveValue(a) || byCreatedAsc(a, b),
     name_asc:      (a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { sensitivity: 'base' }),
     activity_desc: (a, b) => (b.assigned_at || b.created_at || '').localeCompare(a.assigned_at || a.created_at || ''),
+    attention:     (a, b) => leadAttentionTier(b) - leadAttentionTier(a)
+                    || (leadAttentionSince(a) || '9').localeCompare(leadAttentionSince(b) || '9')
+                    || byCreatedAsc(a, b),
 };
 return list.slice().sort(cmp[key] || byCreatedAsc);
+}
+
+// "Precisa de atenção": quem a IA marcou como quente vem primeiro, depois quem
+// mandou a última mensagem e está esperando resposta, depois quem a gente
+// respondeu e ficou quieto; dentro de cada grupo, quem está esperando há mais tempo.
+function leadAttentionTier(l) {
+    if (l.qualificado_em) return 3;
+    if (l.last_msg_direction === 'in') return 2;
+    if (l.last_msg_direction === 'out') return 1;
+    return 0;
+}
+function leadAttentionSince(l) {
+    return leadAttentionTier(l) === 3 ? l.qualificado_em : (l.last_msg_at || l.created_at || '');
 }
 
 function switchKanbanOwnerTab(tabType) {
@@ -1267,6 +1433,200 @@ const PLE_SYSTEM_HINT = {
     'col-perdido': 'Destino de leads inativados e do follow-up automático',
 };
 let _pleDraft = null;
+
+// === AUTOMAÇÕES DO KANBAN (regras "SE ... ENTÃO mover pra etapa") ===
+// Quem roda é o servidor (kanbanRulesTick no flow-tick); aqui só edita a config.
+const KRL_CONDICOES = {
+    sem_resposta:   { label: 'não respondeu nossa última mensagem há', tempo: true },
+    lead_respondeu: { label: 'respondeu (mandou mensagem)', tempo: false },
+    sem_interacao:  { label: 'está sem nenhuma mensagem há', tempo: true },
+    tem_tag:        { label: 'tem a etiqueta', tempo: false, tag: true },
+};
+// Agendado e Ganho dependem de evento real (consulta, pagamento) — o servidor recusa.
+const KRL_DESTINO_BLOQUEADO = ['col-agendado', 'col-ganho'];
+const KRL_SUGESTOES = [
+    { nome: 'Sem resposta há 3 dias → Follow Up', de_etapa: 'col-contatado', condicao: 'sem_resposta', horas: 72, para_etapa: 'col-perdido' },
+    { nome: 'Respondeu no Follow Up → Contatado', de_etapa: 'col-perdido', condicao: 'lead_respondeu', horas: 24, para_etapa: 'col-contatado' },
+    { nome: 'Parado na Entrada há 7 dias → Follow Up', de_etapa: 'col-entrada', condicao: 'sem_interacao', horas: 168, para_etapa: 'col-perdido' },
+];
+let _krlDraft = null;
+
+function krlIsAdmin() {
+    return typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
+}
+
+async function openKanbanRules() {
+    if (!krlIsAdmin()) {
+        await customAlert('Só administradores podem configurar as automações do Kanban.', 'Automações do Kanban');
+        return;
+    }
+    const modal = document.getElementById('modalKanbanRules');
+    if (!modal) return;
+    document.getElementById('krl-rules').innerHTML = '<div class="krl-empty">Carregando...</div>';
+    document.getElementById('krl-preview').innerHTML = '';
+    modal.classList.add('active');
+    try {
+        const json = await fetch('/api/kanban-rules').then(r => r.json());
+        const cfg = json.config || {};
+        _krlDraft = { ativo: !!cfg.ativo, intervalo_min: cfg.intervalo_min || 10, regras: (cfg.regras || []).map(r => ({ ...r })) };
+        krlRenderLog(json.log || []);
+    } catch (e) {
+        _krlDraft = { ativo: false, intervalo_min: 10, regras: [] };
+        krlRenderLog([]);
+    }
+    document.getElementById('krl-ativo').checked = _krlDraft.ativo;
+    document.getElementById('krl-intervalo').value = _krlDraft.intervalo_min;
+    krlRender();
+}
+
+function krlStageOptions(pipelineId, selected, { qualquer = false, destino = false } = {}) {
+    const p = getPipeline(pipelineId);
+    const opts = (p ? p.stages : [])
+        .filter(s => !(destino && KRL_DESTINO_BLOQUEADO.includes(s.id)))
+        .filter(s => !(!destino && s.id === 'col-ganho'))
+        .map(s => `<option value="${escapeHtml(s.id)}" ${s.id === selected ? 'selected' : ''}>${escapeHtml(s.nome)}</option>`).join('');
+    return (qualquer ? `<option value="" ${!selected ? 'selected' : ''}>qualquer etapa</option>` : '') + opts;
+}
+
+function krlRender() {
+    const box = document.getElementById('krl-rules');
+    if (!box || !_krlDraft) return;
+    if (!_krlDraft.regras.length) {
+        box.innerHTML = '<div class="krl-empty">Nenhuma regra ainda. Crie uma do zero ou comece por uma sugestão abaixo.</div>';
+        return;
+    }
+    const tags = (window.availableTags || []);
+    box.innerHTML = _krlDraft.regras.map((r, i) => {
+        const cond = KRL_CONDICOES[r.condicao] || KRL_CONDICOES.sem_resposta;
+        const emDias = r.horas % 24 === 0;
+        const tempoVal = emDias ? r.horas / 24 : r.horas;
+        const pipelineSel = pipelines.length > 1
+            ? `<span>no funil</span><select onchange="krlSet(${i}, 'pipeline_id', this.value)" aria-label="Funil">${pipelines.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === r.pipeline_id ? 'selected' : ''}>${escapeHtml(p.nome)}</option>`).join('')}</select>`
+            : '';
+        return `<div class="krl-rule ${r.ativo ? '' : 'krl-rule--off'}">
+            <div class="krl-rule-head">
+                <label class="ui-switch" title="${r.ativo ? 'Regra ligada' : 'Regra desligada'}">
+                    <input type="checkbox" ${r.ativo ? 'checked' : ''} onchange="krlSet(${i}, 'ativo', this.checked)" aria-label="Ligar regra">
+                    <span class="ui-switch-track"></span>
+                </label>
+                <input type="text" class="krl-rule-name" value="${escapeHtml(r.nome || '')}" maxlength="80" placeholder="Nome da regra" oninput="krlSet(${i}, 'nome', this.value, true)" aria-label="Nome da regra">
+                <button type="button" class="krl-rule-del" onclick="krlRemove(${i})" title="Excluir regra" aria-label="Excluir regra"><i class="fa-solid fa-trash"></i></button>
+            </div>
+            <div class="krl-rule-body">
+                ${pipelineSel}
+                <span>SE o lead está em</span>
+                <select onchange="krlSet(${i}, 'de_etapa', this.value)" aria-label="Etapa de origem">${krlStageOptions(r.pipeline_id, r.de_etapa, { qualquer: true })}</select>
+                <span>e</span>
+                <select onchange="krlSet(${i}, 'condicao', this.value)" aria-label="Condição">${Object.entries(KRL_CONDICOES).map(([k, c]) => `<option value="${k}" ${k === r.condicao ? 'selected' : ''}>${c.label}</option>`).join('')}</select>
+                ${cond.tempo ? `<input type="number" min="1" max="${emDias ? 180 : 4320}" value="${tempoVal}" class="krl-num" onchange="krlSetTempo(${i}, this.value, this.nextElementSibling.value)" aria-label="Tempo">
+                    <select onchange="krlSetTempo(${i}, this.previousElementSibling.value, this.value)" aria-label="Unidade"><option value="h" ${emDias ? '' : 'selected'}>horas</option><option value="d" ${emDias ? 'selected' : ''}>dias</option></select>` : ''}
+                ${cond.tag ? `<select onchange="krlSet(${i}, 'tag', this.value)" aria-label="Etiqueta"><option value="">escolha...</option>${tags.map(t => `<option value="${escapeHtml(String(t.id))}" ${String(t.id) === r.tag ? 'selected' : ''}>${escapeHtml(t.name || t.id)}</option>`).join('')}</select>` : ''}
+                <span class="krl-then">ENTÃO mover para</span>
+                <select onchange="krlSet(${i}, 'para_etapa', this.value)" aria-label="Etapa de destino">${krlStageOptions(r.pipeline_id, r.para_etapa, { destino: true })}</select>
+            </div>
+            ${r.condicao === 'lead_respondeu' ? '<div class="krl-rule-note">Vale só pra respostas que chegarem depois que a regra foi criada.</div>' : ''}
+        </div>`;
+    }).join('');
+}
+
+function krlSet(i, campo, valor, semRender) {
+    const r = _krlDraft && _krlDraft.regras[i];
+    if (!r) return;
+    r[campo] = valor;
+    if (campo === 'pipeline_id') {
+        // Etapas livres são de um funil só — troca de funil volta pros padrões.
+        r.de_etapa = '';
+        r.para_etapa = 'col-perdido';
+    }
+    if (!semRender) krlRender();
+}
+
+function krlSetTempo(i, n, unidade) {
+    const v = Math.max(1, parseInt(n, 10) || 1);
+    krlSet(i, 'horas', unidade === 'd' ? v * 24 : v);
+}
+
+function krlAdd(sugestaoIdx) {
+    if (!_krlDraft) return;
+    const base = KRL_SUGESTOES[sugestaoIdx] || { nome: '', de_etapa: '', condicao: 'sem_resposta', horas: 48, para_etapa: 'col-perdido' };
+    _krlDraft.regras.push({ ...base, ativo: true, pipeline_id: currentPipelineId || DEFAULT_PIPELINE_ID, tag: '' });
+    krlRender();
+}
+
+function krlRemove(i) {
+    if (!_krlDraft) return;
+    _krlDraft.regras.splice(i, 1);
+    krlRender();
+}
+
+function krlCollect() {
+    return {
+        ativo: document.getElementById('krl-ativo').checked,
+        intervalo_min: parseInt(document.getElementById('krl-intervalo').value, 10) || 10,
+        regras: _krlDraft.regras
+    };
+}
+
+function krlValidate(cfg) {
+    for (const r of cfg.regras) {
+        if (r.de_etapa && r.de_etapa === r.para_etapa) return `A regra "${r.nome || 'sem nome'}" move pra mesma etapa de onde o lead já está.`;
+        if (r.condicao === 'tem_tag' && !r.tag) return `Escolha a etiqueta da regra "${r.nome || 'sem nome'}".`;
+    }
+    return '';
+}
+
+async function krlSave() {
+    if (!_krlDraft) return;
+    const cfg = krlCollect();
+    const erro = krlValidate(cfg);
+    if (erro) { await customAlert(erro, 'Automações do Kanban'); return; }
+    const btn = document.getElementById('krl-save-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/kanban-rules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar.');
+        _krlDraft = { ...json.config, regras: json.config.regras.map(r => ({ ...r })) };
+        krlRender();
+        if (typeof showToast === 'function') showToast('Automações do Kanban salvas.', 'success');
+        else await customAlert('Automações do Kanban salvas.', 'Salvo');
+    } catch (e) {
+        await customAlert(e.message || 'Erro ao salvar.', 'Automações do Kanban');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// Prévia usa a config SALVA no servidor — salvar antes de testar uma mudança.
+async function krlPreview() {
+    const box = document.getElementById('krl-preview');
+    if (!box) return;
+    box.innerHTML = '<div class="krl-empty">Calculando...</div>';
+    try {
+        const json = await fetch('/api/kanban-rules/run?simular=1', { method: 'POST' }).then(r => r.json());
+        if (json.skipped) { box.innerHTML = `<div class="krl-empty">Nada pra testar: ${escapeHtml(json.skipped)}. Salve as regras primeiro.</div>`; return; }
+        const previa = json.previa || [];
+        if (!previa.length) { box.innerHTML = '<div class="krl-empty">Nenhum lead seria movido agora.</div>'; return; }
+        const label = id => (kanbanStageInfo(id) || { label: id }).label;
+        box.innerHTML = `<div class="krl-preview-title">${previa.length} lead${previa.length === 1 ? '' : 's'} seria${previa.length === 1 ? '' : 'm'} movido${previa.length === 1 ? '' : 's'} na próxima rodada${previa.length >= 50 ? ' (limite de 50 por rodada)' : ''}:</div>`
+            + previa.map(p => `<div class="krl-log-row"><span class="krl-log-nome">${escapeHtml(p.nome || 'Lead')}</span><span>${escapeHtml(label(p.de))} → ${escapeHtml(label(p.para))}</span><span class="krl-log-regra">${escapeHtml(p.regra)}</span></div>`).join('');
+    } catch (e) {
+        box.innerHTML = '<div class="krl-empty">Erro ao testar as regras.</div>';
+    }
+}
+
+function krlRenderLog(log) {
+    const box = document.getElementById('krl-log');
+    if (!box) return;
+    if (!log.length) { box.innerHTML = '<div class="krl-empty">Nenhum lead movido por automação ainda.</div>'; return; }
+    const nomes = new Map(((_krlDraft && _krlDraft.regras) || []).map(r => [r.id, r.nome]));
+    const label = id => (kanbanStageInfo(id) || { label: id || '—' }).label;
+    box.innerHTML = log.map(l => `<div class="krl-log-row">
+        <span class="krl-log-nome">${escapeHtml(l.nome || 'Lead removido')}</span>
+        <span>${escapeHtml(label(l.de))} → ${escapeHtml(label(l.para))}</span>
+        <span class="krl-log-regra">${escapeHtml(nomes.get(l.rule_id) || 'regra excluída')} · ${escapeHtml(typeof lppFormatDateTime === 'function' ? lppFormatDateTime(l.created_at) : (l.created_at || ''))}</span>
+    </div>`).join('');
+}
 
 function openPipelineEditor() {
     const p = getCurrentPipeline();
@@ -1613,7 +1973,12 @@ const avatarHTML = typeof renderAvatarHTML === 'function'
 : '';
 
 const isMetaAd = lead.origem && (lead.origem.includes('Meta Ads') || lead.origem.includes('Anúncio'));
-const origemBadgeHTML = isMetaAd
+// Com o anúncio identificado no catálogo, o badge mostra a campanha (o caminho
+// completo campanha › conjunto › anúncio fica no tooltip e na ficha do lead).
+const adAttr = leadAdAttribution(lead);
+const origemBadgeHTML = adAttr && adAttr.campaign
+? `<div class="tag" title="${escapeHtml(adAttributionPath(adAttr))}" style="background: rgba(96, 165, 250, 0.08); color: var(--text-muted); border: none; font-weight: 500; box-shadow: none; outline: none; margin-top: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><i class="fa-solid fa-bullhorn" style="color: #60a5fa;"></i> ${escapeHtml(adAttr.campaign.name)}</div>`
+: isMetaAd
 ? `<div class="tag" style="background: rgba(255, 255, 255, 0.04); color: var(--text-muted); border: none; font-weight: 500; box-shadow: none; outline: none; margin-top: 0;"><i class="fa-brands fa-facebook" style="color: #60a5fa;"></i> ${escapeHtml(lead.origem)}</div>`
 : `<div class="tag" style="background: rgba(255, 255, 255, 0.04); color: var(--text-muted); margin-top: 0;"><i class="fa-solid fa-bullhorn" style="color: var(--text-muted);"></i> ${escapeHtml(lead.origem)}</div>`;
 
@@ -3876,7 +4241,8 @@ function switchTab(tabId) {
         if (view) view.style.display = 'flex';
         if (typeof switchDispatchTab === 'function') switchDispatchTab('new');
         loadWhatsappTemplates();
-        loadAudiences().then(updateCampaignLeadCount);
+        // Recarrega o catálogo de anúncios junto: o sync do Meta pode ter trazido campanha nova.
+        Promise.all([loadAudiences(), loadAdCatalog()]).then(updateCampaignLeadCount);
         loadDispatchHistory();
         const pricingBtn = document.getElementById('btn-whatsapp-pricing');
         const isAdmin = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
@@ -8072,7 +8438,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
 // Aplica, em ordem, os 3 filtros de proteção da campanha: opt-out do lead,
 // exigência de conversa real por WhatsApp (opt-in confirmado), e — se pedido —
 // não repetir o mesmo template pra quem já recebeu ele antes.
-async function getEligibleCampaignLeads(targetCol, templateName, skipRepeated) {
+async function getEligibleCampaignLeads(targetCol, templateName, skipRepeated, adSegment) {
     let candidateLeads;
     if (targetCol === 'all') {
         candidateLeads = leads.filter(l => l.telefone && l.telefone.trim() !== '');
@@ -8089,6 +8455,8 @@ async function getEligibleCampaignLeads(targetCol, templateName, skipRepeated) {
     } else {
         candidateLeads = leads.filter(l => l.column === targetCol && l.telefone && l.telefone.trim() !== '');
     }
+    // Segmento por anúncio (campanha › conjunto › anúncio) em cima do público escolhido.
+    if (adSegment && adSegment.campaign) candidateLeads = candidateLeads.filter(l => leadMatchesAdSegment(l, adSegment));
 
     const optedOutCount = candidateLeads.filter(l => Number(l.campaign_opt_out) === 1).length;
     let result = candidateLeads.filter(l => Number(l.campaign_opt_out) !== 1);
@@ -8130,7 +8498,7 @@ async function updateCampaignLeadCount() {
     if (hint) hint.textContent = 'Calculando leads elegíveis...';
 
     try {
-        const { eligible } = await getEligibleCampaignLeads(targetCol, templateName, skipRepeated);
+        const { eligible } = await getEligibleCampaignLeads(targetCol, templateName, skipRepeated, readCampaignAdSegment());
         eligibleCount = eligible.length;
     } catch (e) {
         console.error('Erro ao calcular leads elegíveis para campanha:', e);
@@ -8415,6 +8783,20 @@ async function saveWhatsappPricingEditor() {
     }
 }
 
+// target_column do histórico ("col-orcado", "stage:<funil>:<etapa>", "audience:<id>",
+// "relacionamento:<tipo>", com " · anúncio: ..." no fim quando segmentado) -> texto legível.
+function dispatchTargetLabel(raw) {
+    if (!raw) return '—';
+    const [base, ...resto] = String(raw).split(' · anúncio: ');
+    let label = base;
+    if (base === 'all') label = 'Todos os leads';
+    else if (base.startsWith('audience:')) label = (cachedAudiences.find(a => a.id === base.slice(9)) || {}).name || 'Público salvo';
+    else if (base.startsWith('relacionamento:')) label = `Relacionamento (${base.slice(15)})`;
+    else if (base.startsWith('stage:')) { const [, pid, sid] = base.split(':'); label = (kanbanStageInfo(sid, pid) || {}).label || sid; }
+    else if (/^(col-|stg_)/.test(base)) label = (kanbanStageInfo(base) || {}).label || base;
+    return resto.length ? `${label} · ${resto.join(' · anúncio: ')}` : label;
+}
+
 async function loadDispatchHistory() {
     const box = document.getElementById('dispatch-history-list');
     if (!box) return;
@@ -8433,6 +8815,7 @@ async function loadDispatchHistory() {
                         <th style="padding: 0.5rem;">Data</th>
                         <th style="padding: 0.5rem;">Template</th>
                         <th style="padding: 0.5rem;">Categoria</th>
+                        <th style="padding: 0.5rem;">Público</th>
                         <th style="padding: 0.5rem; text-align: right;">Enviados</th>
                         <th style="padding: 0.5rem; text-align: right;">Custo</th>
                     </tr>
@@ -8443,6 +8826,7 @@ async function loadDispatchHistory() {
                             <td style="padding: 0.5rem; color: var(--text-muted);">${new Date(d.created_at).toLocaleString('pt-BR')}</td>
                             <td style="padding: 0.5rem; color: var(--text-main);">${escapeHtml(d.template_name || '')}</td>
                             <td style="padding: 0.5rem; color: var(--text-muted);">${escapeHtml(d.category || '')}</td>
+                            <td style="padding: 0.5rem; color: var(--text-muted);">${escapeHtml(dispatchTargetLabel(d.target_column))}</td>
                             <td style="padding: 0.5rem; text-align: right; color: var(--text-main);">${d.success_count}/${d.total_leads}</td>
                             <td style="padding: 0.5rem; text-align: right; color: var(--accent-success); font-weight: 600;">R$ ${Number(d.cost_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         </tr>
@@ -8498,8 +8882,11 @@ async function startCampaign() {
     const statusText = document.getElementById('campaign-status');
     const progressText = document.getElementById('campaign-progress-text');
     const progressBar = document.getElementById('campaign-progress-bar');
+    const adSegment = readCampaignAdSegment();
+    const adSegLabel = adSegmentLabel(adSegment);
 
-    if (targetCol === 'all') {
+    // Com segmento de anúncio, "Todos os Leads" vira "todos dessa campanha" — não é o disparo geral.
+    if (targetCol === 'all' && !adSegment.campaign) {
         if (!confirm("Tem certeza que deseja disparar para TODOS os leads cadastrados? Isso pode gerar custos na API da Meta.")) {
             return;
         }
@@ -8513,7 +8900,7 @@ async function startCampaign() {
 
     let optedOutCount = 0, noHistoryCount = 0, repeatedCount = 0, targetLeads = [];
     try {
-        const result = await getEligibleCampaignLeads(targetCol, templateName, skipRepeated);
+        const result = await getEligibleCampaignLeads(targetCol, templateName, skipRepeated, adSegment);
         targetLeads = result.eligible;
         optedOutCount = result.optedOutCount;
         noHistoryCount = result.noHistoryCount;
@@ -8539,6 +8926,7 @@ async function startCampaign() {
     }
 
     let confirmMsg = `Você está prestes a disparar o template "${templateName}" para ${targetLeads.length} leads.`;
+    if (adSegLabel) confirmMsg += `\nSó leads que vieram de: ${adSegLabel}.`;
     if (optedOutCount > 0) confirmMsg += `\n${optedOutCount} lead(s) pulado(s) por terem pedido pra não receber campanhas.`;
     if (noHistoryCount > 0) confirmMsg += `\n${noHistoryCount} lead(s) pulado(s) por nunca terem mandado mensagem no WhatsApp (sem opt-in confirmado).`;
     if (repeatedCount > 0) confirmMsg += `\n${repeatedCount} lead(s) pulado(s) por já terem recebido esse template antes.`;
@@ -8556,7 +8944,7 @@ async function startCampaign() {
     await dispatchTemplateCampaign(targetLeads, {
         templateName, languageCode, templateCategory, costPerMessage,
         bodyVarCount, isNamedParam, bodyVarName,
-        targetLabel: targetCol,
+        targetLabel: adSegLabel ? `${targetCol} · anúncio: ${adSegLabel}`.slice(0, 250) : targetCol,
         els: { btn, logBox, statusText, progressText, progressBar, costText }
     });
 }
@@ -9350,11 +9738,33 @@ async function openLeadProfile(leadId) {
     const hasFbId = lead.fb_click_id && lead.fb_click_id.trim();
     const clickId = ctwaId || (hasFbId ? lead.fb_click_id : '');
     const clickLabel = ctwaId ? 'ID do Clique Meta (WhatsApp Ads)' : 'ID do Anúncio';
+    const adAttr = leadAdAttribution(lead);
+    const adRow = (icon, label, value, sub) => value ? `
+            <div class="lpp-ad-attr-row">
+                <i class="${icon}" aria-hidden="true"></i>
+                <div style="min-width:0;">
+                    <div class="lpp-ad-attr-label">${label}</div>
+                    <div class="lpp-ad-attr-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
+                    ${sub ? `<div class="lpp-ad-attr-sub">${escapeHtml(sub)}</div>` : ''}
+                </div>
+            </div>` : '';
+    const adStatus = s => ({ ACTIVE: 'Ativo', PAUSED: 'Pausado', ARCHIVED: 'Arquivado', DELETED: 'Excluído' }[s] || '');
+    const adAttrHtml = adAttr ? `
+        <div class="lpp-ad-attr">
+            ${adAttr.ad && adAttr.ad.thumbnail_url ? `<img class="lpp-ad-attr-thumb" src="${escapeHtml(adAttr.ad.thumbnail_url)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+            <div class="lpp-ad-attr-rows">
+                ${adRow('fa-solid fa-bullhorn', 'Campanha', adAttr.campaign && adAttr.campaign.name, adAttr.campaign && adStatus(adAttr.campaign.status))}
+                ${adRow('fa-solid fa-users-viewfinder', 'Conjunto (segmentação)', adAttr.adset && adAttr.adset.name)}
+                ${adRow('fa-regular fa-image', 'Anúncio', (adAttr.ad && adAttr.ad.name) || adAttr.headline, adAttr.ad && adAttr.headline && adAttr.headline !== adAttr.ad.name ? `Título: ${adAttr.headline}` : '')}
+                ${!adAttr.ad ? `<div class="lpp-ad-attr-sub">${adAttr.sourceType === 'post' ? 'Veio de um post impulsionado.' : 'Anúncio ainda não sincronizado do Meta Ads — campanha e conjunto aparecem depois do próximo sync.'}</div>` : ''}
+            </div>
+        </div>` : '';
     origemEl.innerHTML = `
         <span class="lpp-origem-badge ${isMeta ? 'lpp-origem-meta' : 'lpp-origem-organic'}">
             <i class="fa-${isMeta ? 'brands fa-meta' : 'solid fa-seedling'}"></i>
-            ${lead.origem || 'Orgânico'}
+            ${escapeHtml(lead.origem || 'Orgânico')}
         </span>
+        ${adAttrHtml}
         ${clickId ? `<div style="margin-top:0.6rem;">
             <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.3rem;">${clickLabel}</div>
             <div class="lpp-ad-id-row">
@@ -9542,9 +9952,9 @@ function lppEventDetailLabel(tipo, detalhe) {
     if (!detalhe) return '';
     if (tipo === 'mudanca_coluna') {
         try {
-            const { de, para } = JSON.parse(detalhe);
+            const { de, para, regra } = JSON.parse(detalhe);
             const label = (colId) => (kanbanStageInfo(colId) || { label: '—' }).label;
-            return `${label(de)} → ${label(para)}`;
+            return `${label(de)} → ${label(para)}${regra ? ` · automação "${regra}"` : ''}`;
         } catch (e) { return ''; }
     }
     return detalhe;

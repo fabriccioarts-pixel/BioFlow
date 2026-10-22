@@ -4084,6 +4084,112 @@ select.form-control option,
     .kpl-menu { right: auto; left: 0; }
 }
 
+/* === Automações do Kanban (#modalKanbanRules) === */
+.krl-modal { max-width: 720px; max-height: 90vh; overflow-y: auto; }
+.krl-master {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.9rem;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 0.86rem;
+}
+.krl-master-switch { display: flex; align-items: center; gap: 0.55rem; font-weight: 600; color: var(--text-main); cursor: pointer; }
+.krl-master-interval { display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted); }
+.krl-modal .krl-num { width: 64px; text-align: center; }
+.krl-rules { display: flex; flex-direction: column; gap: 0.6rem; }
+.krl-rule {
+    padding: 0.7rem 0.8rem;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    transition: opacity 0.15s;
+}
+.krl-rule--off { opacity: 0.55; }
+.krl-rule-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; }
+.krl-rule-name {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.3rem 0.45rem;
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--text-main);
+}
+.krl-rule-name:hover, .krl-rule-name:focus { border-color: var(--border-color); outline: none; }
+.krl-rule-del {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0.35rem;
+    border-radius: 6px;
+}
+.krl-rule-del:hover { color: var(--accent-danger); }
+.krl-rule-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.45rem;
+    font-size: 0.83rem;
+    color: var(--text-muted);
+}
+.krl-rule-body select, .krl-rule-body input, .krl-master input {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    border-radius: 6px;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.82rem;
+    width: auto;
+    max-width: 100%;
+}
+.krl-then { font-weight: 600; color: var(--accent-primary); }
+.krl-rule-note { margin-top: 0.45rem; font-size: 0.74rem; color: var(--text-muted); }
+.krl-add-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; margin-top: 0.8rem; }
+.krl-add-label { font-size: 0.78rem; color: var(--text-muted); margin-left: 0.3rem; }
+.krl-chip {
+    background: transparent;
+    border: 1px dashed var(--border-color);
+    color: var(--text-muted);
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    font: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+}
+.krl-chip:hover { color: var(--text-main); border-color: var(--text-muted); }
+.krl-empty { font-size: 0.82rem; color: var(--text-muted); padding: 0.5rem 0; }
+.krl-log { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.75rem; }
+.krl-log:empty { display: none; }
+.krl-preview-title { font-size: 0.8rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.2rem; }
+.krl-log-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: 0.6rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    padding: 0.35rem 0.5rem;
+    border-radius: 6px;
+    background: var(--bg-main);
+}
+.krl-log-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.krl-log-nome { color: var(--text-main); font-weight: 600; }
+.krl-log-regra { text-align: right; }
+.krl-log-wrap { margin-top: 0.9rem; font-size: 0.82rem; }
+.krl-log-wrap summary { cursor: pointer; color: var(--text-muted); }
+@media (max-width: 560px) {
+    .krl-log-row { grid-template-columns: 1fr; gap: 0.1rem; }
+    .krl-log-regra { text-align: left; }
+}
+
 /* Seletor de etapa no painel do chat (opções montadas pelo funil do lead) */
 .stage-menu-item {
     padding: 0.7rem 1rem;
@@ -6357,6 +6463,37 @@ body:has(#login-overlay.active) header { display: none; }
     transition: color 0.15s, border-color 0.15s;
 }
 .lpp-ad-id-copy:hover { color: var(--text-main); border-color: var(--text-muted); }
+
+/* Origem do anúncio na ficha do lead (campanha › conjunto › anúncio) */
+.lpp-ad-attr {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.7rem;
+    padding: 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-main);
+}
+.lpp-ad-attr-thumb {
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.lpp-ad-attr-rows { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; flex: 1; }
+.lpp-ad-attr-row { display: flex; gap: 0.55rem; align-items: flex-start; min-width: 0; }
+.lpp-ad-attr-row > i { color: #60a5fa; font-size: 0.78rem; width: 14px; margin-top: 0.2rem; text-align: center; flex-shrink: 0; }
+.lpp-ad-attr-label { font-size: 0.7rem; color: var(--text-muted); }
+.lpp-ad-attr-value {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.lpp-ad-attr-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; }
 
 /* ============================================================================
    INTEGRAÇÃO DE AGENDAMENTO — redesign premium (#modalAgendamento)

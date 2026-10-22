@@ -1,5 +1,18 @@
 # Changelog - CRM Natuclinic
 
+## 2026-10-22 — Origem do anúncio no lead, disparo por campanha e automações do Kanban
+
+### Adicionado
+* **Origem do anúncio no lead.** O card do Kanban mostra a campanha do anúncio de onde o lead veio (o caminho completo fica no tooltip). A ficha do lead mostra campanha, conjunto (segmentação) e anúncio, com miniatura e título. O vínculo usa o `source_id` que o webhook já gravava em `leads.ad_referral`, cruzado com o catálogo do sync do Meta Ads. Novo endpoint `GET /api/marketing/ad-catalog`.
+* **Sync do Meta Ads traz o conjunto de anúncios.** Colunas novas `ad_ads.adset_id` / `adset_name`, criadas sozinhas em `ensureAdTables()`. Anúncios antigos ganham o conjunto no próximo sync.
+* **Disparo segmentado por anúncio.** Na tela de Campanhas de Disparo, o novo campo "Origem do Anúncio" (campanha › conjunto › anúncio, com a contagem de leads de cada um) se combina com o público (etapa, público salvo ou todos). As proteções de opt-out, opt-in e não repetir template continuam valendo. O histórico de disparos ganhou a coluna "Público".
+* **Automações do Kanban** (menu do funil › Automações do Kanban, só admin). São regras "SE o lead está em X e [não respondeu há N / respondeu / está sem mensagem há N / tem etiqueta] ENTÃO mover para Y". Rodam no `/api/flow-tick` com cadência própria (padrão 10 min, no máximo 50 movimentos por rodada). Usam o mesmo UPDATE de etapa do arrastar, com espelho no Financeiro e registro "moveu de etapa · automação" no histórico do lead.
+  * Uma regra move o mesmo lead uma vez só por âncora (`crm_kanban_rule_runs`), então arrastar o card de volta não vira briga com a regra.
+  * "Respondeu" só conta mensagem posterior à entrada do lead na etapa atual, para duas regras não ficarem jogando o lead de um lado para o outro.
+  * Agendado e Ganho nunca são destino (dependem de consulta/pagamento e disparam CAPI), e lead em Ganho nunca é movido.
+  * Botão "Testar regras salvas" mostra quem seria movido sem mover ninguém.
+* **Ordenação "🔥 Precisa de atenção"** nos cards. A ordem é: lead quente da IA, depois quem está esperando nossa resposta, depois quem não respondeu a gente. Dentro de cada grupo, quem espera há mais tempo vem primeiro.
+
 ## 2026-09-16 — Follow-up automático travado nos mesmos leads antigos
 
 ### Corrigido

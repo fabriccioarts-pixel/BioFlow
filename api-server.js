@@ -6799,6 +6799,14 @@ async function ensureAdTables() {
     ]) {
         try { await queryD1(sql, []); } catch (e) { console.error('[marketing] ensureAdTables:', e.message); }
     }
+    // Conjunto de anúncios (onde fica a segmentação na Meta) — usado pra mostrar
+    // a origem completa do lead e filtrar público de disparo por conjunto.
+    for (const sql of [
+        'ALTER TABLE ad_ads ADD COLUMN adset_id TEXT',
+        'ALTER TABLE ad_ads ADD COLUMN adset_name TEXT'
+    ]) {
+        try { await queryD1(sql, []); } catch (e) { /* já existe */ }
+    }
     _adTablesReady = true;
 }
 
@@ -6857,16 +6865,17 @@ async function syncMetaMarketing({ days = 3 } = {}) {
 
     // --- anúncios (com criativo, pra alimentar o contexto de anúncio da IA) ---
     const ads = await metaGraphGetAll(`${acct}/ads`, {
-        fields: 'id,name,status,campaign_id,creative{body,thumbnail_url}', limit: '200'
+        fields: 'id,name,status,campaign_id,adset_id,adset{name},creative{body,thumbnail_url}', limit: '200'
     }, cfg);
     for (let i = 0; i < ads.length; i += 12) {
         const ch = ads.slice(i, i + 12);
-        const ph = ch.map(() => '(?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
+        const ph = ch.map(() => '(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
         const params = ch.flatMap(a => [
-            a.id, a.campaign_id || '', a.name || '', a.status || '',
+            a.id, a.campaign_id || '', a.adset_id || '', (a.adset && a.adset.name) || '',
+            a.name || '', a.status || '',
             (a.creative && a.creative.body) || '', (a.creative && a.creative.thumbnail_url) || ''
         ]);
-        await queryD1(`INSERT OR REPLACE INTO ad_ads (id,campaign_id,name,status,creative_body,thumbnail_url,updated_at) VALUES ${ph}`, params);
+        await queryD1(`INSERT OR REPLACE INTO ad_ads (id,campaign_id,adset_id,adset_name,name,status,creative_body,thumbnail_url,updated_at) VALUES ${ph}`, params);
     }
 
     // --- insights diários por anúncio ---
@@ -7091,6 +7100,29 @@ app.get('/api/marketing/roi', async (req, res) => {
         });
     } catch (e) {
         console.error('[marketing] roi:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Catálogo campanha › conjunto › anúncio (o que o último sync trouxe da Meta).
+// O front cruza com leads.ad_referral.source_id pra mostrar de qual anúncio o
+// lead veio e pra montar o público de disparo por campanha/conjunto/anúncio.
+app.get('/api/marketing/ad-catalog', async (req, res) => {
+    try {
+        await ensureAdTables();
+        const [campaigns, ads] = await Promise.all([
+            queryD1('SELECT id, name, status, objective FROM ad_campaigns', []),
+            queryD1('SELECT id, campaign_id, adset_id, adset_name, name, status, thumbnail_url FROM ad_ads', [])
+        ]);
+        const adsets = new Map();
+        for (const a of ads || []) {
+            if (a.adset_id && !adsets.has(a.adset_id)) {
+                adsets.set(a.adset_id, { id: a.adset_id, name: a.adset_name || `(conjunto ${a.adset_id})`, campaign_id: a.campaign_id || '' });
+            }
+        }
+        res.json({ campaigns: campaigns || [], adsets: [...adsets.values()], ads: ads || [] });
+    } catch (e) {
+        console.error('[marketing] ad-catalog:', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -10317,12 +10349,16 @@ app.all('/api/flow-tick', async (req, res) => {
         let marketing = { skipped: 'erro' };
         try { marketing = await marketingSyncTick(); } catch (e) { console.error('Erro no sync de marketing:', e); }
 
+        // Automações do Kanban — cadência própria (kanban_rules_config.intervalo_min).
+        let kanbanRegras = { skipped: 'erro' };
+        try { kanbanRegras = await kanbanRulesTick(); } catch (e) { console.error('Erro nas regras do Kanban:', e); }
+
         // Mantém o cache da lista de conversas do WhatsApp sempre quente — ver
         // waChatsCacheTick() pra entender por que isso existe.
         let waChats = { skipped: 'erro' };
         try { waChats = await waChatsCacheTick(); } catch (e) { console.error('Erro ao renovar cache de conversas:', e); }
 
-        res.json({ processed, followup, lembretes, opps, insights, marketing, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        res.json({ processed, followup, lembretes, opps, insights, marketing, kanbanRegras, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -10643,6 +10679,254 @@ app.put('/api/followup/config', async (req, res) => {
         await queryD1("INSERT INTO crm_settings (key, value) VALUES ('followup_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
         res.json({ success: true, config: clean });
     } catch (e) { console.error('Erro ao salvar config de follow-up:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ==========================================
+// AUTOMAÇÕES DO KANBAN (regras "SE ... ENTÃO mover pra etapa")
+// ==========================================
+// Rodam sozinhas no flow-tick. Não mudam a lógica do Kanban: fazem o mesmo
+// UPDATE de column_id que arrastar o card faria, com o mesmo espelho no
+// Financeiro e o mesmo registro no histórico do lead. Config fica em
+// crm_settings ('kanban_rules_config'); crm_kanban_rule_runs guarda cada
+// movimento — é o log da tela e também a trava: uma regra move o mesmo lead
+// uma vez só por âncora (ex.: a última mensagem), então se alguém arrastar o
+// card de volta, a regra não fica brigando com a pessoa.
+const KANBAN_RULE_CONDICOES = ['sem_resposta', 'lead_respondeu', 'sem_interacao', 'tem_tag'];
+// Agendado e Ganho dependem de evento real (consulta marcada, pagamento) e
+// disparam CAPI pro Meta — regra automática nunca leva um lead pra lá.
+const KANBAN_RULE_DESTINO_BLOQUEADO = new Set(['col-agendado', 'col-ganho']);
+const KANBAN_RULES_DEFAULT = { ativo: false, intervalo_min: 10, regras: [] };
+
+let _kanbanRuleRunsReady = false;
+async function ensureKanbanRuleRuns() {
+    if (_kanbanRuleRunsReady) return;
+    await queryD1(`CREATE TABLE IF NOT EXISTS crm_kanban_rule_runs (
+        rule_id TEXT NOT NULL,
+        lead_id TEXT NOT NULL,
+        anchor TEXT NOT NULL,
+        de TEXT,
+        para TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (rule_id, lead_id, anchor)
+    )`);
+    await queryD1('CREATE INDEX IF NOT EXISTS idx_kanban_rule_runs_created ON crm_kanban_rule_runs(created_at)').catch(() => {});
+    _kanbanRuleRunsReady = true;
+}
+
+async function kanbanRulesGetConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'kanban_rules_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, KANBAN_RULES_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return Object.assign({}, KANBAN_RULES_DEFAULT);
+}
+
+// Leads que batem na condição da regra (ainda sem checar a trava).
+async function kanbanRuleCandidates(regra) {
+    const where = ["COALESCE(pipeline_id, ?) = ?", "column_id IS NOT ?", "column_id IS NOT 'col-ganho'"];
+    const params = [DEFAULT_PIPELINE_ID, regra.pipeline_id, regra.para_etapa];
+    if (regra.de_etapa) { where.push('column_id = ?'); params.push(regra.de_etapa); }
+    const cutoff = flowDbTime(-(regra.horas || 24) * 3600000);
+    let anchorOf;
+    if (regra.condicao === 'sem_resposta') {
+        where.push("last_msg_direction = 'out'", 'last_msg_at IS NOT NULL', 'last_msg_at <= ?');
+        params.push(cutoff);
+        anchorOf = l => String(l.last_msg_at);
+    } else if (regra.condicao === 'lead_respondeu') {
+        // Só respostas depois que a regra foi criada — ligar a regra não sai
+        // movendo todo mundo que respondeu meses atrás.
+        where.push("last_msg_direction = 'in'", 'last_msg_at IS NOT NULL', 'last_msg_at >= ?');
+        params.push(regra.criado_em || flowDbTime());
+        anchorOf = l => String(l.last_msg_at);
+    } else if (regra.condicao === 'sem_interacao') {
+        where.push('COALESCE(last_msg_at, created_at) <= ?');
+        params.push(cutoff);
+        anchorOf = l => String(l.last_msg_at || l.created_at || '');
+    } else if (regra.condicao === 'tem_tag') {
+        if (!regra.tag) return [];
+        where.push('tags LIKE ?');
+        params.push(`%${regra.tag}%`);
+        anchorOf = () => `tag:${regra.tag}`;
+    } else {
+        return [];
+    }
+    let rows = await queryD1(
+        `SELECT id, nome, tags, column_id, pipeline_id, last_msg_at, created_at
+         FROM leads WHERE ${where.join(' AND ')}
+         ORDER BY last_msg_at DESC LIMIT 200`, params);
+    rows = rows || [];
+    if (regra.condicao === 'lead_respondeu' && rows.length) {
+        // A resposta tem que ser DEPOIS de o lead entrar na etapa atual. Sem isso,
+        // outra regra (ou alguém) põe o lead em Follow Up e na rodada seguinte
+        // "respondeu no Follow Up" puxa ele de volta por uma mensagem antiga.
+        const entrou = new Map();
+        for (let i = 0; i < rows.length; i += 40) {
+            const bloco = rows.slice(i, i + 40).map(l => l.id);
+            const ev = await queryD1(
+                `SELECT lead_id, MAX(created_at) AS em FROM crm_lead_events
+                 WHERE tipo = 'mudanca_coluna' AND lead_id IN (${bloco.map(() => '?').join(',')}) GROUP BY lead_id`, bloco);
+            for (const e of ev || []) entrou.set(String(e.lead_id), String(e.em));
+        }
+        rows = rows.filter(l => !entrou.has(String(l.id)) || String(l.last_msg_at) > entrou.get(String(l.id)));
+    }
+    return rows
+        .filter(l => regra.condicao !== 'tem_tag'
+            || String(l.tags || '').split(',').map(s => s.trim()).includes(regra.tag))
+        .map(l => ({ ...l, _anchor: anchorOf(l) }))
+        .filter(l => l._anchor);
+}
+
+// Roda as regras ativas. simular=true só devolve quem SERIA movido (botão
+// "Testar" da tela), sem mexer em nada nem respeitar a cadência.
+async function kanbanRulesTick({ force = false, simular = false } = {}) {
+    const cfg = await kanbanRulesGetConfig();
+    if (!simular && !cfg.ativo) return { skipped: 'desligado' };
+    const regras = (cfg.regras || []).filter(r => r.ativo);
+    if (!regras.length) return { skipped: 'sem regras ativas' };
+
+    if (!simular && !force) {
+        try {
+            const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'kanban_rules_last_run'");
+            const last = r && r[0] ? followupParseTs(r[0].value) : null;
+            if (last && Date.now() - last.getTime() < (cfg.intervalo_min || 10) * 60000) return { skipped: 'dentro da janela' };
+        } catch (e) {}
+    }
+    if (!simular) {
+        queryD1("INSERT INTO crm_settings (key, value) VALUES ('kanban_rules_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [flowDbTime()]).catch(() => {});
+    }
+
+    await ensurePipelines();
+    await ensureKanbanRuleRuns();
+    const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+    const movidosNesteTick = new Set(); // um lead só anda uma etapa por rodada, mesmo que duas regras batam
+    const previa = [];
+    let movidos = 0;
+    let budget = 50;
+
+    for (const regra of regras) {
+        if (budget <= 0) break;
+        const cand = (await kanbanRuleCandidates(regra)).filter(l => !movidosNesteTick.has(l.id));
+        if (!cand.length) continue;
+
+        const jaFeito = new Set();
+        for (const bloco of chunk(cand, 40)) {
+            const rows = await queryD1(
+                `SELECT lead_id, anchor FROM crm_kanban_rule_runs WHERE rule_id = ? AND lead_id IN (${bloco.map(() => '?').join(',')})`,
+                [regra.id, ...bloco.map(l => l.id)]);
+            for (const r of rows || []) jaFeito.add(`${r.lead_id}|${r.anchor}`);
+        }
+
+        for (const lead of cand) {
+            if (budget <= 0) break;
+            if (jaFeito.has(`${lead.id}|${lead._anchor}`)) continue;
+            const de = lead.column_id || 'col-entrada';
+            if (simular) {
+                previa.push({ regra: regra.nome, regra_id: regra.id, lead_id: lead.id, nome: lead.nome, de, para: regra.para_etapa });
+                budget--;
+                continue;
+            }
+            // Trava primeiro: dois ticks juntos não movem o mesmo lead duas vezes.
+            const claim = await queryD1Meta(
+                'INSERT OR IGNORE INTO crm_kanban_rule_runs (rule_id, lead_id, anchor, de, para) VALUES (?, ?, ?, ?, ?)',
+                [regra.id, lead.id, lead._anchor, de, regra.para_etapa]);
+            if (!claim || !claim.meta || !claim.meta.changes) continue;
+            const limpaQualif = regra.para_etapa === 'col-perdido' ? ', qualificado_em = NULL' : '';
+            const upd = await queryD1Meta(
+                `UPDATE leads SET column_id = ?${limpaQualif} WHERE id = ? AND column_id IS ?`,
+                [regra.para_etapa, lead.id, lead.column_id]);
+            if (!upd || !upd.meta || !upd.meta.changes) {
+                // Alguém mexeu no card nesse meio-tempo — solta a trava pra regra reavaliar depois.
+                await queryD1('DELETE FROM crm_kanban_rule_runs WHERE rule_id = ? AND lead_id = ? AND anchor = ?', [regra.id, lead.id, lead._anchor]).catch(() => {});
+                continue;
+            }
+            movidosNesteTick.add(lead.id);
+            movidos++;
+            budget--;
+            logLeadEvent(lead.id, 'mudanca_coluna', 'sistema', JSON.stringify({ de, para: regra.para_etapa, regra: regra.nome }));
+            try { await syncLeadPagamento(lead.id, 'kanban-regra'); markLeadPagDirty(lead.id); } catch (e) {}
+        }
+    }
+
+    if (movidos) broadcastLeadsUpdate('updated');
+    return simular ? { simulado: true, previa } : { movidos };
+}
+
+function sanitizeKanbanRule(raw, pipelinesById, anterior) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = /^kr_[a-z0-9]{4,24}$/.test(raw.id || '') ? raw.id : 'kr_' + Math.random().toString(36).slice(2, 10);
+    const pipeline = pipelinesById.get(String(raw.pipeline_id || DEFAULT_PIPELINE_ID));
+    if (!pipeline) return null;
+    const etapas = new Set(pipeline.stages.map(s => s.id));
+    const condicao = KANBAN_RULE_CONDICOES.includes(raw.condicao) ? raw.condicao : null;
+    const para = String(raw.para_etapa || '');
+    const de = raw.de_etapa ? String(raw.de_etapa) : '';
+    if (!condicao || !etapas.has(para) || KANBAN_RULE_DESTINO_BLOQUEADO.has(para)) return null;
+    if (de && (!etapas.has(de) || de === para || de === 'col-ganho')) return null;
+    const tag = String(raw.tag || '').trim().slice(0, 60);
+    if (condicao === 'tem_tag' && !tag) return null;
+    return {
+        id,
+        nome: String(raw.nome || '').trim().slice(0, 80) || 'Regra sem nome',
+        ativo: raw.ativo !== false,
+        pipeline_id: pipeline.id,
+        de_etapa: de,
+        condicao,
+        horas: Math.min(24 * 180, Math.max(1, parseInt(raw.horas, 10) || 24)),
+        tag: condicao === 'tem_tag' ? tag : '',
+        para_etapa: para,
+        // Mantém a data original numa edição — senão "lead respondeu" voltaria
+        // a considerar só respostas a partir de agora toda vez que salvasse.
+        criado_em: (anterior && anterior.criado_em) || flowDbTime(),
+    };
+}
+
+app.get('/api/kanban-rules', async (req, res) => {
+    try {
+        const cfg = await kanbanRulesGetConfig();
+        let log = [];
+        try {
+            await ensureKanbanRuleRuns();
+            log = await queryD1(
+                `SELECT r.rule_id, r.lead_id, r.de, r.para, r.created_at, l.nome
+                 FROM crm_kanban_rule_runs r LEFT JOIN leads l ON l.id = r.lead_id
+                 ORDER BY r.created_at DESC LIMIT 30`, []);
+        } catch (e) {}
+        res.json({ config: cfg, log: log || [] });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/kanban-rules', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        await ensurePipelines();
+        const pRows = await queryD1('SELECT * FROM crm_pipelines', []);
+        const pipelinesById = new Map((pRows || []).map(r => { const p = parsePipelineRow(r); return [p.id, p]; }));
+        const atual = await kanbanRulesGetConfig();
+        const anteriores = new Map((atual.regras || []).map(r => [r.id, r]));
+        const b = req.body || {};
+        const regras = [];
+        for (const raw of (Array.isArray(b.regras) ? b.regras : []).slice(0, 30)) {
+            const r = sanitizeKanbanRule(raw, pipelinesById, anteriores.get(raw && raw.id));
+            if (!r) return res.status(400).json({ error: `Regra "${(raw && raw.nome) || 'sem nome'}" está incompleta ou aponta pra uma etapa inválida.` });
+            regras.push(r);
+        }
+        const clean = {
+            ativo: !!b.ativo,
+            intervalo_min: Math.min(240, Math.max(5, parseInt(b.intervalo_min, 10) || 10)),
+            regras,
+        };
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('kanban_rules_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        res.json({ success: true, config: clean });
+    } catch (e) { console.error('Erro ao salvar regras do Kanban:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ?simular=1 mostra quem seria movido; sem isso, roda agora (ignora a cadência).
+app.post('/api/kanban-rules/run', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const simular = req.query.simular === '1';
+        res.json(await kanbanRulesTick({ force: true, simular }));
+    } catch (e) { console.error('Erro ao rodar regras do Kanban:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 // ==========================================

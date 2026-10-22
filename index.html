@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=25">
+    <link rel="stylesheet" href="style.css?v=26">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -696,6 +696,10 @@
                     <button type="button" class="kpl-item" role="menuitem" onclick="closeKplMenu(); createPipelinePrompt();">
                         <i class="fa-solid fa-plus" aria-hidden="true"></i> Novo funil
                     </button>
+                    <div class="kpl-sep"></div>
+                    <button type="button" class="kpl-item" role="menuitem" onclick="closeKplMenu(); openKanbanRules();">
+                        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Automações do Kanban
+                    </button>
                 </div>
             </div>
         </div>
@@ -733,6 +737,7 @@
 
             <select id="kanban-sort" title="Ordenar cards" onchange="localStorage.setItem('kanban-sort', this.value); renderBoard();"
                 style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: auto;">
+                <option value="attention">🔥 Precisa de atenção</option>
                 <option value="created_desc">↓ Mais recentes primeiro</option>
                 <option value="created_asc">↑ Mais antigos primeiro</option>
                 <option value="value_desc">💰 Maior valor</option>
@@ -837,6 +842,22 @@
                             <option value="all">⚠️ Todos os Leads (Cuidado)</option>
                             <optgroup label="Públicos Salvos" id="campaign-audience-optgroup"></optgroup>
                         </select>
+                    </div>
+
+                    <div class="utm-field">
+                        <label>Origem do Anúncio (opcional)</label>
+                        <select id="campaign-ad-campaign" onchange="onCampaignAdSegmentChange('campaign')" aria-label="Campanha de anúncio">
+                            <option value="">Qualquer origem (não filtrar)</option>
+                        </select>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; margin-top: 0.5rem;">
+                            <select id="campaign-ad-adset" onchange="onCampaignAdSegmentChange('adset')" aria-label="Conjunto de anúncios" disabled>
+                                <option value="">Todos os conjuntos</option>
+                            </select>
+                            <select id="campaign-ad-ad" onchange="onCampaignAdSegmentChange('ad')" aria-label="Anúncio" disabled>
+                                <option value="">Todos os anúncios</option>
+                            </select>
+                        </div>
+                        <span class="utm-hint" id="campaign-ad-hint">Campanhas aparecem aqui depois que o sync do Meta Ads rodar (ROI de Anúncios).</span>
                     </div>
 
                     <div class="utm-field">
@@ -4975,7 +4996,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=25"></script>
-    <script src="app.js?v=25"></script>
+    <script src="app.js?v=26"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
@@ -5140,6 +5161,56 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div style="display: flex; gap: 0.5rem; margin-left: auto;">
                     <button type="button" class="btn-secondary" onclick="closeModals()">Cancelar</button>
                     <button type="button" class="btn-primary" id="ple-save-btn" onclick="pleSave()">Salvar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Automações do Kanban (regras de mover etapa) -->
+    <div class="modal-overlay" id="modalKanbanRules">
+        <div class="modal krl-modal">
+            <h2><i class="fa-solid fa-wand-magic-sparkles" style="color: var(--accent-primary);"></i> Automações do Kanban</h2>
+            <p class="modal-subtitle">Regras que movem o lead de etapa sozinhas. Cada regra move o mesmo lead uma vez só: se alguém arrastar o card de volta, a regra respeita. Agendado e Ganho continuam dependendo de consulta marcada e pagamento.</p>
+
+            <div class="krl-master">
+                <label class="krl-master-switch">
+                    <span class="ui-switch">
+                        <input type="checkbox" id="krl-ativo">
+                        <span class="ui-switch-track"></span>
+                    </span>
+                    Automações ligadas
+                </label>
+                <label class="krl-master-interval">
+                    Verificar a cada
+                    <input type="number" id="krl-intervalo" min="5" max="240" value="10" class="krl-num">
+                    min
+                </label>
+            </div>
+
+            <div id="krl-rules" class="krl-rules"></div>
+
+            <div class="krl-add-row">
+                <button type="button" class="btn-secondary" onclick="krlAdd(-1)"><i class="fa-solid fa-plus"></i> Nova regra</button>
+                <span class="krl-add-label">Sugestões:</span>
+                <button type="button" class="krl-chip" onclick="krlAdd(0)">Sem resposta 3 dias → Follow Up</button>
+                <button type="button" class="krl-chip" onclick="krlAdd(1)">Respondeu no Follow Up → Contatado</button>
+                <button type="button" class="krl-chip" onclick="krlAdd(2)">Parado na Entrada 7 dias → Follow Up</button>
+            </div>
+
+            <div id="krl-preview" class="krl-log"></div>
+
+            <details class="krl-log-wrap">
+                <summary>Últimos leads movidos por automação</summary>
+                <div id="krl-log" class="krl-log"></div>
+            </details>
+
+            <div class="ple-footer">
+                <button type="button" class="btn-secondary" onclick="krlPreview()" title="Mostra quem seria movido com as regras já salvas, sem mover ninguém">
+                    <i class="fa-solid fa-flask"></i> Testar regras salvas
+                </button>
+                <div style="display: flex; gap: 0.5rem; margin-left: auto;">
+                    <button type="button" class="btn-secondary" onclick="closeModals()">Fechar</button>
+                    <button type="button" class="btn-primary" id="krl-save-btn" onclick="krlSave()">Salvar</button>
                 </div>
             </div>
         </div>
