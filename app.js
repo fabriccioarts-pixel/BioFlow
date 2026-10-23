@@ -5855,8 +5855,17 @@ function renderHotLeadsBadge() {
 
     const now = Date.now();
     const parseTs = (typeof parseD1TimestampMs === 'function') ? parseD1TimestampMs : (s) => new Date((s || '').replace(' ', 'T') + 'Z').getTime();
+
+    // Separa leads quentes recentes (< 7 dias) de leads antigos esquecidos
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const quentesRecentes = quentes.filter(l => {
+        const t = parseTs(l.qualificado_em) || now;
+        return (now - t) < SEVEN_DAYS_MS;
+    });
+
+    const listaRef = quentesRecentes.length > 0 ? quentesRecentes : quentes;
     let piorEsperaMs = 0;
-    quentes.forEach(l => {
+    listaRef.forEach(l => {
         const t = parseTs(l.qualificado_em) || now;
         piorEsperaMs = Math.max(piorEsperaMs, now - t);
     });
@@ -5886,16 +5895,21 @@ function renderHotLeadsBadge() {
         const d = Math.floor(h / 24);
         return `${d} dia${d > 1 ? 's' : ''}`;
     };
-    const plural = quentes.length > 1;
-    if (quentes.length === 1 && quentes[0].nome) {
-        const nome = quentes[0].nome.replace(' [MKT]', '');
-        textEl.textContent = atrasado
-            ? `${nome} está quente há ${espera(piorEsperaMs)} sem atendimento!`
-            : `${nome} está pronto(a) pra ser atendido(a)`;
+
+    if (quentesRecentes.length > 0) {
+        const antigosDiff = quentes.length - quentesRecentes.length;
+        if (quentesRecentes.length === 1 && quentesRecentes[0].nome) {
+            const nome = quentesRecentes[0].nome.replace(' [MKT]', '');
+            textEl.textContent = atrasado
+                ? `${nome} está quente há ${espera(piorEsperaMs)} sem atendimento!`
+                : `${nome} está pronto(a) pra ser atendido(a)`;
+        } else {
+            textEl.textContent = atrasado
+                ? `${quentesRecentes.length} leads quentes recentes esperando — mais recente há ${espera(piorEsperaMs)}${antigosDiff > 0 ? ` (+${antigosDiff} no histórico)` : ''}`
+                : `${quentesRecentes.length} leads quentes esperando atendimento${antigosDiff > 0 ? ` (+${antigosDiff} no histórico)` : ''}`;
+        }
     } else {
-        textEl.textContent = atrasado
-            ? `${quentes.length} leads quentes esperando — o mais antigo há ${espera(piorEsperaMs)}`
-            : `${quentes.length} lead${plural ? 's' : ''} quente${plural ? 's' : ''} esperando atendimento`;
+        textEl.textContent = `${quentes.length} leads qualificados no histórico — clique para revisar`;
     }
 }
 

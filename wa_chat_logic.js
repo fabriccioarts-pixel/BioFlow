@@ -1159,6 +1159,7 @@ let allChatsList = [];
 // FILTROS DE CONVERSA (Todos / Não lidos / Favoritos / Contatos / Grupos / Rascunhos)
 // ==========================================
 let activeChatFilter = 'todos';
+let activeChatInbox = 'humano'; // 'humano' | 'ia' | 'todas'
 
 // ==========================================
 // PREFERÊNCIAS POR CONVERSA (favorito, fixado, arquivado, não lido manual)
@@ -1353,6 +1354,241 @@ function isGroupChat(chat) {
     return digits.length > 15;
 }
 
+// ==========================================
+// SEGMENTAÇÃO DE CAIXA DE ENTRADA (HUMANO vs IA vs TODAS)
+// ==========================================
+function isChatHandledByAI(chat) {
+    if (!chat) return false;
+    if (isGroupChat(chat)) return false;
+
+    let lead = null;
+    if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+        const phone = chat.phone;
+        const canon = canonicalPhoneBR(phone);
+        lead = leads.find(l => canonicalPhoneBR(l.telefone) === canon) || leads.find(l => isSamePhone(l.telefone, phone));
+    }
+
+    if (lead) {
+        // Se a IA qualificou o lead (lead quente), a IA encerrou o fluxo dela e passou para o humano fechar:
+        if (lead.qualificado_em || (lead.tags && String(lead.tags).includes('ia-qualificado'))) {
+            return false;
+        }
+        // Se a IA está desabilitada para o lead (humano assumiu ou desligou):
+        if (Number(lead.ai_enabled) === 0) {
+            return false;
+        }
+        // Se tem atendente já atribuído e em atendimento ativo:
+        if (lead.owner_id) {
+            return false;
+        }
+        // Se está em colunas avançadas do funil (agendado, ganho, perdido etc.):
+        const col = lead.column || lead.column_id;
+        if (col && !['col-entrada', 'col-contatado'].includes(col)) {
+            return false;
+        }
+        // Se ai_enabled é 1 (ou padrão) nas colunas de entrada/contatado e sem responsável:
+        return Number(lead.ai_enabled) !== 0;
+    }
+
+    // Se não há lead cadastrado no CRM ainda:
+    // Mantemos na caixa Humano por padrão para que o atendente nunca perca nenhum contato novo
+    return false;
+}
+
+function setChatInbox(mode) {
+    activeChatInbox = mode;
+    document.querySelectorAll('.chat-inbox-tab').forEach(el => {
+        el.classList.toggle('active', el.dataset.inbox === mode);
+    });
+
+    renderChatFilterChipsForInbox(mode);
+
+    if (mode === 'ia' && (activeChatFilter === 'quente' || activeChatFilter === 'mine' || activeChatFilter === 'awaiting')) {
+        activeChatFilter = 'todos';
+    }
+
+    reapplyChatFilters();
+}
+
+function renderChatFilterChipsForInbox(inbox) {
+    const container = document.getElementById('chat-filter-chips');
+    if (!container) return;
+
+    if (inbox === 'humano') {
+        container.innerHTML = `
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'awaiting' ? 'active' : ''}" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half" style="color: #f59e0b;"></i> Aguardando resposta</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'mine' ? 'active' : ''}" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
+        `;
+    } else if (inbox === 'ia') {
+        container.innerHTML = `
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')"><i class="fa-solid fa-robot" style="color: #c084fc;"></i> Em triagem pela IA</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Novas mensagens</button>
+        `;
+    } else {
+        container.innerHTML = `
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'mine' ? 'active' : ''}" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'awaiting' ? 'active' : ''}" data-filter="awaiting" onclick="setChatFilter('awaiting')">Aguardando resposta</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+        `;
+    }
+}
+
+function updateInboxTabCounts(chats) {
+    if (!Array.isArray(chats)) return;
+    const nonArchived = chats.filter(c => !isArchivedChat(c.phone));
+
+    let humanoPendingCount = 0;
+    let iaActiveCount = 0;
+
+    nonArchived.forEach(c => {
+        const isIA = isChatHandledByAI(c);
+        if (isIA) {
+            iaActiveCount++;
+        } else {
+            const unread = Number(c.unread_count || 0) > 0 || isMarkedUnreadChat(c.phone);
+            const dir = c.last_direction || c.direction;
+            const isWaiting = dir === 'in';
+            if (unread || isWaiting) {
+                humanoPendingCount++;
+            }
+        }
+    });
+
+    const bHumano = document.getElementById('inbox-count-humano');
+    if (bHumano) {
+        if (humanoPendingCount > 0) {
+            bHumano.style.display = 'inline-flex';
+            bHumano.textContent = humanoPendingCount > 99 ? '99+' : String(humanoPendingCount);
+        } else {
+            bHumano.style.display = 'none';
+        }
+    }
+
+    const bIA = document.getElementById('inbox-count-ia');
+    if (bIA) {
+        if (iaActiveCount > 0) {
+            bIA.style.display = 'inline-flex';
+            bIA.textContent = iaActiveCount > 99 ? '99+' : String(iaActiveCount);
+        } else {
+            bIA.style.display = 'none';
+        }
+    }
+}
+
+function renderChatActiveHeaderAiStatus(phone) {
+    const container = document.getElementById('chat-active-ai-status-container');
+    if (!container) return;
+    if (!phone) { container.innerHTML = ''; return; }
+
+    let lead = null;
+    if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+        const canon = canonicalPhoneBR(phone);
+        lead = leads.find(l => canonicalPhoneBR(l.telefone) === canon) || leads.find(l => isSamePhone(l.telefone, phone));
+    }
+
+    const targetChat = (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList))
+        ? allChatsList.find(c => isSamePhone(c.phone, phone))
+        : { phone };
+
+    const isIA = isChatHandledByAI(targetChat);
+    const isQualified = lead && (lead.qualificado_em || (lead.tags && String(lead.tags).includes('ia-qualificado')));
+
+    let qualBadgeHTML = '';
+    if (isQualified) {
+        qualBadgeHTML = `<span class="chat-header-qual-badge" title="Lead qualificado pela IA — pronto para agendar ou fechar!"><i class="fa-solid fa-fire"></i> Pronto p/ fechar</span>`;
+    }
+
+    if (isIA) {
+        container.innerHTML = `
+            <div class="chat-agent-switch-wrap">
+                <div class="chat-agent-switch" role="group" aria-label="Responsável pelo atendimento">
+                    <button type="button" class="chat-agent-switch-btn" onclick="takeOverChatFromAi('${phone}')" title="Clique para assumir este atendimento (pausa a IA)">
+                        <i class="fa-solid fa-user"></i>
+                        <span>Assumir</span>
+                    </button>
+                    <button type="button" class="chat-agent-switch-btn active is-ai" title="A IA do WhatsApp está respondendo automaticamente este contato">
+                        <span class="chat-agent-ai-dot"></span>
+                        <i class="fa-solid fa-robot"></i>
+                        <span>IA Ativa</span>
+                    </button>
+                </div>
+                ${qualBadgeHTML}
+            </div>
+        `;
+    } else {
+        container.innerHTML = `
+            <div class="chat-agent-switch-wrap">
+                <div class="chat-agent-switch" role="group" aria-label="Responsável pelo atendimento">
+                    <button type="button" class="chat-agent-switch-btn active is-human" title="Atendimento conduzido por atendente humano">
+                        <i class="fa-solid fa-user-check"></i>
+                        <span>Humano</span>
+                    </button>
+                    <button type="button" class="chat-agent-switch-btn" onclick="handOverChatToAi('${phone}')" title="Clique para passar esta conversa para a IA responder automaticamente">
+                        <i class="fa-solid fa-robot"></i>
+                        <span>Ligar IA</span>
+                    </button>
+                </div>
+                ${qualBadgeHTML}
+            </div>
+        `;
+    }
+}
+
+async function takeOverChatFromAi(phone) {
+    if (!phone) return;
+    let lead = null;
+    if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+        lead = leads.find(l => isSamePhone(l.telefone, phone));
+    }
+    if (lead) {
+        lead.ai_enabled = 0;
+        try {
+            await fetch(`/api/leads/${lead.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ai_enabled: false })
+            });
+        } catch (e) {
+            console.error('Erro ao assumir atendimento:', e);
+        }
+    }
+    renderChatActiveHeaderAiStatus(phone);
+    reapplyChatFilters();
+    if (typeof showToast === 'function') {
+        showToast('Você assumiu o atendimento! A IA foi pausada para este contato.');
+    }
+}
+
+async function handOverChatToAi(phone) {
+    if (!phone) return;
+    let lead = null;
+    if (typeof leads !== 'undefined' && Array.isArray(leads)) {
+        lead = leads.find(l => isSamePhone(l.telefone, phone));
+    }
+    if (lead) {
+        lead.ai_enabled = 1;
+        try {
+            await fetch(`/api/leads/${lead.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ai_enabled: true })
+            });
+        } catch (e) {
+            console.error('Erro ao transferir para IA:', e);
+        }
+    }
+    renderChatActiveHeaderAiStatus(phone);
+    reapplyChatFilters();
+    if (typeof showToast === 'function') {
+        showToast('Atendimento transferido para a IA! O robô responderá as próximas mensagens.');
+    }
+}
+
 function setChatFilter(mode) {
     activeChatFilter = mode;
     document.querySelectorAll('.chat-filter-menu-item').forEach(el => {
@@ -1373,6 +1609,7 @@ function setChatFilter(mode) {
 
     reapplyChatFilters();
 }
+
 
 function toggleChatFilterMenu(e) {
     if (e) e.stopPropagation();
@@ -1459,6 +1696,16 @@ function filterChatContacts(query) {
     if (!allChatsList) return;
 
     let filtered = allChatsList;
+
+    // Separação de Caixa de Entrada (Segmented Inbox):
+    // 'humano': Apenas conversas onde o humano é o responsável (exclui IA em triagem)
+    // 'ia': Apenas conversas onde a IA está ativamente respondendo
+    // 'todas': Mostra todas
+    if (activeChatInbox === 'humano') {
+        filtered = filtered.filter(chat => !isChatHandledByAI(chat));
+    } else if (activeChatInbox === 'ia') {
+        filtered = filtered.filter(chat => isChatHandledByAI(chat));
+    }
 
     if (q) {
         // Número de telefone com/sem o "9" transicional, ou com/sem DDI, nunca
@@ -1581,6 +1828,7 @@ function filterChatContacts(query) {
 
     window._lastFilteredChats = filtered;
     renderContactsList(filtered);
+    updateInboxTabCounts(allChatsList);
 }
 
 // ==========================================
@@ -1792,19 +2040,35 @@ function renderContactsList(chats) {
     if (!container) return;
 
     if (!chats || chats.length === 0) {
-        const emptyMessages = {
-            mine: 'Nenhum atendimento atribuído a você no momento.',
-            unread: 'Nenhuma conversa não lida.',
-            awaiting: 'Nenhuma conversa aguardando resposta do atendente.',
-            quente: 'Nenhum lead quente esperando atendimento no momento.',
-            favorites: 'Nenhum favorito ainda. Passe o mouse numa conversa e clique na estrela pra favoritar.',
-            contacts: 'Nenhum contato encontrado.',
-            groups: 'Sem conversas em grupo. A API do WhatsApp Business usada aqui não suporta grupos.',
-            drafts: 'Nenhum rascunho salvo.',
-            archived: 'Nenhuma conversa arquivada.'
-        };
-        const msg = emptyMessages[activeChatFilter] || 'Nenhuma conversa encontrada.';
-        container.innerHTML = `<div style="padding: 2rem; text-align: center; color: var(--text-muted);">${msg}</div>`;
+        let msg = 'Nenhuma conversa encontrada.';
+        if (activeChatInbox === 'humano') {
+            const humanMsgs = {
+                todos: 'Nenhuma conversa na fila de atendimento humano no momento.',
+                awaiting: 'Nenhum cliente aguardando resposta humana. Tudo em dia! 🎉',
+                quente: 'Nenhum lead qualificado pela IA esperando atendimento.',
+                mine: 'Nenhum atendimento atribuído a você no momento.',
+                unread: 'Nenhuma conversa não lida na fila humana.',
+                favorites: 'Nenhum favorito ainda.',
+                archived: 'Nenhuma conversa arquivada.'
+            };
+            msg = humanMsgs[activeChatFilter] || 'Nenhuma conversa na fila humana.';
+        } else if (activeChatInbox === 'ia') {
+            msg = 'Nenhum contato em atendimento pelo robô / IA no momento.';
+        } else {
+            const emptyMessages = {
+                mine: 'Nenhum atendimento atribuído a você no momento.',
+                unread: 'Nenhuma conversa não lida.',
+                awaiting: 'Nenhuma conversa aguardando resposta do atendente.',
+                quente: 'Nenhum lead quente esperando atendimento no momento.',
+                favorites: 'Nenhum favorito ainda. Passe o mouse numa conversa e clique na estrela pra favoritar.',
+                contacts: 'Nenhum contato encontrado.',
+                groups: 'Sem conversas em grupo. A API do WhatsApp Business usada aqui não suporta grupos.',
+                drafts: 'Nenhum rascunho salvo.',
+                archived: 'Nenhuma conversa arquivada.'
+            };
+            msg = emptyMessages[activeChatFilter] || 'Nenhuma conversa encontrada.';
+        }
+        container.innerHTML = `<div style="padding: 2.5rem 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">${msg}</div>`;
         return;
     }
 
@@ -1856,12 +2120,19 @@ function renderContactsList(chats) {
         let lockBadgeHTML = '';
         let presenceBadgeHTML = '';
         let aiBadgeHTML = '';
+        let stateBadgeHTML = '';
+
+        const isIAHandling = isChatHandledByAI(chat);
+        if (isIAHandling) {
+            stateBadgeHTML = `<span class="chat-badge-state chat-badge-state--ai" title="Em atendimento automático pela IA"><i class="fa-solid fa-robot"></i> IA Ativa</span>`;
+        }
+
         if (typeof leads !== 'undefined' && Array.isArray(leads)) {
             const phone = chat.phone;
             const lead = leads.find(l => isSamePhone(l.telefone, phone));
             if (lead) presenceBadgeHTML = chatPresenceBadgeHTML(lead.id);
-            if (lead && Number(lead.ai_enabled) !== 0 && ['col-entrada', 'col-contatado'].includes(lead.column)) {
-                aiBadgeHTML = `<span title="IA respondendo automaticamente" style="display: inline-flex; align-items: center; font-size: 0.7rem; margin-left: 4px;">🤖</span>`;
+            if (lead && isLeadQuente(lead)) {
+                stateBadgeHTML = `<span class="chat-badge-state chat-badge-state--hot" title="Lead qualificado pela IA — pronto pra fechar"><i class="fa-solid fa-fire"></i> Qualificado IA</span>`;
             }
             const tagIds = (lead && lead.tags) ? parseLeadTags(lead.tags) : [];
 
@@ -1874,6 +2145,10 @@ function renderContactsList(chats) {
             const lastMsgDirection = chat.last_direction || chat.direction;
             const isAutoWaiting = lastMsgDirection === 'in' && lastMsgTs && (Date.now() - lastMsgTs) > 5 * 60 * 1000;
             const displayTagIds = (isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds;
+
+            if (isAutoWaiting && !isIAHandling && !(lead && isLeadQuente(lead))) {
+                stateBadgeHTML = `<span class="chat-badge-state chat-badge-state--waiting" title="Cliente aguardando resposta humana"><i class="fa-regular fa-clock"></i> Aguardando</span>`;
+            }
 
             const isBlockedTag = isBlockedChat(chat.phone);
             const blockedTagBadge = isBlockedTag
@@ -1895,8 +2170,9 @@ function renderContactsList(chats) {
             }
 
             const windowBadgeHTML = whatsappWindowBadgeHTML(chat.last_inbound_at);
-            if (displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML || windowBadgeHTML) {
+            if (stateBadgeHTML || displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML || windowBadgeHTML) {
                 leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
+                    stateBadgeHTML +
                     ownerBadgeHTML +
                     blockedTagBadge +
                     windowBadgeHTML +
@@ -1912,6 +2188,9 @@ function renderContactsList(chats) {
                     lockBadgeHTML = `<span title="Em atendimento por ${escapeHtml(ownerName)} agora" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); padding: 0.1rem 0.5rem; border-radius: 10px; margin-left: 6px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>ativo agora</span>`;
                 }
             }
+        }
+        if (!leadTagsHTML && stateBadgeHTML) {
+            leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">${stateBadgeHTML}</div>`;
         }
 
         const avatarHTML = renderAvatarHTML(displayName, null, null, 49);
@@ -3245,6 +3524,13 @@ document.addEventListener('click', (e) => {
     const popupTransfer = document.getElementById('transfer-menu-popup');
     if (popupTransfer && popupTransfer.style.display !== 'none' && !popupTransfer.contains(e.target) && !e.target.closest('[onclick^="toggleTransferMenu"]')) {
         popupTransfer.style.display = 'none';
+    }
+
+    const popupQr = document.getElementById('quick-replies-popup');
+    const chatInput = document.getElementById('chat-input-text');
+    if (popupQr && popupQr.style.display !== 'none' && !popupQr.contains(e.target) && e.target !== chatInput) {
+        popupQr.style.display = 'none';
+        if (typeof currentQuickReplyMatches !== 'undefined') currentQuickReplyMatches = [];
     }
 });
 
@@ -4906,6 +5192,12 @@ async function openChat(phone, name, silent = false) {
         if (typeof isMarkedUnreadChat === 'function' && isMarkedUnreadChat(phone)) {
             setChatSetting(phone, 'marked_unread', false);
         }
+        // Restaura o rascunho salvo dessa conversa apenas na abertura inicial/manual
+        const draftInput = document.getElementById('chat-input-text');
+        if (draftInput) {
+            draftInput.value = getChatDraft(phone);
+            if (typeof autoExpandChatInput === 'function') autoExpandChatInput(draftInput);
+        }
     }
     
     document.getElementById('chat-empty-state').style.display = 'none';
@@ -4916,13 +5208,6 @@ async function openChat(phone, name, silent = false) {
     document.getElementById('view-chat')?.classList.add('chat-open');
     document.getElementById('view-chat')?.classList.remove('lead-open');
 
-    // Restaura o rascunho salvo dessa conversa, se houver
-    const draftInput = document.getElementById('chat-input-text');
-    if (draftInput) {
-        draftInput.value = getChatDraft(phone);
-        if (typeof autoExpandChatInput === 'function') autoExpandChatInput(draftInput);
-    }
-
     const leadPanelEl = document.getElementById('chat-lead-panel');
     if (leadPanelEl) leadPanelEl.style.display = 'flex';
     if (typeof applyLeadPanelCollapsed === 'function') applyLeadPanelCollapsed();
@@ -4931,6 +5216,7 @@ async function openChat(phone, name, silent = false) {
     const phoneNumEl = document.getElementById('chat-active-phone-number');
     if (phoneNumEl) phoneNumEl.textContent = "+" + phone;
     else document.getElementById('chat-active-phone').textContent = "+" + phone;
+    renderChatActiveHeaderAiStatus(phone);
 
     const targetChat = (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList))
         ? allChatsList.find(c => isSamePhone(c.phone, phone))
@@ -5371,6 +5657,8 @@ async function sendActiveChatMessage() {
         let lead = leads.find(l => isSamePhone(l.telefone, phone));
 
         if (lead) {
+            lead.ai_enabled = 0;
+            renderChatActiveHeaderAiStatus(phone);
             if (!lead.column || lead.column === 'col-entrada') {
                 lead.column = 'col-contatado';
                 if (typeof renderBoard === 'function') renderBoard();
@@ -5474,15 +5762,16 @@ async function fetchQuickReplies() {
 }
 
 function handleQuickReplyInput(e) {
-    const val = e.target.value;
+    const inputEl = (e && e.target) ? e.target : (e && e.tagName ? e : document.getElementById('chat-input-text'));
+    const val = inputEl ? inputEl.value : '';
     const popup = document.getElementById('quick-replies-popup');
     if (!popup) return;
 
-    if (val.startsWith('/')) {
+    if (val && val.startsWith('/')) {
         const query = val.slice(1).toLowerCase();
         const textMatches = quickReplies.filter(qr =>
-            qr.shortcut.toLowerCase().includes(query) ||
-            qr.content.toLowerCase().includes(query) ||
+            (qr.shortcut && qr.shortcut.toLowerCase().includes(query)) ||
+            (qr.content && qr.content.toLowerCase().includes(query)) ||
             (qr.title && qr.title.toLowerCase().includes(query))
         ).map(qr => ({ kind: 'text', ...qr }));
 
@@ -5490,7 +5779,7 @@ function handleQuickReplyInput(e) {
         // definido) ou pelo nome. Comando com match exato vem primeiro.
         const audioMatches = (cachedVoiceLibrary || []).filter(a =>
             (a.comando && a.comando.toLowerCase().startsWith(query)) ||
-            a.nome.toLowerCase().includes(query)
+            (a.nome && a.nome.toLowerCase().includes(query))
         ).map(a => ({ kind: 'audio', ...a }))
          .sort((x, y) => {
             const xe = x.comando && x.comando.toLowerCase() === query ? 0 : 1;
@@ -5506,11 +5795,15 @@ function handleQuickReplyInput(e) {
             popup.style.display = 'block';
         } else {
             popup.style.display = 'none';
+            currentQuickReplyMatches = [];
         }
     } else {
         popup.style.display = 'none';
+        currentQuickReplyMatches = [];
     }
 }
+window.handleQuickReplyInput = handleQuickReplyInput;
+window.handleQuickRepliesInput = handleQuickReplyInput;
 
 function handleQuickReplyKeydown(e) {
     const popup = document.getElementById('quick-replies-popup');
@@ -5532,6 +5825,7 @@ function handleQuickReplyKeydown(e) {
         selectQuickReplyByIndex(activeQuickReplyIndex);
     } else if (e.key === 'Escape') {
         popup.style.display = 'none';
+        currentQuickReplyMatches = [];
     }
 }
 
@@ -5559,7 +5853,7 @@ function renderQuickRepliesPopup(matches) {
         const activeStyle = index === 0 ? 'background: rgba(16, 185, 129, 0.2); border-left: 3px solid var(--accent-success);' : '';
         if (item.kind === 'audio') {
             return `
-        <div class="qr-popup-item" data-index="${index}" onclick="selectQuickReplyByIndex(${index})" style="padding: 0.6rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); ${activeStyle}">
+        <div class="qr-popup-item" data-index="${index}" onmousedown="event.preventDefault();" onclick="selectQuickReplyByIndex(${index})" style="padding: 0.6rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); ${activeStyle}">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <i class="fa-solid fa-microphone" style="color: var(--accent-success); font-size: 0.8rem;"></i>
                 ${item.comando ? `<strong style="color: var(--accent-success); font-size: 0.85rem;">/${escapeHtml(item.comando)}</strong>` : ''}
@@ -5569,7 +5863,7 @@ function renderQuickRepliesPopup(matches) {
         </div>`;
         }
         return `
-        <div class="qr-popup-item" data-index="${index}" onclick="selectQuickReplyByIndex(${index})" style="padding: 0.6rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); ${activeStyle}">
+        <div class="qr-popup-item" data-index="${index}" onmousedown="event.preventDefault();" onclick="selectQuickReplyByIndex(${index})" style="padding: 0.6rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); ${activeStyle}">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.2rem;">
                 <strong style="color: var(--accent-success); font-size: 0.85rem;">/${item.shortcut}</strong>
                 <span style="font-size: 0.75rem; color: var(--text-muted);">${item.title || ''}</span>
@@ -5588,8 +5882,13 @@ function selectQuickReplyByIndex(index) {
 
     if (item.kind === 'audio') {
         if (popup) popup.style.display = 'none';
+        currentQuickReplyMatches = [];
         const input = document.getElementById('chat-input-text');
-        if (input) input.value = '';
+        if (input) {
+            input.value = '';
+            if (typeof autoExpandChatInput === 'function') autoExpandChatInput(input);
+            if (typeof saveChatDraftFromInput === 'function') saveChatDraftFromInput();
+        }
         sendFromLibrary(item.id, item.nome);
         return;
     }
@@ -5597,9 +5896,16 @@ function selectQuickReplyByIndex(index) {
     const input = document.getElementById('chat-input-text');
     if (input) {
         input.value = item.content;
+        if (typeof autoExpandChatInput === 'function') autoExpandChatInput(input);
+        if (typeof saveChatDraftFromInput === 'function') saveChatDraftFromInput();
         input.focus();
+        if (typeof input.setSelectionRange === 'function') {
+            const len = input.value.length;
+            input.setSelectionRange(len, len);
+        }
     }
     if (popup) popup.style.display = 'none';
+    currentQuickReplyMatches = [];
 }
 
 function openQuickRepliesModal(tab = 'textos') {
@@ -5811,17 +6117,118 @@ async function copilotDraftReply() {
     }
 }
 
+// ==========================================================================
+// REDIMENSIONAMENTO DA SIDEBAR DO CHAT (ARRASTAR E SOLTAR)
+// ==========================================================================
+function initChatSidebarResizer() {
+    const resizer = document.getElementById('chat-sidebar-resizer');
+    const sidebar = document.getElementById('chat-sidebar') || document.querySelector('.chat-sidebar');
+    if (!resizer || !sidebar) return;
+
+    const STORAGE_KEY = 'crm_chat_sidebar_width';
+    const DEFAULT_WIDTH = 400;
+    const MIN_WIDTH = 280;
+
+    // Restaura largura salva anteriormente pelo usuário
+    const savedWidth = localStorage.getItem(STORAGE_KEY);
+    if (savedWidth) {
+        const parsed = parseInt(savedWidth, 10);
+        if (!isNaN(parsed) && parsed >= MIN_WIDTH) {
+            sidebar.style.width = `${parsed}px`;
+        }
+    }
+
+    let isDragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    const startDrag = (clientX) => {
+        isDragging = true;
+        startX = clientX;
+        startWidth = sidebar.getBoundingClientRect().width;
+
+        document.body.classList.add('is-chat-resizing');
+        resizer.classList.add('is-resizing');
+    };
+
+    const doDrag = (clientX) => {
+        if (!isDragging) return;
+        const deltaX = clientX - startX;
+        const maxWidth = Math.max(MIN_WIDTH, Math.min(window.innerWidth * 0.65, 800));
+        const newWidth = Math.min(Math.max(startWidth + deltaX, MIN_WIDTH), maxWidth);
+        sidebar.style.width = `${newWidth}px`;
+    };
+
+    const stopDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.classList.remove('is-chat-resizing');
+        resizer.classList.remove('is-resizing');
+
+        const finalWidth = sidebar.getBoundingClientRect().width;
+        localStorage.setItem(STORAGE_KEY, Math.round(finalWidth));
+    };
+
+    // Eventos de Mouse
+    resizer.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        startDrag(e.clientX);
+
+        const onMouseMove = (moveEvent) => doDrag(moveEvent.clientX);
+        const onMouseUp = () => {
+            stopDrag();
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    });
+
+    // Eventos de Toque (Trackpad / Touchscreens)
+    resizer.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        startDrag(e.touches[0].clientX);
+
+        const onTouchMove = (moveEvent) => {
+            if (moveEvent.touches.length === 1) doDrag(moveEvent.touches[0].clientX);
+        };
+        const onTouchEnd = () => {
+            stopDrag();
+            window.removeEventListener('touchmove', onTouchMove);
+            window.removeEventListener('touchend', onTouchEnd);
+        };
+
+        window.addEventListener('touchmove', onTouchMove, { passive: true });
+        window.addEventListener('touchend', onTouchEnd);
+    });
+
+    // Duplo clique: redefine para a largura padrão (400px)
+    resizer.addEventListener('dblclick', () => {
+        sidebar.style.width = `${DEFAULT_WIDTH}px`;
+        localStorage.setItem(STORAGE_KEY, DEFAULT_WIDTH);
+    });
+}
+
 // Inicializa no carregamento
 window.addEventListener('DOMContentLoaded', () => {
     fetchQuickReplies();
     loadVoiceLibrary();
     loadChatSettings();
+    initChatSidebarResizer();
     const chatInput = document.getElementById('chat-input-text');
     if (chatInput) {
         chatInput.addEventListener('input', handleQuickReplyInput);
         chatInput.addEventListener('keydown', handleQuickReplyKeydown);
     }
 });
+
+// Executa imediatamente caso o script seja avaliado após o carregamento do DOM
+if (document.readyState !== 'loading') {
+    initChatSidebarResizer();
+}
+
 
 // Polling global em segundo plano (lista de conversas, presença, conversa aberta).
 // A lista vem de um cache no servidor que é remendado a cada mensagem nova

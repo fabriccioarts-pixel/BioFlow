@@ -5482,6 +5482,270 @@ select.form-control option,
     font-weight: 700;
 }
 
+/* ==========================================================================
+   SEGMENTED INBOX TABS (HUMANO vs IA vs TODAS) & STATUS BADGES
+   ========================================================================== */
+.chat-inbox-tabs {
+    display: flex;
+    background: var(--bg-main, #0f172a);
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+    margin-bottom: 0.75rem;
+    gap: 3px;
+}
+
+.chat-inbox-tab {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.45rem 0.35rem;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted, #94a3b8);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    white-space: nowrap;
+    position: relative;
+    user-select: none;
+}
+
+.chat-inbox-tab:hover {
+    color: var(--text-main, #f8fafc);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.chat-inbox-tab.active[data-inbox="humano"] {
+    background: rgba(16, 185, 129, 0.14);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.35);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.chat-inbox-tab.active[data-inbox="ia"] {
+    background: rgba(168, 85, 247, 0.14);
+    color: #c084fc;
+    border-color: rgba(168, 85, 247, 0.35);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.chat-inbox-tab.active[data-inbox="todas"] {
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--text-main, #f8fafc);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.chat-inbox-tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 5px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    border-radius: 999px;
+    background: var(--accent-success, #10b981);
+    color: #064e3b;
+    min-width: 17px;
+    height: 17px;
+    line-height: 1;
+}
+
+.chat-inbox-tab-badge--ia {
+    background: rgba(168, 85, 247, 0.28);
+    color: #e9d5ff;
+    border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+/* Crachás e Estados de Atendimento na Linha de Conversa */
+.chat-badge-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.chat-badge-state--ai {
+    background: rgba(168, 85, 247, 0.15);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.chat-badge-state--hot {
+    background: rgba(249, 115, 22, 0.15);
+    color: #fb923c;
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    animation: hotBadgePulse 2s infinite ease-in-out;
+}
+
+.chat-badge-state--waiting {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+@keyframes hotBadgePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* ==========================================================================
+   SELETOR DE ATENDIMENTO NO HEADER (HUMANO vs IA SWITCH)
+   ========================================================================== */
+.chat-agent-switch-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.chat-agent-switch {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg-main, #0f172a);
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: 999px;
+    padding: 2px;
+    gap: 2px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    user-select: none;
+}
+
+.chat-agent-switch-btn {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted, #94a3b8);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: all 0.18s ease;
+    white-space: nowrap;
+}
+
+.chat-agent-switch-btn:hover:not(.active) {
+    color: var(--text-main, #f8fafc);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-agent-switch-btn.active.is-human {
+    background: rgba(16, 185, 129, 0.16);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.4);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.chat-agent-switch-btn.active.is-ai {
+    background: rgba(168, 85, 247, 0.16);
+    color: #c084fc;
+    border-color: rgba(168, 85, 247, 0.4);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.chat-agent-ai-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #c084fc;
+    box-shadow: 0 0 6px #c084fc;
+    animation: aiPulseDot 1.6s infinite ease-in-out;
+}
+
+@keyframes aiPulseDot {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(0.75); opacity: 0.5; }
+}
+
+.chat-header-qual-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(249, 115, 22, 0.14);
+    color: #fb923c;
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    white-space: nowrap;
+    animation: hotBadgePulse 2s infinite ease-in-out;
+}
+
+
+/* ==========================================================================
+   CHAT SIDEBAR RESIZER (ARRASTAR E REDIMENSIONAR)
+   ========================================================================== */
+.chat-sidebar-resizer {
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    position: relative;
+    user-select: none;
+    -webkit-user-select: none;
+    flex-shrink: 0;
+    z-index: 40;
+    background: transparent;
+    margin-left: -4px;
+    margin-right: -4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease;
+}
+
+.chat-sidebar-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-sidebar-resizer:hover::after,
+.chat-sidebar-resizer.is-resizing::after {
+    background: var(--accent-primary, #10b981);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.45);
+}
+
+.chat-sidebar-resizer:hover,
+.chat-sidebar-resizer.is-resizing {
+    background: rgba(16, 185, 129, 0.08);
+}
+
+body.is-chat-resizing {
+    cursor: col-resize !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+
+body.is-chat-resizing iframe {
+    pointer-events: none !important;
+}
+
+@media (max-width: 768px) {
+    .chat-sidebar-resizer {
+        display: none !important;
+    }
+}
+
+
+
 .dash-card-compact {
     padding: 0.55rem !important;
     overflow: hidden;

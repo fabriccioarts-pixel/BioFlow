@@ -3505,8 +3505,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
         style="display: flex; padding: 0px; flex-direction: row; min-height: 0; border-top: 1px solid var(--border-color); overflow: hidden; background: var(--bg-main);">
 
         <!-- Sidebar Esquerda (Lista de Contatos) -->
-        <div class="chat-sidebar"
-            style="width: 400px; height: 100%; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--bg-card); overflow: hidden;">
+        <div class="chat-sidebar" id="chat-sidebar"
+            style="width: 400px; height: 100%; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--bg-card); overflow: hidden; flex-shrink: 0; min-width: 260px; max-width: 800px;">
             <div style="padding: 1.1rem 1.5rem; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
                     <h2 style="font-size: 1.25rem; font-weight: 700; margin: 0;"><i class="fa-brands fa-whatsapp"
@@ -3570,6 +3570,24 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </div>
                 </div>
 
+                <!-- Segmented Tabs: Humano vs IA vs Todas -->
+                <div class="chat-inbox-tabs" role="tablist" aria-label="Caixas de atendimento">
+                    <button type="button" class="chat-inbox-tab active" data-inbox="humano" onclick="setChatInbox('humano')" title="Conversas sob responsabilidade humana">
+                        <i class="fa-solid fa-user-check"></i>
+                        <span>Humano</span>
+                        <span class="chat-inbox-tab-badge" id="inbox-count-humano" style="display: none;">0</span>
+                    </button>
+                    <button type="button" class="chat-inbox-tab" data-inbox="ia" onclick="setChatInbox('ia')" title="Conversas em triagem automática pela IA">
+                        <i class="fa-solid fa-robot"></i>
+                        <span>Robô / IA</span>
+                        <span class="chat-inbox-tab-badge chat-inbox-tab-badge--ia" id="inbox-count-ia" style="display: none;">0</span>
+                    </button>
+                    <button type="button" class="chat-inbox-tab" data-inbox="todas" onclick="setChatInbox('todas')" title="Todas as conversas">
+                        <i class="fa-solid fa-inbox"></i>
+                        <span>Todas</span>
+                    </button>
+                </div>
+
                 <!-- Busca -->
                 <div style="position: relative;">
                     <i class="fa-solid fa-magnifying-glass"
@@ -3583,10 +3601,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div id="chat-filter-chips"
                     style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem;">
                     <button type="button" class="chat-filter-chip active" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
+                    <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half" style="color: #f59e0b;"></i> Aguardando resposta</button>
+                    <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
                     <button type="button" class="chat-filter-chip" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
                     <button type="button" class="chat-filter-chip" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
-                    <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')">Aguardando resposta</button>
-                    <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
                 </div>
             </div>
             <!-- Badge de leads quentes (qualificados pela IA) esperando atendimento -->
@@ -3623,9 +3641,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
         </div>
 
+        <!-- Divisor Redimensionável da Barra Lateral (Arrastar e Soltar) -->
+        <div id="chat-sidebar-resizer" class="chat-sidebar-resizer" title="Arraste para redimensionar a barra lateral (clique duplo para redefinir)"></div>
+
         <!-- Área Principal (Histórico da Conversa Aberta) -->
         <div class="chat-main"
-            style="flex: 1; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg-main); position: relative; overflow: hidden;">
+            style="flex: 1; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg-main); position: relative; overflow: hidden; min-width: 0;">
 
             <!-- Estado Vazio -->
             <div id="chat-empty-state"
@@ -3651,9 +3672,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </button>
                     <div id="chat-header-avatar-slot"></div>
                     <div style="min-width: 0;">
-                        <h3 id="chat-active-name" style="font-size: 1.1rem; margin-bottom: 0.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nome do Contato</h3>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                            <h3 id="chat-active-name" style="font-size: 1.1rem; margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nome do Contato</h3>
+                            <div id="chat-active-ai-status-container"></div>
+                        </div>
                         <p id="chat-active-phone"
-                            style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                            style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.2rem;">
                             <span id="chat-active-phone-number">+55 00 00000-0000</span>
                         </p>
                     </div>
@@ -3783,7 +3807,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </div>
                         <textarea id="chat-input-text" rows="1"
                             placeholder="Mensagem"
-                            oninput="autoExpandChatInput(this); if(typeof handleQuickRepliesInput==='function') handleQuickRepliesInput(this); if(typeof saveChatDraftFromInput==='function') saveChatDraftFromInput();"
+                            oninput="autoExpandChatInput(this); if(typeof handleQuickReplyInput==='function') handleQuickReplyInput(this); else if(typeof handleQuickRepliesInput==='function') handleQuickRepliesInput(this); if(typeof saveChatDraftFromInput==='function') saveChatDraftFromInput();"
                             onkeydown="handleChatInputKeyDown(event)"
                             style="width: 100%; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.75rem 1.2rem; border-radius: 22px; outline: none; resize: none; min-height: 44px; max-height: 140px; font-family: inherit; font-size: 0.95rem; line-height: 1.4; box-sizing: border-box;"></textarea>
 
