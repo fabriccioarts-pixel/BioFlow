@@ -500,7 +500,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                             'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                             [`lead-${newLeadId}`, notifMsg]
                         );
-                        sendPushToAll(`🌱 Novo lead: ${leadName}`, pushPreviewText(msg_body), { phone: from }).catch(() => {});
+                        await sendPushToAll(`🌱 Novo lead: ${leadName}`, pushPreviewText(msg_body), { phone: from }).catch(() => {});
                     } catch (e) {
                         console.error('Falha ao registrar notificação de novo lead:', e.message);
                     }
@@ -2672,7 +2672,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
                     [notifId, notifMsg]
                 ).catch(() => {});
             }
-            sendPushToAll('Lead quente 🔥', notifMsg, { phone: telLead }).catch(() => {});
+            await sendPushToAll('Lead quente 🔥', notifMsg, { phone: telLead }).catch(() => {});
             return;
         }
 
@@ -3783,6 +3783,36 @@ async function sendPushToAll(title, body, extra = {}, usernames = null) {
     }
 }
 
+// Teste de aviso pros aparelhos de quem está logado (botão "Avisos neste
+// aparelho"). Diferente do sendPushToAll, devolve o diagnóstico: servidor sem
+// chaves VAPID, nenhum aparelho inscrito, ou o erro que o serviço de push deu.
+app.post('/api/push/test', async (req, res) => {
+    if (!pushEnabled) return res.json({ ok: false, motivo: 'sem_vapid' });
+    try {
+        const username = (req.user && req.user.username) || null;
+        const subs = await queryD1('SELECT id, endpoint, p256dh, auth FROM crm_push_subscriptions WHERE username = ?', [username]);
+        if (!subs || !subs.length) return res.json({ ok: false, motivo: 'sem_aparelho' });
+        const payload = JSON.stringify({ title: '🔔 Teste de aviso', body: 'Se você está vendo isto, os avisos deste aparelho funcionam.' });
+        let enviados = 0;
+        const falhas = [];
+        await Promise.all(subs.map(async (s) => {
+            try {
+                await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+                enviados++;
+            } catch (e) {
+                if (e.statusCode === 404 || e.statusCode === 410) {
+                    await queryD1('DELETE FROM crm_push_subscriptions WHERE id = ?', [s.id]).catch(() => {});
+                }
+                falhas.push(`${e.statusCode || '?'} ${String(e.body || e.message || '').slice(0, 120)}`);
+            }
+        }));
+        res.json({ ok: enviados > 0, enviados, aparelhos: subs.length, falhas });
+    } catch (e) {
+        console.error('push/test:', e.message);
+        res.status(500).json({ ok: false, motivo: 'erro', erro: e.message });
+    }
+});
+
 // Texto da mensagem do lead pra notificação: mídia vira "📷 Foto", "🎧 Áudio"
 // etc. (com a legenda, se tiver) em vez do caminho interno do arquivo.
 function pushPreviewText(texto) {
@@ -3805,7 +3835,12 @@ app.post('/api/push/subscribe', async (req, res) => {
     try {
         const sub = req.body?.subscription;
         if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Inscrição inválida.' });
-        const id = 'push-' + Buffer.from(sub.endpoint).toString('base64').slice(0, 40);
+        // Hash do endpoint inteiro. Antes eram os 40 primeiros caracteres em
+        // base64 — todo endpoint do Chrome começa com o mesmo
+        // "https://fcm.googleapis.com/fcm/send/", então todo aparelho Chrome
+        // ganhava o MESMO id, só o primeiro se inscrevia e os outros davam 500
+        // (chave duplicada) sem ninguém perceber.
+        const id = 'push-' + crypto.createHash('sha256').update(sub.endpoint).digest('hex').slice(0, 32);
         await queryD1(
             `INSERT INTO crm_push_subscriptions (id, username, endpoint, p256dh, auth) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(endpoint) DO UPDATE SET username = excluded.username, p256dh = excluded.p256dh, auth = excluded.auth`,
@@ -6029,7 +6064,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                     'INSERT INTO crm_notifications (id, message, created_at, avatar_url, actor_username) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)',
                     [`login-${dbUser.username}-${Date.now()}`, loginMessage, dbUser.avatar_url || null, dbUser.username]
                 );
-                sendPushToAll('CRM', loginMessage).catch(() => {});
+                await sendPushToAll('CRM', loginMessage).catch(() => {});
             }
         } catch (e) {
             console.error('Erro ao registrar notificação de login:', e);
@@ -6335,7 +6370,7 @@ async function notifyLeadReply(leadId, phone, texto) {
 
     // Aviso nativo no Windows/celular com a mensagem do lead. Lead com
     // responsável avisa só os aparelhos dele; sem responsável, todo mundo.
-    sendPushToAll(`💬 ${nome}`, pushPreviewText(texto) + (responsavel ? '' : ' · sem responsável'),
+    await sendPushToAll(`💬 ${nome}`, pushPreviewText(texto) + (responsavel ? '' : ' · sem responsável'),
         { phone }, lead.owner_id ? [lead.owner_id] : null).catch(() => {});
 }
 
@@ -10213,7 +10248,7 @@ if (!process.env.VERCEL) {
                         'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, ?)',
                         [Date.now().toString() + Math.random(), msg, att.start_date || new Date().toISOString()]
                     );
-                    sendPushToAll('Atendimento finalizado', msg).catch(() => {});
+                    await sendPushToAll('Atendimento finalizado', msg).catch(() => {});
                 }
             }
         } catch (e) {
@@ -10350,7 +10385,7 @@ async function flowExecNode(node, run, ctx, opts) {
                 try {
                     await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                         [`flow-${run.id}-${Date.now()}`, handoffMsg]);
-                    sendPushToAll('Fluxo pediu atendimento humano', handoffMsg, { phone: run.phone }).catch(() => {});
+                    await sendPushToAll('Fluxo pediu atendimento humano', handoffMsg, { phone: run.phone }).catch(() => {});
                 } catch (e) {}
             }
             return { end: true };
@@ -10694,7 +10729,66 @@ const FOLLOWUP_DEFAULT = {
     acao_final: 'nada',            // 'nada' | 'mover:col-perdido' | 'tag:sem-resposta'
     aplicar_com_humano: true,
     max_por_tick: 25,
+    // Antes de cada envio, cancela o follow-up se o lead tem agendamento futuro
+    // no CRM ou se a IA lê no fim da conversa que ela já foi concluída
+    // (horário confirmado, despedida, desistência...). Ver followupConversaEncerrada.
+    checar_encerramento: true,
 };
+
+// Agendamento futuro registrado pelo CRM pra esse lead (agendamentos_financeiro).
+// Cobre o caso de o card não ter sido movido pra "Agendado" no Kanban.
+async function followupTemAgendamentoFuturo(leadId) {
+    try {
+        const rows = await queryD1(
+            `SELECT data_agendamento FROM agendamentos_financeiro
+             WHERE lead_id = ? AND data_agendamento IS NOT NULL AND data_agendamento != ''
+               AND substr(replace(data_agendamento, 'T', ' '), 1, 10) >= ?
+             LIMIT 1`,
+            [String(leadId), new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })]
+        );
+        return rows && rows[0] ? rows[0].data_agendamento : null;
+    } catch (e) { return null; }
+}
+
+// A IA lê o fim da conversa e diz se um "ainda tem interesse?" seria fora de
+// hora. Falha aberta (devolve null e o follow-up segue): melhor um follow-up a
+// mais do que a sequência inteira travada por um erro da API.
+async function followupConversaEncerrada(phones) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || !phones.length) return null;
+    try {
+        const ph = phones.map(() => '?').join(', ');
+        const rows = await queryD1(
+            `SELECT direction, message FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 12`, phones);
+        if (!rows || !rows.length) return null;
+        const conversa = rows.reverse().map(r => {
+            const quem = r.direction === 'in' ? 'PACIENTE' : 'EQUIPE';
+            const txt = String(r.message || '').startsWith('[FILE:') ? '[mídia]' : String(r.message || '').replace(/\s+/g, ' ').slice(0, 300);
+            return `${quem}: ${txt}`;
+        }).join('\n');
+        const prompt = `Você analisa o fim de uma conversa de WhatsApp entre uma clínica (EQUIPE) e um paciente (PACIENTE).
+A clínica está prestes a mandar uma mensagem automática de follow-up do tipo "você viu minha mensagem? ainda tem interesse?", porque a última mensagem foi da equipe e o paciente não respondeu.
+Decida se esse follow-up seria INADEQUADO porque a conversa já foi concluída. Conta como concluída: agendamento confirmado (dia/horário combinado), paciente já atendido ou já é paciente da clínica, paciente disse claramente que NÃO quer, atendimento encerrado com despedida/agradecimento sem nada pendente, ou a equipe disse que vai retornar depois.
+Continua ABERTA: a equipe fez uma pergunta ou proposta e ficou esperando resposta, ou o paciente disse que vai pensar / ver depois / falar com alguém (o follow-up serve justamente pra esse caso).
+Responda numa única linha, exatamente "ENCERRADA: <motivo em até 8 palavras>" ou "ABERTA".
+
+CONVERSA:
+${conversa}`;
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ? j.error.message : 'Gemini');
+        const out = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+        const m = out.match(/^ENCERRADA\s*:?\s*(.*)$/im);
+        return m ? (m[1].trim() || 'conversa concluída').slice(0, 120) : null;
+    } catch (e) {
+        console.error('follow-up: checagem de encerramento falhou:', e.message);
+        return null;
+    }
+}
 
 async function followupGetConfig() {
     try {
@@ -10896,6 +10990,21 @@ async function followupTick() {
                 const nv = followupNextAllowed(cfg, new Date());
                 await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [followupAtSql(nv), run.id]);
                 continue;
+            }
+
+            // Conversa já resolvida (agendou, se despediu, desistiu) mesmo com o
+            // card fora de "Agendado"/"Ganho": cancela em vez de mandar "ainda tem interesse?".
+            if (cfg.checar_encerramento !== false) {
+                const agendadoPara = await followupTemAgendamentoFuturo(lead.id);
+                const motivoFim = agendadoPara
+                    ? `agendamento marcado para ${String(agendadoPara).replace('T', ' ').slice(0, 16)}`
+                    : await followupConversaEncerrada(vph);
+                if (motivoFim) {
+                    await queryD1("UPDATE crm_followup_runs SET status = 'encerrado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]);
+                    logLeadEvent(lead.id, 'follow_up_cancelado', 'sistema', motivoFim);
+                    processed++;
+                    continue;
+                }
             }
 
             const lastInRow = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
@@ -11909,7 +12018,7 @@ Seja RIGOROSO: se a conversa já foi bem encaminhada, se o lead só agradeceu/de
                 "INSERT OR IGNORE INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)",
                 [nid, msg, p.lead.telefone || null]
             );
-            sendPushToAll('Oportunidade detectada 💰', msg, { phone: p.lead.telefone || null }).catch(() => {});
+            await sendPushToAll('Oportunidade detectada 💰', msg, { phone: p.lead.telefone || null }).catch(() => {});
             await tagLeadAsOpportunity(p.lead.id);
             dbg.sinalizados++;
         } catch (e) { console.error('opps: gravar sinal falhou:', e.message); }
