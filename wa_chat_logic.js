@@ -2624,31 +2624,39 @@ async function saveLeadNotesFromChat(leadId) {
 
     const { adBlock } = splitAdBlockFromNotes(lead.notas);
     const newRest = textarea.value.trim();
-    lead.notas = adBlock ? `${adBlock}\n\n${newRest}` : newRest;
+    const notasAntes = lead.notas;
+    const notasNovas = adBlock ? `${adBlock}\n\n${newRest}` : newRest;
 
     const oldLabel = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando...'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="amicro-loader"><span></span><span></span><span></span></span> Salvando'; }
 
     try {
-        await fetch(`/api/leads/${leadId}`, {
+        const res = await fetch(`/api/leads/${leadId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ notas: lead.notas })
+            body: JSON.stringify({ notas: notasNovas })
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        lead.notas = notasNovas;
         leadPanelNotesDirty = false;
+        textarea.defaultValue = newRest; // vira o novo "original" pro Cancelar
 
         // Atualiza o resumo no card recolhido e fecha o bloco de notas
-        const badgePreview = document.querySelector('#lead-notes-badge span');
-        if (badgePreview) {
+        const badge = document.getElementById('lead-notes-badge');
+        if (badge) {
             const hasNotes = !!newRest;
-            badgePreview.textContent = hasNotes
-                ? newRest.split('\n')[0].slice(0, 40) + (newRest.length > 40 ? '…' : '')
-                : 'Clique para anotar';
-            badgePreview.style.color = hasNotes ? 'var(--text-main)' : 'var(--nav-arrow)';
+            badge.classList.toggle('is-empty', !hasNotes);
+            badge.innerHTML = `
+                <i class="${hasNotes ? 'fa-regular fa-note-sticky' : 'fa-solid fa-plus'}" aria-hidden="true"></i>
+                <span class="lp-note-text">${hasNotes ? escapeHtml(newRest.split('\n')[0].slice(0, 80)) + (newRest.length > 80 ? '…' : '') : 'Adicionar uma nota interna'}</span>
+                ${hasNotes ? '<span class="lp-note-edit">Editar</span>' : ''}`;
         }
         toggleLeadNotesExpanded();
+        if (typeof showToast === 'function') showToast('Nota salva.');
     } catch (e) {
         console.error('Erro ao salvar notas do lead', e);
+        lead.notas = notasAntes;
+        if (typeof showToast === 'function') showToast('Não foi possível salvar a nota. Tente de novo.', 'danger');
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = oldLabel; }
     }
@@ -2688,11 +2696,37 @@ function toggleLeadNotesExpanded() {
     expanded.style.display = isOpening ? 'block' : 'none';
     badge.style.display = isOpening ? 'none' : 'flex';
 
+    const textarea = document.getElementById('chat-lead-notes-textarea');
     if (isOpening) {
-        const textarea = document.getElementById('chat-lead-notes-textarea');
-        if (textarea) textarea.focus();
+        if (textarea) {
+            autoGrowLeadNotes(textarea);
+            textarea.focus();
+            const len = textarea.value.length;
+            textarea.setSelectionRange(len, len); // cursor no fim, pra continuar a nota
+        }
     } else {
+        // Fechar sem salvar (Cancelar/Esc) descarta o que foi digitado.
+        if (textarea) textarea.value = textarea.defaultValue;
         leadPanelNotesDirty = false;
+        badge.focus();
+    }
+}
+
+// Campo de nota cresce com o texto (até o limite do CSS) em vez de rolar numa caixa pequena.
+function autoGrowLeadNotes(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight + 2}px`;
+}
+
+// Ctrl/Cmd + Enter salva; Esc cancela (sem fechar a conversa, que também usa Esc).
+function leadNotesKeydown(e, leadId) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveLeadNotesFromChat(leadId);
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleLeadNotesExpanded();
     }
 }
 
@@ -2751,40 +2785,57 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         aiToggle.disabled = !lead;
         if (aiToggleLabel) {
             aiToggleLabel.textContent = !lead
-                ? 'IA respondendo esta conversa (sem lead vinculado)'
-                : 'IA respondendo esta conversa';
+                ? 'Indisponível: conversa sem lead vinculado'
+                : (aiEnabled ? 'Respondendo esta conversa' : 'Desligada nesta conversa');
         }
     }
 
+    const phoneDisplay = formatPhoneDisplay((lead && lead.telefone) || phone);
     const identityContainer = document.getElementById('chat-lead-identity');
     if (identityContainer) {
         const leadName = (lead && lead.nome) || (window.currentActiveChat && window.currentActiveChat.name) || 'Contato';
         const identityAvatarHTML = typeof renderAvatarHTML === 'function'
             ? renderAvatarHTML(leadName, null, null, 44)
             : '';
-        identityContainer.innerHTML = `
+        const identityHTML = `
             ${identityAvatarHTML}
-            <div style="min-width: 0;">
-                <div style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(leadName)}</div>
+            <div class="lp-identity-text">
+                <div class="lp-identity-name" title="${escapeHtml(leadName)}">${escapeHtml(leadName)}</div>
+                <div class="lp-identity-phone">
+                    <span>${escapeHtml(phoneDisplay)}</span>
+                    <button type="button" class="lp-icon-btn" title="Copiar telefone" aria-label="Copiar telefone"
+                        onclick="lppCopyText(event, '${escapeHtml(String((lead && lead.telefone) || phone || '').replace(/\D/g, ''))}')"><i class="fa-regular fa-copy"></i></button>
+                </div>
             </div>
         `;
+        if (identityContainer.dataset.lastRenderedHtml !== identityHTML) {
+            identityContainer.dataset.lastRenderedHtml = identityHTML;
+            identityContainer.innerHTML = identityHTML;
+        }
     }
+
+    // Linha "rótulo | valor" — padrão de todos os dados da ficha.
+    const row = (label, valueHTML) => `
+        <div class="lp-row">
+            <span class="lp-row-label">${label}</span>
+            <div class="lp-row-value">${valueHTML}</div>
+        </div>`;
 
     let responsavelHTML = '';
     if (lead) {
         const hasOwner = !!lead.owner_id;
-        const ownerName = hasOwner ? (typeof resolveDisplayName === 'function' ? resolveDisplayName(lead.owner_id) : lead.owner_id) : 'Nenhum responsável';
+        const ownerName = hasOwner ? (typeof resolveDisplayName === 'function' ? resolveDisplayName(lead.owner_id) : lead.owner_id) : 'Sem responsável';
         const ownerAvatarUrl = (hasOwner && typeof avatarMap !== 'undefined' && avatarMap[lead.owner_id]) ? avatarMap[lead.owner_id] : null;
-        const ownerAvatarHTML = hasOwner && typeof renderAvatarHTML === 'function' ? renderAvatarHTML(ownerName, ownerAvatarUrl, null, 24) : '';
+        const ownerAvatarHTML = hasOwner && typeof renderAvatarHTML === 'function' ? renderAvatarHTML(ownerName, ownerAvatarUrl, null, 22) : '';
         const currentUserForPanel = (typeof loggedUser !== 'undefined' && loggedUser) ? loggedUser.username : null;
         const isAdminUser = typeof loggedUser !== 'undefined' && loggedUser && (loggedUser.role === 'admin' || loggedUser.username === 'admin');
         const isMineToTransfer = hasOwner && currentUserForPanel && lead.owner_id === currentUserForPanel;
         const canTransfer = isMineToTransfer || isAdminUser;
 
         const transferHTML = canTransfer ? `
-            <div style="position: relative;">
-                <button class="lead-panel-btn" style="width: auto; height: 27px; padding: 0 0.55rem; font-size: 0.76rem; gap: 0.35rem;" onclick="toggleTransferMenu(event, '${lead.id}')" title="Passar essa conversa pra outro atendente">
-                    <i class="fa-solid fa-right-left" style="font-size: 0.72rem;"></i> Transferir
+            <div class="lp-transfer">
+                <button type="button" class="lp-link-btn" onclick="toggleTransferMenu(event, '${lead.id}')" title="Passar essa conversa pra outro atendente" aria-label="Transferir conversa">
+                    <i class="fa-solid fa-right-left" aria-hidden="true"></i><span class="lp-link-text">Transferir</span>
                 </button>
                 <div id="transfer-menu-popup" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 230px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; z-index: 1000; max-height: 260px; overflow-y: auto; padding: 0.4rem 0;">
                     <div style="padding: 0.6rem 0.9rem; color: var(--text-muted); font-size: 0.78rem;">Carregando equipe...</div>
@@ -2792,39 +2843,34 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
             </div>
         ` : '';
 
-        responsavelHTML = `
-            <div>
-                <div class="lead-panel-label"><i class="fa-solid fa-user-check"></i> Responsável</div>
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
-                        ${ownerAvatarHTML}
-                        <span style="font-size: 0.85rem; color: var(--text-main); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(ownerName)}</span>
-                    </div>
-                    ${transferHTML}
-                </div>
-            </div>
-        `;
+        responsavelHTML = row('Responsável', `
+            <span class="lp-owner${hasOwner ? '' : ' is-empty'}">${ownerAvatarHTML}<span class="lp-truncate">${escapeHtml(ownerName)}</span></span>
+            ${transferHTML}`);
+    }
+    const ownerSlot = document.getElementById('chat-lead-owner-slot');
+    if (ownerSlot && ownerSlot.dataset.lastRenderedHtml !== responsavelHTML) {
+        ownerSlot.dataset.lastRenderedHtml = responsavelHTML;
+        ownerSlot.innerHTML = responsavelHTML;
     }
 
-    let tempoHTML = '';
+    // ---- Contato e origem ----
+    let tempoRows = '';
     if (lead && lead.created_at && typeof parseSqlDate === 'function') {
         const createdDate = parseSqlDate(lead.created_at);
-        let idadeHTML = 'Lead há <strong>—</strong>';
+        let idade = '—';
         if (createdDate) {
             const diffDays = Math.ceil(Math.abs(new Date() - createdDate) / (1000 * 60 * 60 * 24));
-            idadeHTML = diffDays <= 0 ? 'Lead desde <strong>hoje</strong>' : `Lead há <strong>${diffDays}d</strong>`;
+            idade = diffDays <= 0 ? 'desde hoje' : `há ${diffDays} ${diffDays === 1 ? 'dia' : 'dias'}`;
         }
 
         // Preferir o histórico real da conversa (lastInteraction, vindo das mensagens já carregadas)
         // em vez da allChatsList, que é populada por polling e pode estar desatualizada/sem esse número ainda.
         let lastTs = lastInteraction ? lastInteraction.ts : null;
-        let lastDir = lastInteraction ? lastInteraction.dir : null;
         if (!lastTs) {
             const targetChat = (typeof allChatsList !== 'undefined' && Array.isArray(allChatsList))
                 ? allChatsList.find(c => isSamePhone(c.phone, phone))
                 : null;
             lastTs = targetChat ? (targetChat.last_timestamp || targetChat.timestamp) : null;
-            lastDir = targetChat ? (targetChat.last_direction || targetChat.direction) : null;
         }
         let lastInteracaoTexto = 'Sem mensagens ainda';
         if (lastTs) {
@@ -2833,76 +2879,73 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
             lastInteracaoTexto = [diaTxt, horaTxt].filter(Boolean).join(' às ') || '—';
         }
 
-        tempoHTML = `
-            <div>
-                <div class="lead-panel-label"><i class="fa-regular fa-clock"></i> Tempo como Lead</div>
-                <div style="font-size: 0.82rem; color: var(--text-main);">${idadeHTML}</div>
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">Última interação: ${escapeHtml(lastInteracaoTexto)}</div>
-            </div>
-        `;
+        tempoRows = row('Lead', escapeHtml(idade)) + row('Última interação', `<span class="${lastTs ? '' : 'lp-muted'}">${escapeHtml(lastInteracaoTexto)}</span>`);
     }
-
-    const telefoneHTML = `
-        <div>
-            <div class="lead-panel-label"><i class="fa-solid fa-phone"></i> Telefone</div>
-            <div style="font-size: 0.85rem; color: var(--text-main); font-weight: 500;">${escapeHtml(formatPhoneDisplay((lead && lead.telefone) || phone))}</div>
-        </div>
-    `;
 
     const origem = lead && lead.origem ? lead.origem : 'Não identificada';
     const isMetaAd = origem && (origem.includes('Meta Ads') || origem.includes('Anúncio'));
-    const origemHTML = `
-        <div>
-            <div class="lead-panel-label"><i class="fa-solid fa-bullhorn"></i> Origem</div>
-            <div class="lead-panel-chip">
-                <i class="${isMetaAd ? 'fa-brands fa-facebook' : 'fa-solid fa-circle-nodes'}" style="color: ${isMetaAd ? '#60a5fa' : 'var(--nav-arrow)'};"></i> ${escapeHtml(origem)}
-            </div>
-        </div>
-    `;
+    const origemRow = row('Origem', `
+        <span class="lp-origin">
+            <i class="${isMetaAd ? 'fa-brands fa-facebook' : 'fa-brands fa-whatsapp'}" aria-hidden="true"></i>
+            <span>${escapeHtml(origem)}</span>
+        </span>`);
 
-    // Extrai os dados do anúncio salvos nas notas do lead pelo webhook do WhatsApp
-    let anuncioHTML = `
-        <div class="lead-panel-empty">
-            <i class="fa-regular fa-circle-xmark"></i> Não veio de um anúncio (contato orgânico)
-        </div>
-    `;
+    // Extrai os dados do anúncio salvos nas notas do lead pelo webhook do WhatsApp,
+    // e campanha › conjunto › anúncio cruzando o source_id (ad_referral) com o
+    // catálogo do último sync do Meta Ads (leadAdAttribution, em app.js).
+    // Contato orgânico não ganha caixa vazia — a linha "Origem" já diz isso.
+    let anuncioHTML = '';
     const notas = lead && lead.notas ? lead.notas : '';
     const adMatch = notas.match(/\[Lead de Anúncio Meta\][\s\S]*?T[ií]tulo do An[uú]ncio:\s*([^\n]*)[\s\S]*?Descri[cç][ãa]o:\s*([^\n]*)[\s\S]*?Link:\s*([^\n]*)/i);
-    if (adMatch) {
-        const [, headline, descricao, link] = adMatch;
+    const adAttr = typeof leadAdAttribution === 'function' ? leadAdAttribution(lead) : null;
+    if (adMatch || adAttr) {
+        const [, headline, descricao, link] = adMatch || [];
+        const titulo = (headline && headline.trim()) || (adAttr && adAttr.headline) || 'Anúncio da Meta';
+        const adStatus = s => ({ ACTIVE: 'ativa', PAUSED: 'pausada', ARCHIVED: 'arquivada', DELETED: 'excluída' }[s] || '');
+        const pathRow = (label, value, extra) => value ? `
+            <div class="lp-ad-path-row">
+                <span class="lp-ad-path-label">${label}</span>
+                <span class="lp-ad-path-value" title="${escapeHtml(value)}">${escapeHtml(value)}${extra ? ` <span class="lp-muted">· ${escapeHtml(extra)}</span>` : ''}</span>
+            </div>` : '';
+        let caminhoHTML = '';
+        if (adAttr && adAttr.ad) {
+            caminhoHTML = `
+                <div class="lp-ad-path">
+                    ${pathRow('Campanha', adAttr.campaign && adAttr.campaign.name, adAttr.campaign && adStatus(adAttr.campaign.status))}
+                    ${pathRow('Conjunto', adAttr.adset && adAttr.adset.name)}
+                    ${pathRow('Anúncio', adAttr.ad.name)}
+                </div>`;
+        } else if (adAttr) {
+            caminhoHTML = `<div class="lp-ad-note">${adAttr.sourceType === 'post'
+                ? 'Veio de um post impulsionado (sem campanha de anúncio).'
+                : 'Campanha e conjunto aparecem depois do próximo sync do Meta Ads.'}</div>`;
+        }
         anuncioHTML = `
-            <div class="lead-panel-card" style="display: flex; flex-direction: column; gap: 0.3rem;">
-                <div style="font-size: 0.7rem; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.04em; display: flex; align-items: center; gap: 0.3rem;"><i class="fa-brands fa-facebook"></i> Veio de Anúncio</div>
-                ${headline ? `<div style="font-size: 0.82rem; font-weight: 600; color: var(--text-main);">${escapeHtml(headline.trim())}</div>` : ''}
-                ${descricao ? `<div style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.35;">${escapeHtml(descricao.trim())}</div>` : ''}
-                ${link && link.trim() ? `<a href="${escapeHtml(link.trim())}" target="_blank" rel="noopener" style="font-size: 0.75rem; color: #60a5fa; word-break: break-all; margin-top: 0.1rem;">${escapeHtml(link.trim())}</a>` : ''}
+            <div class="lp-ad">
+                <div class="lp-ad-title"><i class="fa-brands fa-facebook" aria-hidden="true"></i><span>${escapeHtml(titulo)}</span></div>
+                ${descricao ? `<div class="lp-ad-desc">${escapeHtml(descricao.trim())}</div>` : ''}
+                ${caminhoHTML}
+                ${link && link.trim() ? `<a class="lp-ad-link" href="${escapeHtml(link.trim())}" target="_blank" rel="noopener">Ver anúncio <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a>` : ''}
             </div>
         `;
     }
-
-    const anuncioBlockHTML = `
-        <div class="lp-group-divider">
-            <div class="lead-panel-label"><i class="fa-solid fa-rectangle-ad"></i> Anúncio</div>
-            ${anuncioHTML}
-        </div>
-    `;
 
     const ctwaClid = lead && lead.ctwa_clid ? lead.ctwa_clid : '';
     const fbClickId = lead && lead.fb_click_id ? lead.fb_click_id : '';
     const trackId = ctwaClid || fbClickId;
-    const trackLabel = ctwaClid ? 'ID do Clique Meta (WhatsApp Ads)' : 'FB Click ID';
-    const rastreamentoHTML = `
-        <div>
-            <div class="lead-panel-label"><i class="fa-solid fa-satellite-dish"></i> Rastreamento</div>
-            ${trackId
-                ? `<div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.3rem;">${trackLabel}</div>
-                   <div class="lpp-ad-id-row">
-                       <code class="lpp-ad-id" title="${escapeHtml(trackId)}">${escapeHtml(trackId)}</code>
-                       <button type="button" class="lpp-ad-id-copy" title="Copiar" onclick="lppCopyText(event, this.previousElementSibling.textContent)"><i class="fa-regular fa-copy"></i></button>
-                   </div>`
-                : `<div class="lead-panel-empty"><i class="fa-regular fa-circle-xmark"></i> Sem dados de rastreamento</div>`
-            }
-        </div>
+    const rastreamentoRow = trackId ? row(ctwaClid ? 'ID do clique' : 'FB Click ID', `
+        <span class="lp-track">
+            <code class="lp-truncate" title="${escapeHtml(trackId)}">${escapeHtml(trackId)}</code>
+            <button type="button" class="lp-icon-btn" title="Copiar ID do clique (Meta)" aria-label="Copiar ID do clique"
+                onclick="lppCopyText(event, this.previousElementSibling.textContent)"><i class="fa-regular fa-copy"></i></button>
+        </span>`) : '';
+
+    const contatoHTML = `
+        <section class="lp-section" aria-labelledby="lp-sec-contato">
+            <h4 class="lp-section-title" id="lp-sec-contato">Contato e origem</h4>
+            <div class="lp-rows">${tempoRows}${origemRow}${rastreamentoRow}</div>
+            ${anuncioHTML}
+        </section>
     `;
 
     let valorHTML = '';
@@ -2917,13 +2960,13 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         // vazio é truthy e antes gerava um card sem nenhuma linha dentro.
         if (valorRecebido || valorOrcado) {
             valorHTML = `
-                <div>
-                    <div class="lead-panel-label"><i class="fa-solid fa-sack-dollar"></i> Valor</div>
-                    <div class="lead-panel-card${valorRecebido ? ' lead-panel-card--money' : ''}" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                        ${valorRecebido ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Recebido</span><span style="color: var(--accent-success); font-weight: 700;">${valorRecebido}</span></div>` : ''}
-                        ${valorOrcado ? `<div style="display: flex; justify-content: space-between; font-size: 0.82rem;"><span style="color: var(--text-muted);">Orçado${orc.procedimento ? ` (${escapeHtml(orc.procedimento)})` : ''}</span><span style="color: var(--text-main); font-weight: 600;">${valorOrcado}</span></div>` : ''}
+                <section class="lp-section" aria-labelledby="lp-sec-valor">
+                    <h4 class="lp-section-title" id="lp-sec-valor">Valores</h4>
+                    <div class="lp-rows">
+                        ${valorRecebido ? row('Recebido', `<span class="lp-money is-paid">${valorRecebido}</span>`) : ''}
+                        ${valorOrcado ? row(`Orçado${orc.procedimento ? ` <span class="lp-muted">(${escapeHtml(orc.procedimento)})</span>` : ''}`, `<span class="lp-money">${valorOrcado}</span>`) : ''}
                     </div>
-                </div>
+                </section>
             `;
         }
     }
@@ -2933,32 +2976,37 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         const { rest: notasRest } = splitAdBlockFromNotes(lead.notas);
         const hasNotes = !!notasRest.trim();
         const previewText = hasNotes
-            ? escapeHtml(notasRest.trim().split('\n')[0].slice(0, 40)) + (notasRest.trim().length > 40 ? '…' : '')
-            : 'Clique para anotar';
+            ? escapeHtml(notasRest.trim().split('\n')[0].slice(0, 80)) + (notasRest.trim().length > 80 ? '…' : '')
+            : 'Adicionar uma nota interna';
         const prevExpandedEl = document.getElementById('lead-notes-expanded');
         const wasExpanded = isSameChatRerender && prevExpandedEl && prevExpandedEl.style.display === 'block';
 
         notasHTML = `
-            <div class="lp-group-divider">
-                <div class="lead-panel-label"><i class="fa-regular fa-note-sticky"></i> Notas Internas</div>
-                <div id="lead-notes-badge" class="lead-panel-card" onclick="toggleLeadNotesExpanded()"
-                    style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; ${wasExpanded ? 'display: none;' : ''}">
-                    <span style="font-size: 12.5px; color: ${hasNotes ? 'var(--text-main)' : 'var(--nav-arrow)'}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${previewText}</span>
-                    <i class="fa-solid fa-chevron-down" style="font-size: 11px; color: var(--nav-arrow); flex-shrink: 0;"></i>
-                </div>
-                <div id="lead-notes-expanded" style="display: ${wasExpanded ? 'block' : 'none'};">
-                    <textarea id="chat-lead-notes-textarea" rows="4" placeholder="Anotações sobre este lead..."
-                        oninput="leadPanelNotesDirty = true" class="lead-panel-textarea">${escapeHtml(notasRest)}</textarea>
-                    <div style="display: flex; gap: 6px; margin-top: 0.5rem;">
-                        <button id="chat-lead-notes-save-btn" class="lead-panel-btn" onclick="saveLeadNotesFromChat('${lead.id}')">
-                            <i class="fa-solid fa-floppy-disk"></i> Salvar Notas
-                        </button>
-                        <button type="button" class="lead-panel-btn" style="width: 34px; flex: none;" title="Recolher" onclick="toggleLeadNotesExpanded()">
-                            <i class="fa-solid fa-chevron-up"></i>
-                        </button>
+            <section class="lp-section" aria-labelledby="lp-sec-notas">
+                <h4 class="lp-section-title" id="lp-sec-notas">Notas internas</h4>
+                <button type="button" id="lead-notes-badge" class="lp-note-preview${hasNotes ? '' : ' is-empty'}" onclick="toggleLeadNotesExpanded()"
+                    style="${wasExpanded ? 'display: none;' : ''}" aria-expanded="false">
+                    <i class="${hasNotes ? 'fa-regular fa-note-sticky' : 'fa-solid fa-plus'}" aria-hidden="true"></i>
+                    <span class="lp-note-text">${previewText}</span>
+                    ${hasNotes ? '<span class="lp-note-edit">Editar</span>' : ''}
+                </button>
+                <div id="lead-notes-expanded" class="lp-note-editor" style="display: ${wasExpanded ? 'block' : 'none'};">
+                    <label class="lp-sr-only" for="chat-lead-notes-textarea">Notas internas do lead</label>
+                    <textarea id="chat-lead-notes-textarea" rows="4" lang="pt-BR" aria-describedby="lp-note-hint"
+                        placeholder="Ex.: prefere contato à tarde; recebe dia 5, retomar no início do mês."
+                        oninput="leadPanelNotesDirty = true; autoGrowLeadNotes(this)"
+                        onkeydown="leadNotesKeydown(event, '${lead.id}')" class="lead-panel-textarea">${escapeHtml(notasRest)}</textarea>
+                    <div class="lp-note-footer">
+                        <span class="lp-note-hint" id="lp-note-hint"><i class="fa-solid fa-lock" aria-hidden="true"></i> Só a equipe vê</span>
+                        <div class="lp-note-actions">
+                            <button type="button" class="lp-ghost-btn" onclick="toggleLeadNotesExpanded()" title="Cancelar (Esc)">Cancelar</button>
+                            <button type="button" id="chat-lead-notes-save-btn" class="lp-save-btn" onclick="saveLeadNotesFromChat('${lead.id}')" title="Salvar (Ctrl + Enter)">
+                                Salvar
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </section>
         `;
     }
 
@@ -2969,19 +3017,19 @@ function renderLeadInfoPanel(lead, phone, lastInteraction) {
         const statusText = isOptedOut ? 'Fora das campanhas' : 'Recebe campanhas';
         const actionText = isOptedOut ? 'Reativar' : 'Excluir';
         optOutHTML = `
-            <div>
-                <div class="lead-panel-label"><i class="fa-solid fa-shield-halved"></i> Campanhas de Marketing</div>
+            <section class="lp-section" aria-labelledby="lp-sec-marketing">
+                <h4 class="lp-section-title" id="lp-sec-marketing">Campanhas de marketing</h4>
                 <button type="button" class="lp-campaign-btn" data-state="${state}"
                     title="${isOptedOut ? 'Voltar a incluir este lead nas campanhas' : 'Remover este lead das campanhas de marketing'}"
                     onclick="toggleLeadCampaignOptOut('${lead.id}', ${isOptedOut})">
                     <span class="lp-campaign-status"><span class="lp-campaign-dot"></span> ${statusText}</span>
                     <span class="lp-campaign-action">${actionText} <i class="fa-solid fa-chevron-right"></i></span>
                 </button>
-            </div>
+            </section>
         `;
     }
 
-    const newPanelHTML = responsavelHTML + tempoHTML + telefoneHTML + origemHTML + anuncioBlockHTML + rastreamentoHTML + valorHTML + notasHTML + optOutHTML;
+    const newPanelHTML = contatoHTML + valorHTML + notasHTML + optOutHTML;
 
     // Só reescreve o DOM se o conteúdo realmente mudou — o polling chama isso a
     // cada poucos segundos, e reescrever sempre (mesmo com o texto idêntico)
@@ -5452,85 +5500,193 @@ function stAnalyzeTemplate(t) {
     return { bodyVars, block };
 }
 
+// Template de retomada configurado na tela do Agente de IA — no modal, muda o
+// texto de ajuda do passo 3 (em branco = a IA escreve na hora do clique).
+let stRetomadaCfg = null;
+
+const stSelectedTemplate = () => {
+    const checked = document.querySelector('#stx-template-list input[name="stx-template"]:checked');
+    return checked ? stTemplates.find(t => t.name === checked.value) : null;
+};
+
+// Nome que entra no {{1}} do template: o do lead no Kanban, senão o do chat.
+function stLeadName() {
+    const activeLead = typeof leads !== 'undefined' && window.currentActiveChat
+        ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
+        : null;
+    return (activeLead && activeLead.nome) || (window.currentActiveChat && window.currentActiveChat.name) || 'Cliente';
+}
+
+function stRenderBody(t) {
+    const body = (t.components || []).find(c => c.type === 'BODY');
+    return String((body && body.text) || '').replace(/\{\{\s*[\w\d_]+\s*\}\}/, stLeadName());
+}
+
+const stQuickReplies = (t) => {
+    const buttons = (t.components || []).find(c => c.type === 'BUTTONS');
+    return ((buttons && buttons.buttons) || []).filter(b => b.type === 'QUICK_REPLY').map(b => b.text);
+};
+
 async function openTemplateModal() {
     if (!window.currentActiveChat) return;
     const modal = document.getElementById('modalSendTemplate');
     if (modal) modal.classList.add('active');
 
-    const sel = document.getElementById('st-template-select');
+    const list = document.getElementById('stx-template-list');
     const hint = document.getElementById('st-template-hint');
-    if (sel) sel.innerHTML = '<option value="">Carregando templates…</option>';
-    if (hint) hint.textContent = '';
+    const sendBtn = document.getElementById('stx-send-btn');
+    const search = document.getElementById('stx-search');
+    if (list) list.innerHTML = '<p class="stx-list-empty">Carregando templates…</p>';
+    if (hint) { hint.textContent = ''; hint.classList.remove('is-error'); }
+    if (sendBtn) sendBtn.disabled = true;
+    if (search) search.value = '';
+    document.getElementById('stx-search-wrap').hidden = true;
+    document.getElementById('stx-count').textContent = '';
+    document.getElementById('stx-placeholder').hidden = false;
+    document.getElementById('stx-preview-section').hidden = true;
+    document.getElementById('stx-click-section').hidden = true;
+    document.getElementById('stx-click-text').value = '';
+    document.getElementById('stx-ai-status').textContent = '';
+    document.querySelector('#stx-ai-btn span').textContent = 'Escrever com IA';
 
     try {
-        const r = await fetch('/api/whatsapp/templates').then(x => x.json());
+        const [r, rc] = await Promise.all([
+            fetch('/api/whatsapp/templates').then(x => x.json()),
+            fetch('/api/settings/retomada').then(x => x.json()).catch(() => ({}))
+        ]);
+        stRetomadaCfg = rc.config || null;
         stTemplates = (r.data || []).filter(t => t.status === 'APPROVED');
-        if (!sel) return;
+        if (!list) return;
         if (!stTemplates.length) {
-            sel.innerHTML = '<option value="">Nenhum template aprovado</option>';
-            if (hint) hint.textContent = 'Crie e aprove um template no Gerenciador da Meta — ele aparece aqui depois de aprovado.';
+            list.innerHTML = '<p class="stx-list-empty">Nenhum template aprovado ainda. Crie e aprove um template no Gerenciador da Meta — ele aparece aqui depois de aprovado.</p>';
             return;
         }
-        sel.innerHTML = '<option value="">Selecione um template…</option>' + stTemplates.map(t => {
+        // O template de retomada configurado vem primeiro — é o mais usado aqui.
+        const retomada = stRetomadaCfg && stRetomadaCfg.template_name;
+        stTemplates.sort((a, b) => (b.name === retomada) - (a.name === retomada));
+        const CATEGORIA = { MARKETING: 'Marketing', UTILITY: 'Utilidade', AUTHENTICATION: 'Autenticação' };
+        list.innerHTML = stTemplates.map(t => {
             const { block } = stAnalyzeTemplate(t);
-            return `<option value="${escapeHtml(t.name)}" data-lang="${escapeHtml(t.language || 'pt_BR')}">${escapeHtml(t.name)}${t.category ? ' · ' + escapeHtml(t.category) : ''}${block ? ' (⚠ não suportado)' : ''}</option>`;
-        }).join('');
+            const busca = `${t.name.replace(/_/g, ' ')} ${stRenderBody(t)}`.toLowerCase();
+            return `
+            <label class="stx-option${block ? ' is-blocked' : ''}" data-search="${escapeHtml(busca)}">
+                <input type="radio" name="stx-template" value="${escapeHtml(t.name)}" ${block ? 'disabled' : ''} onchange="onTemplatePick()">
+                <span class="stx-option-main">
+                    <span class="stx-option-name" title="${escapeHtml(t.name.replace(/_/g, ' '))}">${escapeHtml(t.name.replace(/_/g, ' '))}</span>
+                    ${block ? `<span class="stx-option-note">Não dá para enviar pelo chat: ${escapeHtml(block)}.</span>` : ''}
+                </span>
+                ${t.category ? `<span class="stx-chip">${escapeHtml(CATEGORIA[t.category] || t.category)}</span>` : ''}
+            </label>`;
+        }).join('') + '<p class="stx-list-empty" id="stx-no-match" hidden>Nenhum template com esse nome ou texto.</p>';
+        document.getElementById('stx-count').textContent = `${stTemplates.length} aprovado${stTemplates.length > 1 ? 's' : ''}`;
+        document.getElementById('stx-search-wrap').hidden = stTemplates.length <= 6;
     } catch (e) {
-        if (sel) sel.innerHTML = '<option value="">Erro ao carregar templates</option>';
-        if (hint) hint.textContent = 'Não foi possível carregar a lista da Meta.';
+        if (list) list.innerHTML = '';
+        if (hint) { hint.textContent = 'Não foi possível carregar a lista de templates da Meta. Feche e tente de novo.'; hint.classList.add('is-error'); }
     }
 }
 
-// Ao escolher um template: sincroniza o idioma e mostra uma prévia do corpo.
+// Busca da lista: filtra pelo nome e pelo texto do template, sem perder a seleção.
+function filterTemplateList() {
+    const q = document.getElementById('stx-search').value.trim().toLowerCase();
+    let visiveis = 0;
+    document.querySelectorAll('#stx-template-list .stx-option').forEach(opt => {
+        const show = !q || opt.dataset.search.includes(q);
+        opt.hidden = !show;
+        if (show) visiveis++;
+    });
+    document.getElementById('stx-no-match').hidden = visiveis > 0;
+}
+
+// Ao escolher um template: mostra a prévia como o lead vai receber e, se tiver
+// botão de resposta rápida, o passo da mensagem automática pós-clique.
 function onTemplatePick() {
-    const sel = document.getElementById('st-template-select');
-    const langSel = document.getElementById('st-template-lang');
-    const hint = document.getElementById('st-template-hint');
-    if (!sel) return;
-    const opt = sel.options[sel.selectedIndex];
-    const lang = opt ? opt.getAttribute('data-lang') : '';
-    if (lang && langSel) {
-        if (![...langSel.options].some(o => o.value === lang)) langSel.add(new Option(lang, lang));
-        langSel.value = lang;
+    const t = stSelectedTemplate();
+    const sendBtn = document.getElementById('stx-send-btn');
+    if (sendBtn) sendBtn.disabled = !t;
+    if (!t) return;
+    document.getElementById('stx-placeholder').hidden = true;
+
+    const comps = t.components || [];
+    const header = comps.find(c => c.type === 'HEADER' && String(c.format || 'TEXT').toUpperCase() === 'TEXT');
+    const footer = comps.find(c => c.type === 'FOOTER');
+    const nl2br = (s) => escapeHtml(s).replace(/\n/g, '<br>');
+    document.getElementById('stx-preview').innerHTML =
+        (header && header.text ? `<strong class="stx-bubble-header">${nl2br(header.text)}</strong>` : '') +
+        `<span>${nl2br(stRenderBody(t))}</span>` +
+        (footer && footer.text ? `<span class="stx-bubble-footer">${nl2br(footer.text)}</span>` : '');
+    const replies = stQuickReplies(t);
+    document.getElementById('stx-preview-buttons').innerHTML = replies
+        .map(b => `<span class="stx-bubble-btn"><i class="fa-solid fa-reply" aria-hidden="true"></i> ${escapeHtml(b)}</span>`).join('');
+    document.getElementById('stx-preview-section').hidden = false;
+
+    const clickSection = document.getElementById('stx-click-section');
+    clickSection.hidden = !replies.length;
+    if (!replies.length) return;
+    const clickLabel = document.getElementById('stx-click-label');
+    if (replies.length === 1) {
+        clickLabel.innerHTML = `Quando o lead tocar em <q id="stx-click-btn">${escapeHtml(replies[0])}</q>`;
+    } else {
+        clickLabel.textContent = 'Quando o lead tocar em um dos botões';
     }
-    const t = stTemplates.find(x => x.name === sel.value);
-    const body = t && (t.components || []).find(c => c.type === 'BODY');
-    if (hint) {
-        const preview = (body && body.text) ? body.text : '';
-        const { block } = t ? stAnalyzeTemplate(t) : { block: null };
-        hint.textContent = block
-            ? `⚠ Este template ${block}. Não dá pra enviar pelo chat — use um template só de texto.`
-            : preview;
-        hint.style.color = block ? 'var(--accent-danger, #ef4444)' : 'var(--text-muted)';
+    const isRetomada = stRetomadaCfg && stRetomadaCfg.ativo && stRetomadaCfg.template_name === t.name;
+    document.getElementById('stx-click-help').textContent = isRetomada
+        ? 'Opcional. Essa mensagem sai sozinha assim que o lead tocar no botão. Se deixar em branco, a IA escreve na hora do clique com base na conversa.'
+        : 'Opcional. Essa mensagem sai sozinha assim que o lead tocar no botão. Se deixar em branco, nada é enviado e a conversa fica com a equipe.';
+}
+
+// "Escrever com IA": rascunho da mensagem pós-clique a partir da conversa.
+// Só preenche o campo — o atendente revisa antes de enviar.
+async function generateClickReplyDraft() {
+    const t = stSelectedTemplate();
+    if (!t || !window.currentActiveChat) return;
+    const btn = document.getElementById('stx-ai-btn');
+    const status = document.getElementById('stx-ai-status');
+    const textarea = document.getElementById('stx-click-text');
+    btn.disabled = true;
+    status.textContent = 'Lendo a conversa e escrevendo…';
+    try {
+        const res = await fetch('/api/whatsapp/click-reply-draft', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: window.currentActiveChat.phone, templateText: stRenderBody(t), buttonText: stQuickReplies(t)[0] || '' })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Falha ao gerar a mensagem.');
+        textarea.value = json.text;
+        btn.querySelector('span').textContent = 'Escrever de novo';
+        status.textContent = 'Pronto. Revise e ajuste o que precisar.';
+        textarea.focus();
+    } catch (e) {
+        status.textContent = e.message;
+    } finally {
+        btn.disabled = false;
     }
 }
 
 async function sendTemplateMessage() {
     if (!window.currentActiveChat || !window.currentActiveChat.phone) return;
 
-    const sel = document.getElementById('st-template-select');
-    const langSelect = document.getElementById('st-template-lang');
-    const templateName = sel ? sel.value.trim() : '';
-
-    if (!templateName) {
+    const tpl = stSelectedTemplate();
+    if (!tpl) {
         alert('Escolha um template aprovado.');
         return;
     }
+    const templateName = tpl.name;
 
     const activeLead = typeof leads !== 'undefined'
         ? leads.find(l => isSamePhone(l.telefone, window.currentActiveChat.phone))
         : null;
     if (activeLead && !(await claimLeadConversation(activeLead.id))) return;
 
-    const tpl = stTemplates.find(x => x.name === templateName);
-    // O idioma TEM que ser exatamente o que a Meta registrou pro template — usar o
-    // valor do <select> causava o erro #132001 ("does not exist in the translation").
-    const languageCode = ((tpl && tpl.language) || (langSelect ? langSelect.value : '') || 'pt_BR').trim();
+    // O idioma TEM que ser exatamente o que a Meta registrou pro template — por
+    // isso não é mais escolhido à parte (causava o erro #132001).
+    const languageCode = (tpl.language || 'pt_BR').trim();
 
     // Barra cabeçalho de mídia / variável no cabeçalho / botão dinâmico / 2+
     // variáveis no corpo — tudo que exige parâmetro que não temos como montar aqui
     // (era isso que gerava #132000 "number of parameters does not match").
-    const analysis = tpl ? stAnalyzeTemplate(tpl) : { bodyVars: 0, block: null };
+    const analysis = stAnalyzeTemplate(tpl);
     if (analysis.block) {
         alert(`Não dá pra enviar "${templateName}" pelo chat: ${analysis.block}.\n\nUse um template só de texto (corpo com no máximo uma variável), ou recrie esse sem cabeçalho de mídia / botão dinâmico.`);
         return;
@@ -5543,11 +5699,17 @@ async function sendTemplateMessage() {
         const m = ((body && body.text) || '').match(/\{\{\s*([\w\d_]+)\s*\}\}/);
         const varName = m ? m[1] : null;
         const named = varName && !/^\d+$/.test(varName);
-        const nome = (activeLead && activeLead.nome) || window.currentActiveChat.name || 'Cliente';
-        templateParams = [{ text: nome, parameter_name: named ? varName : undefined }];
+        templateParams = [{ text: stLeadName(), parameter_name: named ? varName : undefined }];
     }
 
+    // Mensagem pós-clique só vale pra template com botão de resposta rápida;
+    // leva a assinatura do atendente como qualquer mensagem manual.
+    const clickText = stQuickReplies(tpl).length ? document.getElementById('stx-click-text').value.trim() : '';
+    const clickReplyText = clickText ? appendAttendantSignature(clickText) : undefined;
+
     const modal = document.getElementById('modalSendTemplate');
+    const sendBtn = document.getElementById('stx-send-btn');
+    if (sendBtn) sendBtn.disabled = true;
 
     try {
         const res = await fetch('/api/whatsapp/send', {
@@ -5559,6 +5721,7 @@ async function sendTemplateMessage() {
                 templateName: templateName,
                 languageCode: languageCode,
                 templateParams: templateParams,
+                clickReplyText: clickReplyText,
                 message: 'template' // Placeholder exigido pelo backend
             })
         });
@@ -5566,15 +5729,14 @@ async function sendTemplateMessage() {
 
         if (json.success) {
             if (modal) modal.classList.remove('active');
-            if (sel) sel.value = '';
-            const hint = document.getElementById('st-template-hint');
-            if (hint) hint.textContent = '';
             openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         } else {
             alert('Erro ao enviar template: ' + (json.error || 'Desconhecido'));
         }
     } catch (e) {
         alert('Falha na conexão ao enviar template: ' + e.message);
+    } finally {
+        if (sendBtn) sendBtn.disabled = false;
     }
 }
 
@@ -5755,10 +5917,29 @@ async function fetchQuickReplies() {
         const json = await res.json();
         if (json.success) {
             quickReplies = json.data || [];
+            quickRepliesLoaded = true;
         }
     } catch (e) {
         console.error("Erro ao buscar respostas rápidas:", e);
     }
+}
+
+// A lista era buscada uma vez só, ao abrir a página: se nessa hora a sessão
+// ainda não estava logada (ou a chamada falhou), o "/" não mostrava nada até
+// recarregar — e atalho criado por outro atendente nunca aparecia. Agora
+// atualiza (textos + áudios) a cada "/" digitado no início, e na falta de
+// lista carregada; quando chega, redesenha o popup se o "/" ainda estiver lá.
+let quickRepliesLoaded = false;
+let quickRepliesRefreshing = null;
+function refreshQuickReplySources(inputEl) {
+    if (quickRepliesRefreshing) return;
+    quickRepliesRefreshing = Promise.all([fetchQuickReplies(), loadVoiceLibrary()])
+        .finally(() => {
+            // Redesenha ANTES de soltar a trava, senão o "/" sozinho no campo
+            // dispararia outra atualização aqui dentro, em loop.
+            if (inputEl && document.activeElement === inputEl && inputEl.value.startsWith('/')) handleQuickReplyInput(inputEl);
+            quickRepliesRefreshing = null;
+        });
 }
 
 function handleQuickReplyInput(e) {
@@ -5768,6 +5949,7 @@ function handleQuickReplyInput(e) {
     if (!popup) return;
 
     if (val && val.startsWith('/')) {
+        if (val === '/' || !quickRepliesLoaded) refreshQuickReplySources(inputEl);
         const query = val.slice(1).toLowerCase();
         const textMatches = quickReplies.filter(qr =>
             (qr.shortcut && qr.shortcut.toLowerCase().includes(query)) ||
@@ -6118,23 +6300,17 @@ async function copilotDraftReply() {
 }
 
 // ==========================================================================
-// REDIMENSIONAMENTO DA SIDEBAR DO CHAT (ARRASTAR E SOLTAR)
+// REDIMENSIONAMENTO DA SIDEBAR DO CHAT E DA FICHA DO LEAD (ARRASTAR E SOLTAR)
 // ==========================================================================
-function initChatSidebarResizer() {
-    const resizer = document.getElementById('chat-sidebar-resizer');
-    const sidebar = document.getElementById('chat-sidebar') || document.querySelector('.chat-sidebar');
-    if (!resizer || !sidebar) return;
-
-    const STORAGE_KEY = 'crm_chat_sidebar_width';
-    const DEFAULT_WIDTH = 400;
-    const MIN_WIDTH = 280;
-
+// side 'left': o painel fica à esquerda do divisor (arrastar pra direita alarga);
+// side 'right': o painel fica à direita do divisor (arrastar pra esquerda alarga).
+function attachWidthResizer({ resizer, target, storageKey, defaultWidth, minWidth, maxWidth, side = 'left' }) {
     // Restaura largura salva anteriormente pelo usuário
-    const savedWidth = localStorage.getItem(STORAGE_KEY);
+    const savedWidth = localStorage.getItem(storageKey);
     if (savedWidth) {
         const parsed = parseInt(savedWidth, 10);
-        if (!isNaN(parsed) && parsed >= MIN_WIDTH) {
-            sidebar.style.width = `${parsed}px`;
+        if (!isNaN(parsed) && parsed >= minWidth) {
+            target.style.width = `${parsed}px`;
         }
     }
 
@@ -6145,7 +6321,7 @@ function initChatSidebarResizer() {
     const startDrag = (clientX) => {
         isDragging = true;
         startX = clientX;
-        startWidth = sidebar.getBoundingClientRect().width;
+        startWidth = target.getBoundingClientRect().width;
 
         document.body.classList.add('is-chat-resizing');
         resizer.classList.add('is-resizing');
@@ -6153,20 +6329,21 @@ function initChatSidebarResizer() {
 
     const doDrag = (clientX) => {
         if (!isDragging) return;
-        const deltaX = clientX - startX;
-        const maxWidth = Math.max(MIN_WIDTH, Math.min(window.innerWidth * 0.65, 800));
-        const newWidth = Math.min(Math.max(startWidth + deltaX, MIN_WIDTH), maxWidth);
-        sidebar.style.width = `${newWidth}px`;
+        const deltaX = side === 'right' ? startX - clientX : clientX - startX;
+        const newWidth = Math.min(Math.max(startWidth + deltaX, minWidth), Math.max(minWidth, maxWidth()));
+        target.style.width = `${newWidth}px`;
     };
 
     const stopDrag = () => {
         if (!isDragging) return;
         isDragging = false;
+        // Mede ANTES de tirar a classe: ela desliga a transição de largura da
+        // ficha do lead; medir depois pega a largura no meio da animação.
+        const finalWidth = target.getBoundingClientRect().width;
         document.body.classList.remove('is-chat-resizing');
         resizer.classList.remove('is-resizing');
 
-        const finalWidth = sidebar.getBoundingClientRect().width;
-        localStorage.setItem(STORAGE_KEY, Math.round(finalWidth));
+        localStorage.setItem(storageKey, Math.round(finalWidth));
     };
 
     // Eventos de Mouse
@@ -6204,11 +6381,40 @@ function initChatSidebarResizer() {
         window.addEventListener('touchend', onTouchEnd);
     });
 
-    // Duplo clique: redefine para a largura padrão (400px)
+    // Duplo clique: redefine para a largura padrão
     resizer.addEventListener('dblclick', () => {
-        sidebar.style.width = `${DEFAULT_WIDTH}px`;
-        localStorage.setItem(STORAGE_KEY, DEFAULT_WIDTH);
+        target.style.width = `${defaultWidth}px`;
+        localStorage.setItem(storageKey, defaultWidth);
     });
+}
+
+function initChatSidebarResizer() {
+    const resizer = document.getElementById('chat-sidebar-resizer');
+    const sidebar = document.getElementById('chat-sidebar') || document.querySelector('.chat-sidebar');
+    if (!resizer || !sidebar) return;
+    attachWidthResizer({
+        resizer, target: sidebar, storageKey: 'crm_chat_sidebar_width',
+        defaultWidth: 400, minWidth: 280,
+        maxWidth: () => Math.min(window.innerWidth * 0.65, 800)
+    });
+}
+
+// Ficha do lead (painel da direita). O divisor só aparece com a ficha visível —
+// ela é mostrada/ocultada por style.display (sem conversa aberta) e pela classe
+// lp-hidden (botão Ficha), então acompanha as duas mudanças.
+function initLeadPanelResizer() {
+    const resizer = document.getElementById('chat-lead-resizer');
+    const panel = document.getElementById('chat-lead-panel');
+    if (!resizer || !panel) return;
+    attachWidthResizer({
+        resizer, target: panel, storageKey: 'crm_chat_lead_panel_width',
+        defaultWidth: 320, minWidth: 280,
+        maxWidth: () => Math.min(window.innerWidth * 0.45, 640),
+        side: 'right'
+    });
+    const sync = () => { resizer.hidden = getComputedStyle(panel).display === 'none'; };
+    new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['style', 'class'] });
+    sync();
 }
 
 // Inicializa no carregamento
@@ -6217,16 +6423,21 @@ window.addEventListener('DOMContentLoaded', () => {
     loadVoiceLibrary();
     loadChatSettings();
     initChatSidebarResizer();
+    initLeadPanelResizer();
     const chatInput = document.getElementById('chat-input-text');
     if (chatInput) {
         chatInput.addEventListener('input', handleQuickReplyInput);
         chatInput.addEventListener('keydown', handleQuickReplyKeydown);
+        // Clicar fora fecha o popup; voltar pro campo com "/atalho" já digitado
+        // (ou com rascunho restaurado) reabre sem precisar apagar e digitar de novo.
+        chatInput.addEventListener('focus', handleQuickReplyInput);
     }
 });
 
 // Executa imediatamente caso o script seja avaliado após o carregamento do DOM
 if (document.readyState !== 'loading') {
     initChatSidebarResizer();
+    initLeadPanelResizer();
 }
 
 

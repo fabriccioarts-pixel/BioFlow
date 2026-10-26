@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=26">
+    <link rel="stylesheet" href="style.css?v=27">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -633,6 +633,9 @@
                 <div class="notif-panel-head">
                     <span>Notificações</span>
                     <div class="notif-panel-actions">
+                        <button type="button" class="notif-panel-btn" id="push-device-btn"
+                            title="Avisos neste aparelho (Windows/celular)" aria-label="Avisos neste aparelho"
+                            onclick="openPushDeviceSettings()"><i class="fa-solid fa-mobile-screen"></i></button>
                         <button type="button" class="notif-panel-btn" title="Marcar tudo como lido"
                             onclick="clearNotificationsBadge()"><i class="fa-solid fa-check-double"></i></button>
                         <button type="button" class="notif-panel-btn notif-panel-btn--danger"
@@ -1784,6 +1787,34 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                         </span>
                         <span><span class="aix-toggle-text">A IA manda imagem de exemplo quando encontrar uma</span></span>
                     </label>
+                </div>
+
+                <div class="aix-block">
+                    <div class="aix-block-label">Horário de atendimento</div>
+                    <p class="aix-block-help">Horário oficial que a IA usa para responder "até que horas?", não oferecer
+                        "hoje" quando a clínica já fechou e dizer quando a equipe volta. Vale mais que qualquer horário
+                        escrito no Contexto da IA.</p>
+                    <div class="aix-hours" id="aix-hours"></div>
+                </div>
+
+                <div class="aix-block">
+                    <div class="aix-block-label">Retomada após a janela de 24h</div>
+                    <p class="aix-block-help">Quando a conversa fica sem resposta até a janela de 24h fechar, mande o
+                        template de retomada pelo chat. Se o lead tocar no botão, a IA responde na hora o que tinha ficado
+                        pendente — uma mensagem só, sem inventar preço nem horário na agenda. Não responde se alguém da
+                        equipe já tiver respondido.</p>
+                    <label class="aix-toggle-row">
+                        <span class="ui-switch">
+                            <input type="checkbox" id="retomada-ativo">
+                            <span class="ui-switch-track"></span>
+                        </span>
+                        <span><span class="aix-toggle-text">A IA responde quando o lead aceitar retomar</span></span>
+                    </label>
+                    <label class="aix-field-label" for="retomada-template">Template de retomada</label>
+                    <select id="retomada-template" class="aix-input"></select>
+                    <label class="aix-field-label" for="retomada-instrucoes">Instruções extras (opcional)</label>
+                    <textarea id="retomada-instrucoes" class="aix-input" spellcheck="false" maxlength="2000"
+                        placeholder="Ex.: se o lead estava pronto para fechar, ofereça a avaliação ainda esta semana."></textarea>
                 </div>
 
                 <div class="aix-block">
@@ -3911,6 +3942,10 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             </div>
         </div>
 
+        <!-- Divisor Redimensionável da Ficha do Lead (só aparece com a ficha visível) -->
+        <div id="chat-lead-resizer" class="chat-sidebar-resizer" hidden
+            title="Arraste para redimensionar a ficha do lead (clique duplo para redefinir)"></div>
+
         <!-- Painel Direito: Informações do Lead -->
         <div class="chat-lead-panel" id="chat-lead-panel"
             style="width: 320px; height: 100%; border-left: 1px solid var(--border-color); display: none; flex-direction: column; background: var(--bg-card); overflow-y: auto; flex-shrink: 0;">
@@ -3929,25 +3964,35 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </button>
             </div>
 
-            <div id="chat-lead-panel-body" style="padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: 1.25rem;">
+            <div id="chat-lead-panel-body" class="lp-body">
 
-                <!-- Identidade do Lead: foto/iniciais + nome -->
-                <div id="chat-lead-identity" style="display: flex; align-items: center; gap: 0.7rem;"></div>
+                <!-- Identidade (nome + telefone) e as ações principais logo no topo -->
+                <div class="lp-hero">
+                    <div id="chat-lead-identity" class="lp-identity"></div>
+                    <div class="lp-quick-actions">
+                        <button type="button" class="lp-qa" onclick="scheduleLeadFromChat()" title="Agendar consulta">
+                            <i class="fa-regular fa-calendar-plus" aria-hidden="true"></i><span>Agendar</span></button>
+                        <button type="button" class="lp-qa" onclick="budgetLeadFromChat()" title="Montar orçamento">
+                            <i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i><span>Orçamento</span></button>
+                        <button type="button" class="lp-qa" onclick="manageLeadFromChat()" title="Gerenciar no Kanban">
+                            <i class="fa-solid fa-table-columns" aria-hidden="true"></i><span>Kanban</span></button>
+                    </div>
+                </div>
 
-                <!-- Estágio (movido do header do chat) -->
-                <div>
-                    <div class="lead-panel-label"><i class="fa-solid fa-arrows-rotate"></i> Estágio</div>
-                    <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
-                        <div id="chat-current-stage-badge" class="lead-panel-stage-badge">
-                            <span id="chat-stage-label">💬 Em Atendimento</span>
-                        </div>
+                <!-- Atendimento: estágio, IA, responsável e etiquetas -->
+                <section class="lp-section" aria-labelledby="lp-sec-atendimento">
+                    <h4 class="lp-section-title" id="lp-sec-atendimento">Atendimento</h4>
 
-                        <div style="position: relative; width: 100%;">
-                            <button id="btn-change-stage" class="lead-panel-btn" onclick="toggleStageMenu(event)">
-                                <i class="fa-solid fa-arrows-rotate"></i> Alterar Estágio <i
-                                    class="fa-solid fa-chevron-down"
-                                    style="font-size: 0.7rem; color: var(--nav-arrow); margin-left: auto;"></i>
-                            </button>
+                    <div class="lp-field">
+                        <span class="lp-field-label" id="lp-stage-field">Estágio</span>
+                        <button id="btn-change-stage" class="lp-select" onclick="toggleStageMenu(event)"
+                            aria-haspopup="true" aria-labelledby="lp-stage-field chat-stage-label">
+                            <span id="chat-current-stage-badge" class="lp-stage">
+                                <span id="chat-stage-label">💬 Em Atendimento</span>
+                            </span>
+                            <span class="lp-select-hint">Alterar</span>
+                            <i class="fa-solid fa-chevron-down lp-select-caret" aria-hidden="true"></i>
+                        </button>
 
                             <div id="stage-menu-popup"
                                 style="display: none; position: absolute; left: 0; top: calc(100% + 6px); width: 100%; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: none; z-index: 1000; overflow: hidden; padding: 0.4rem 0;">
@@ -3988,33 +4033,33 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                     <span style="font-size: 1.1rem;">🔄</span> Follow Up
                                 </div>
                             </div>
-                        </div>
                     </div>
-                </div>
 
-                <!-- Agente de IA (pré-qualificação automática) -->
-                <div>
-                    <div class="lead-panel-label"><i class="fa-solid fa-robot"></i> Agente de IA</div>
-                    <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; background: var(--bg-card); border: 1px solid var(--border-color); padding: 0.6rem 0.8rem; border-radius: 8px;">
+                    <!-- Agente de IA (pré-qualificação automática) -->
+                    <label class="lp-switch-row">
                         <span class="ui-switch">
                             <input type="checkbox" id="chat-ai-toggle" onchange="toggleChatAiEnabled(this.checked)">
                             <span class="ui-switch-track"></span>
                         </span>
-                        <span style="font-size: 0.85rem; color: var(--text-main);" id="chat-ai-toggle-label">IA respondendo esta conversa</span>
+                        <span class="lp-switch-text">
+                            <span class="lp-switch-title">Agente de IA</span>
+                            <span class="lp-switch-sub" id="chat-ai-toggle-label">IA respondendo esta conversa</span>
+                        </span>
                     </label>
-                </div>
 
-                <!-- Etiquetas (movido do header do chat) -->
-                <div>
-                    <div class="lead-panel-label"><i class="fa-solid fa-tags"></i> Etiquetas</div>
-                    <div id="chat-active-tags-list" style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.6rem;"></div>
+                    <!-- Responsável (preenchido em renderLeadInfoPanel) -->
+                    <div id="chat-lead-owner-slot"></div>
 
-                    <div style="position: relative;">
-                        <button id="btn-change-tags" class="lead-panel-btn" onclick="toggleTagsMenu(event)">
-                            <i class="fa-solid fa-tags"></i> Etiquetas <i
-                                class="fa-solid fa-chevron-down"
-                                style="font-size: 0.7rem; color: var(--nav-arrow); margin-left: auto;"></i>
-                        </button>
+                    <!-- Etiquetas -->
+                    <div class="lp-field">
+                        <span class="lp-field-label">Etiquetas</span>
+                        <div class="lp-tags-row">
+                            <div id="chat-active-tags-list" class="lp-tags"></div>
+                            <button id="btn-change-tags" class="lp-chip-btn" onclick="toggleTagsMenu(event)"
+                                aria-haspopup="true" title="Adicionar ou remover etiquetas">
+                                <i class="fa-solid fa-plus" aria-hidden="true"></i> Etiqueta
+                            </button>
+                        </div>
 
                         <!-- Menu Dropdown Flutuante de Etiquetas -->
                         <div id="tags-menu-popup"
@@ -4085,24 +4130,11 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             </div>
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <!-- Bloco dinâmico: Responsável, Telefone, Origem, Anúncio, Rastreamento, Valor, Tempo, Notas -->
-                <div id="chat-lead-info-content" style="display: flex; flex-direction: column; gap: 1.1rem;">
+                <!-- Bloco dinâmico: Contato e origem, Valor, Notas internas, Marketing -->
+                <div id="chat-lead-info-content" class="lp-dynamic">
                     <!-- Preenchido via JS em renderLeadInfoPanel() -->
-                </div>
-
-                <!-- Ações Rápidas (Ver no Kanban movido do header do chat + Agendar) -->
-                <div class="lp-actions-group">
-                    <div class="lead-panel-label"><i class="fa-solid fa-bolt"></i> Ações Rápidas</div>
-                    <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                        <button class="lead-panel-btn" title="Gerenciar no Kanban" onclick="manageLeadFromChat()">
-                            <i class="fa-solid fa-address-book"></i> Ver no Kanban</button>
-                        <button class="lead-panel-btn lead-panel-btn--accent" title="Agendar Consulta" onclick="scheduleLeadFromChat()">
-                            <i class="fa-regular fa-calendar-plus"></i> Agendar</button>
-                        <button class="lead-panel-btn lead-panel-btn--accent" title="Montar Orçamento" onclick="budgetLeadFromChat()">
-                            <i class="fa-solid fa-file-invoice-dollar"></i> Montar Orçamento</button>
-                    </div>
                 </div>
 
             </div>
@@ -4131,32 +4163,66 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
     <!-- Modal Enviar Template -->
     <div class="modal-overlay" id="modalSendTemplate">
-        <div class="modal" style="max-width: 460px; width: 90%;">
-            <h2><i class="fa-regular fa-file-lines" style="color: var(--accent-warning)"></i> Enviar Template</h2>
-            <p class="modal-subtitle">A Meta exige templates para iniciar conversas ou quando a última mensagem foi há mais de 24h.</p>
-
-            <div class="form-grid">
-                <div class="form-group full">
-                    <label>Template Aprovado <span class="required">*</span></label>
-                    <select id="st-template-select" class="form-control" onchange="onTemplatePick()">
-                        <option value="">Carregando templates…</option>
-                    </select>
-                    <div id="st-template-hint" style="margin-top: 4px; font-size: 0.78rem; color: var(--text-muted); line-height: 1.4;"></div>
-                </div>
-                <div class="form-group full">
-                    <label>Idioma do Template</label>
-                    <select id="st-template-lang" class="form-control">
-                        <option value="pt_BR">Português (Brasil) [pt_BR]</option>
-                        <option value="en_US">Inglês (US) [en_US]</option>
-                    </select>
+        <div class="modal stx-modal" role="dialog" aria-modal="true" aria-labelledby="stx-title">
+            <div class="stx-head">
+                <span class="stx-head-icon" aria-hidden="true"><i class="fa-regular fa-file-lines"></i></span>
+                <div>
+                    <h2 id="stx-title">Enviar template</h2>
+                    <p class="stx-sub">Quando a última mensagem do lead foi há mais de 24h, só um template aprovado pela
+                        Meta reabre a conversa.</p>
                 </div>
             </div>
 
-            <div class="modal-separator"></div>
-            <div class="modal-actions">
-                <button class="btn-cancel"
+            <div class="stx-body">
+                <div class="stx-pick">
+                    <div class="stx-pane-head">
+                        <h3 class="stx-label" id="stx-pick-label">Template</h3>
+                        <span class="stx-count" id="stx-count"></span>
+                    </div>
+                    <div class="stx-search-wrap" id="stx-search-wrap" hidden>
+                        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                        <input type="search" id="stx-search" class="stx-search" placeholder="Buscar pelo nome ou texto"
+                            aria-label="Buscar template" autocomplete="off" oninput="filterTemplateList()">
+                    </div>
+                    <div id="stx-template-list" class="stx-list" role="radiogroup" aria-labelledby="stx-pick-label"></div>
+                    <p id="st-template-hint" class="stx-hint" aria-live="polite"></p>
+                </div>
+
+                <div class="stx-detail">
+                    <div class="stx-placeholder" id="stx-placeholder">
+                        <i class="fa-regular fa-comment-dots" aria-hidden="true"></i>
+                        <p>Escolha um template para ver como o lead vai receber.</p>
+                    </div>
+
+                    <section class="stx-section" id="stx-preview-section" aria-labelledby="stx-preview-label" hidden>
+                        <h3 class="stx-label" id="stx-preview-label">Como o lead vai receber</h3>
+                        <div class="stx-chat">
+                            <div class="stx-bubble" id="stx-preview"></div>
+                            <div class="stx-bubble-buttons" id="stx-preview-buttons"></div>
+                        </div>
+                    </section>
+
+                    <section class="stx-section" id="stx-click-section" aria-labelledby="stx-click-label" hidden>
+                        <div class="stx-pane-head">
+                            <h3 class="stx-label" id="stx-click-label">Quando o lead tocar em <q id="stx-click-btn"></q></h3>
+                            <button type="button" class="stx-ai-btn" id="stx-ai-btn" onclick="generateClickReplyDraft()">
+                                <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>Escrever com IA</span>
+                            </button>
+                        </div>
+                        <p class="stx-help" id="stx-click-help"></p>
+                        <label class="stx-sr-only" for="stx-click-text">Mensagem enviada automaticamente após o clique</label>
+                        <textarea id="stx-click-text" class="stx-textarea" maxlength="4000"
+                            placeholder="Ex.: Que bom! Retomando sua dúvida: estamos na QNE 1, em Taguatinga Norte. Qual dia fica melhor para você vir?"></textarea>
+                        <p class="stx-ai-status" id="stx-ai-status" aria-live="polite"></p>
+                    </section>
+                </div>
+            </div>
+
+            <div class="modal-actions stx-footer">
+                <button type="button" class="btn-cancel"
                     onclick="document.getElementById('modalSendTemplate').classList.remove('active')">Cancelar</button>
-                <button class="btn-save" onclick="sendTemplateMessage()"><i class="fa-solid fa-paper-plane"></i> Enviar</button>
+                <button type="button" class="btn-save" id="stx-send-btn" onclick="sendTemplateMessage()" disabled>
+                    <i class="fa-solid fa-paper-plane" aria-hidden="true"></i> Enviar template</button>
             </div>
         </div>
     </div>
@@ -5019,8 +5085,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- Scripts da Aplicação -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
-    <script src="wa_chat_logic.js?v=25"></script>
-    <script src="app.js?v=26"></script>
+    <script src="wa_chat_logic.js?v=27"></script>
+    <script src="app.js?v=28"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->

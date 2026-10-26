@@ -393,6 +393,11 @@ if ('serviceWorker' in navigator) {
             .then((reg) => { window._swRegistration = reg; })
             .catch((e) => console.warn('SW não registrado:', e));
     });
+    // Clique numa notificação nativa com o CRM já aberto: o sw.js manda o
+    // telefone do lead e a conversa abre aqui.
+    navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'open-chat' && e.data.phone) notifOpenChat(e.data.phone);
+    });
 }
 
 // === WEB PUSH: notificação nativa do Windows/Android para leads quentes e
@@ -446,11 +451,32 @@ async function maybeOfferWebPush() {
     if (localStorage.getItem('crm_push_prompt_dismissed') === '1') return;
 
     const ok = await customConfirm(
-        'Quer receber um aviso do Windows/navegador sempre que um lead ficar <b>quente</b> ou tiver uma notificação importante — mesmo com o CRM em segundo plano?',
+        'Quer receber um aviso do Windows/navegador sempre que um lead <b>mandar mensagem</b>, ficar quente ou tiver uma notificação importante — mesmo com o CRM em segundo plano?',
         'Ativar notificações'
     );
     localStorage.setItem('crm_push_prompt_dismissed', '1');
     if (ok) enableWebPush();
+}
+
+// Botão "Avisos neste aparelho" no painel de notificações — o convite acima
+// só aparece 1x, então quem fechou ou trocou de aparelho ativa por aqui.
+async function openPushDeviceSettings() {
+    const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const instalado = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+        await customAlert(isIOS && !instalado
+            ? 'No iPhone, os avisos só funcionam com o CRM instalado: toque em <b>Compartilhar</b> → <b>Adicionar à Tela de Início</b>, abra o CRM pelo ícone e ative por aqui.'
+            : 'Este navegador não suporta avisos. Use o Chrome ou o Edge.', 'Avisos neste aparelho');
+        return;
+    }
+    if (Notification.permission === 'denied') {
+        await customAlert('Os avisos estão bloqueados para este site. Clique no cadeado ao lado do endereço, em <b>Notificações</b> escolha <b>Permitir</b> e recarregue a página.', 'Avisos neste aparelho');
+        return;
+    }
+    const ok = await enableWebPush();
+    await customAlert(ok
+        ? 'Pronto! Este aparelho vai avisar quando um lead mandar mensagem — mesmo com o CRM minimizado. Leads com responsável avisam só o responsável.'
+        : 'Não foi possível ativar os avisos agora. Tente de novo em instantes.', 'Avisos neste aparelho');
 }
 
 // Chuva de confete comemorando um agendamento novo. Canvas próprio, sem
@@ -8685,12 +8711,77 @@ async function runOppsNow(btn) {
     }
 }
 
+// Horário de atendimento: uma linha por dia (segunda primeiro), índice 0=domingo
+// como no backend. Desligar o dia esconde os horários e mostra "Fechado".
+const AIX_DIAS_SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+function renderHorarioAtendimento(horario) {
+    const wrap = document.getElementById('aix-hours');
+    if (!wrap) return;
+    wrap.innerHTML = [1, 2, 3, 4, 5, 6, 0].map(d => {
+        const h = horario[d] || { aberto: false, abre: '08:00', fecha: '18:00' };
+        return `
+        <div class="aix-hours-row" data-dia="${d}">
+            <label class="ui-switch" title="Aberto neste dia">
+                <input type="checkbox" class="aix-hours-aberto" ${h.aberto ? 'checked' : ''} onchange="toggleHorarioDia(this)">
+                <span class="ui-switch-track"></span>
+            </label>
+            <span class="aix-hours-day">${AIX_DIAS_SEMANA[d]}</span>
+            <span class="aix-hours-times" ${h.aberto ? '' : 'hidden'}>
+                <input type="time" class="aix-input aix-hours-abre" value="${h.abre}"> às
+                <input type="time" class="aix-input aix-hours-fecha" value="${h.fecha}">
+            </span>
+            <span class="aix-hours-closed" ${h.aberto ? 'hidden' : ''}>Fechado</span>
+        </div>`;
+    }).join('');
+}
+function toggleHorarioDia(input) {
+    const row = input.closest('.aix-hours-row');
+    row.querySelector('.aix-hours-times').hidden = !input.checked;
+    row.querySelector('.aix-hours-closed').hidden = input.checked;
+}
+function readHorarioAtendimento() {
+    const horario = new Array(7);
+    document.querySelectorAll('#aix-hours .aix-hours-row').forEach(row => {
+        horario[Number(row.dataset.dia)] = {
+            aberto: row.querySelector('.aix-hours-aberto').checked,
+            abre: row.querySelector('.aix-hours-abre').value,
+            fecha: row.querySelector('.aix-hours-fecha').value
+        };
+    });
+    return horario;
+}
+
+// Select do template de retomada: lista os templates da Meta com o status ao
+// lado, e mantém o salvo na lista mesmo se a Meta não devolver (ex.: excluído).
+async function renderRetomadaTemplateSelect(selected) {
+    const sel = document.getElementById('retomada-template');
+    if (!sel) return;
+    sel.innerHTML = `<option value="${escapeHtml(selected || '')}">${escapeHtml(selected || 'Carregando templates…')}</option>`;
+    try {
+        const res = await fetch('/api/whatsapp/templates');
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao carregar templates');
+        const STATUS = { APPROVED: 'aprovado', PENDING: 'em análise', REJECTED: 'rejeitado', PAUSED: 'pausado', DISABLED: 'desativado' };
+        const nomes = [...new Set((json.data || []).map(t => t.name))];
+        const statusDe = Object.fromEntries((json.data || []).map(t => [t.name, t.status]));
+        if (selected && !nomes.includes(selected)) nomes.unshift(selected);
+        sel.innerHTML = nomes.map(n => {
+            const st = statusDe[n] ? ` (${STATUS[statusDe[n]] || statusDe[n].toLowerCase()})` : ' (não encontrado na Meta)';
+            return `<option value="${escapeHtml(n)}" ${n === selected ? 'selected' : ''}>${escapeHtml(n)}${st}</option>`;
+        }).join('');
+    } catch (e) {
+        console.error('Erro ao carregar templates da retomada:', e);
+    }
+}
+
 async function openWhatsappAiSettingsModal() {
     try {
-        const [toggleRes, contextRes, oppsRes] = await Promise.all([
+        const [toggleRes, contextRes, oppsRes, horarioRes, retomadaRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai'),
             fetch('/api/settings/whatsapp-ai-context'),
-            fetch('/api/opps/config')
+            fetch('/api/opps/config'),
+            fetch('/api/settings/horario-atendimento'),
+            fetch('/api/settings/retomada')
         ]);
         const toggleJson = await toggleRes.json();
         const contextJson = await contextRes.json();
@@ -8719,6 +8810,14 @@ async function openWhatsappAiSettingsModal() {
             if (pw) pw.value = oc.palavras_chave || '';
             renderOppsStatus(oppsJson.last_run);
         } catch (e) { console.error('Erro ao buscar config de oportunidades:', e); }
+
+        try {
+            renderHorarioAtendimento((await horarioRes.json()).horario || []);
+            const rc = (await retomadaRes.json()).config || {};
+            document.getElementById('retomada-ativo').checked = rc.ativo !== false;
+            document.getElementById('retomada-instrucoes').value = rc.instrucoes || '';
+            renderRetomadaTemplateSelect(rc.template_name || '');
+        } catch (e) { console.error('Erro ao buscar horário/retomada:', e); }
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -8738,8 +8837,14 @@ async function saveWhatsappAiSettings() {
     const oppsAtivo = !!(document.getElementById('opps-ativo') || {}).checked;
     const oppsIntervalo = parseInt((document.getElementById('opps-intervalo') || {}).value, 10) || 8;
     const oppsPalavras = (document.getElementById('opps-palavras') || {}).value || '';
+    const horario = readHorarioAtendimento();
+    const retomada = {
+        ativo: !!(document.getElementById('retomada-ativo') || {}).checked,
+        template_name: (document.getElementById('retomada-template') || {}).value || '',
+        instrucoes: (document.getElementById('retomada-instrucoes') || {}).value || ''
+    };
     try {
-        const [toggleRes, contextRes, oppsRes] = await Promise.all([
+        const [toggleRes, contextRes, oppsRes, horarioRes, retomadaRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -8754,6 +8859,16 @@ async function saveWhatsappAiSettings() {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ativo: oppsAtivo, intervalo_horas: oppsIntervalo, palavras_chave: oppsPalavras })
+            }),
+            fetch('/api/settings/horario-atendimento', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ horario })
+            }),
+            fetch('/api/settings/retomada', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(retomada)
             })
         ]);
         const toggleJson = await toggleRes.json();
@@ -8761,6 +8876,8 @@ async function saveWhatsappAiSettings() {
         if (!toggleRes.ok) throw new Error(toggleJson.error || 'Erro ao salvar interruptor da IA');
         if (!contextRes.ok) throw new Error(contextJson.error || 'Erro ao salvar contexto da IA');
         if (!oppsRes.ok) { const oj = await oppsRes.json().catch(() => ({})); throw new Error(oj.error || 'Erro ao salvar detector de oportunidades'); }
+        if (!horarioRes.ok) { const hj = await horarioRes.json().catch(() => ({})); throw new Error(hj.error || 'Erro ao salvar horário de atendimento'); }
+        if (!retomadaRes.ok) { const rj = await retomadaRes.json().catch(() => ({})); throw new Error(rj.error || 'Erro ao salvar retomada'); }
         closeModals();
         await customAlert('Configuração do agente de IA atualizada!', 'Salvo com Sucesso');
     } catch (e) {
@@ -9570,8 +9687,10 @@ function lppCopyPhone(event, phone) {
 function lppCopyText(event, text) {
     event.stopPropagation();
     if (!navigator.clipboard) return;
+    // Pega o botão já: depois do await o evento terminou e currentTarget vira null.
+    const btn = event.currentTarget;
     navigator.clipboard.writeText(String(text || '')).then(() => {
-        const btn = event.currentTarget;
+        if (!btn) return;
         const prev = btn.innerHTML;
         btn.innerHTML = '<i class="fa-solid fa-check"></i>';
         setTimeout(() => { btn.innerHTML = prev; }, 1400);
@@ -9953,6 +10072,8 @@ const LPP_EVENT_META = {
     lead_qualificado_ia:    { icon: 'fa-sparkles',               texto: 'a IA qualificou o lead' },
     lead_descartado:        { icon: 'fa-ban',                    texto: 'descartou o lead' },
     devolvido_para_ia:      { icon: 'fa-robot',                  texto: 'devolveu a conversa pra IA' },
+    retomada_ia:            { icon: 'fa-rotate-right',           texto: 'retomou a conversa após a janela de 24h' },
+    clique_template:        { icon: 'fa-reply',                  texto: 'mensagem automática enviada após o clique no template' },
     comentario:             { icon: 'fa-comment',                texto: 'comentou' },
 };
 
