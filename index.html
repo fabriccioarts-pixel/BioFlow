@@ -820,21 +820,24 @@
         <!-- ETAPA 1: Novo disparo (configurar + acompanhar) -->
         <div class="utm-tabpanel active" data-utm-panel="new">
             <div class="dispatch-grid">
-                <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
-                    <h3 class="utm-panel-title" style="margin: 0;">
-                        <i class="fa-solid fa-sliders" style="color: #38bdf8;"></i> Configurar Disparo
-                    </h3>
+                <form class="utm-panel dsp-form" onsubmit="event.preventDefault(); startCampaign();" aria-labelledby="dsp-form-title">
+                    <h3 class="dsp-title" id="dsp-form-title">Configurar disparo</h3>
 
-                    <div class="utm-field">
-                        <label>Template Aprovado</label>
-                        <select id="campaign-template-select" onchange="updateCampaignLeadCount()">
-                            <option value="">Carregando templates...</option>
-                        </select>
-                        <span class="utm-hint">O idioma é o mesmo cadastrado no template — não precisa escolher separado.</span>
-                    </div>
+                    <fieldset class="dsp-section">
+                        <legend class="dsp-section-title">Mensagem</legend>
+                        <div class="utm-field">
+                            <label for="campaign-template-select">Template aprovado</label>
+                            <select id="campaign-template-select" onchange="updateCampaignLeadCount()" aria-describedby="dsp-template-hint">
+                                <option value="">Carregando templates...</option>
+                            </select>
+                            <span class="utm-hint" id="dsp-template-hint">O idioma é o mesmo cadastrado no template na Meta.</span>
+                        </div>
+                    </fieldset>
 
+                    <fieldset class="dsp-section">
+                        <legend class="dsp-section-title">Destinatários</legend>
                     <div class="utm-field">
-                        <label>Público Alvo (Coluna do CRM)</label>
+                        <label for="campaign-target">Público</label>
                         <select id="campaign-target" onchange="updateCampaignLeadCount()">
                             <option value="col-entrada">Entrada</option>
                             <option value="col-contatado">Contatado</option>
@@ -848,11 +851,11 @@
                     </div>
 
                     <div class="utm-field">
-                        <label>Origem do Anúncio (opcional)</label>
-                        <select id="campaign-ad-campaign" onchange="onCampaignAdSegmentChange('campaign')" aria-label="Campanha de anúncio">
+                        <label for="campaign-ad-campaign">Filtrar por anúncio <span class="dsp-optional">opcional</span></label>
+                        <select id="campaign-ad-campaign" onchange="onCampaignAdSegmentChange('campaign')" aria-describedby="campaign-ad-hint">
                             <option value="">Qualquer origem (não filtrar)</option>
                         </select>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; margin-top: 0.5rem;">
+                        <div class="dsp-two">
                             <select id="campaign-ad-adset" onchange="onCampaignAdSegmentChange('adset')" aria-label="Conjunto de anúncios" disabled>
                                 <option value="">Todos os conjuntos</option>
                             </select>
@@ -865,52 +868,74 @@
 
                     <div class="utm-field">
                         <label class="utm-switch">
-                            <input type="checkbox" id="campaign-skip-repeated" checked onchange="updateCampaignLeadCount()">
+                            <input type="checkbox" id="campaign-skip-repeated" checked onchange="updateCampaignLeadCount()" aria-describedby="dsp-skip-hint">
                             <span class="utm-switch-track"><span class="utm-switch-thumb"></span></span>
                             <span class="utm-switch-text">Não enviar de novo pra quem já recebeu este template</span>
                         </label>
-                        <span class="utm-hint">Evita mandar o mesmo modelo duas vezes pra mesma pessoa em campanhas futuras.</span>
+                        <span class="utm-hint" id="dsp-skip-hint">Evita mandar o mesmo modelo duas vezes pra mesma pessoa.</span>
                     </div>
+                    </fieldset>
 
-                    <div class="utm-field">
-                        <label>Quantidade de Leads</label>
-                        <div style="display: flex; align-items: center; gap: 0.75rem;">
-                            <input type="range" id="campaign-lead-limit" min="1" max="1" value="1"
-                                oninput="document.getElementById('campaign-lead-limit-display').textContent = this.value"
-                                style="flex: 1; accent-color: var(--accent-success);">
-                            <span id="campaign-lead-limit-display" style="min-width: 2.2rem; text-align: right; font-weight: 700; color: var(--text-main); font-size: 0.9rem;">1</span>
+                    <fieldset class="dsp-section">
+                        <legend class="dsp-section-title">Quantidade</legend>
+                        <div class="utm-field">
+                            <label for="campaign-lead-limit-display">Quantos leads recebem</label>
+                            <div class="dsp-qty">
+                                <input type="range" id="campaign-lead-limit" min="1" max="1" value="1" aria-label="Quantidade de leads"
+                                    oninput="syncCampaignLimit(this.value)">
+                                <input type="number" id="campaign-lead-limit-display" class="dsp-qty-input" min="1" max="1" value="1" inputmode="numeric"
+                                    oninput="syncCampaignLimit(this.value)" aria-describedby="campaign-lead-limit-hint">
+                            </div>
+                            <span class="utm-hint" id="campaign-lead-limit-hint" aria-live="polite">Carregando leads elegíveis...</span>
                         </div>
-                        <span class="utm-hint" id="campaign-lead-limit-hint">Carregando leads elegíveis...</span>
-                    </div>
+                    </fieldset>
 
-                    <button class="btn-primary" id="btn-start-campaign" onclick="startCampaign()"
-                        style="margin-top: 0.3rem; padding: 0.75rem; font-size: 0.95rem; width: 100%; justify-content: center; background: var(--accent-success);">
-                        <i class="fa-solid fa-paper-plane"></i> Iniciar Disparo
+                    <button type="submit" class="dsp-start" id="btn-start-campaign">
+                        <i class="fa-solid fa-paper-plane" aria-hidden="true"></i> <span id="dsp-start-label">Iniciar disparo</span>
                     </button>
-                </div>
+                </form>
 
-                <!-- Painel de Progresso -->
-                <div class="utm-panel" style="display: flex; flex-direction: column; gap: 1rem;">
-                    <h3 class="utm-panel-title" style="margin: 0;">
-                        <i class="fa-solid fa-chart-simple" style="color: var(--accent-success);"></i> Progresso
-                    </h3>
+                <!-- Resumo antes de disparar + progresso durante o envio -->
+                <section class="utm-panel dsp-side" aria-labelledby="dsp-side-title">
+                    <h3 class="dsp-title" id="dsp-side-title">Resumo do disparo</h3>
 
-                    <div style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; height: 10px;">
-                        <div id="campaign-progress-bar"
-                            style="width: 100%; height: 100%; transform: scaleX(0); transform-origin: left center; background: var(--accent-success); transition: transform 0.3s;">
+                    <div class="dsp-preview" id="dsp-preview" aria-label="Prévia da mensagem">
+                        <div class="dsp-bubble" id="dsp-preview-bubble">Escolha um template para ver a mensagem.</div>
+                        <div class="dsp-bubble-buttons" id="dsp-preview-buttons"></div>
+                    </div>
+
+                    <dl class="dsp-metrics">
+                        <div class="dsp-metric">
+                            <dt>Destinatários</dt>
+                            <dd id="dsp-metric-leads">—</dd>
+                        </div>
+                        <div class="dsp-metric">
+                            <dt>Custo estimado</dt>
+                            <dd id="dsp-metric-cost">—</dd>
+                        </div>
+                        <div class="dsp-metric">
+                            <dt>Categoria</dt>
+                            <dd id="dsp-metric-category">—</dd>
+                        </div>
+                    </dl>
+
+                    <div class="dsp-progress" aria-live="polite">
+                        <div class="dsp-progress-head">
+                            <span class="dsp-progress-title">Progresso</span>
+                            <span id="campaign-status" class="dsp-status">Aguardando início</span>
+                        </div>
+                        <div class="dsp-bar" role="presentation">
+                            <div id="campaign-progress-bar" class="dsp-bar-fill"></div>
+                        </div>
+                        <div class="dsp-progress-foot">
+                            <span id="campaign-progress-text">0 / 0 enviados</span>
+                            <span id="campaign-cost-text">Custo real: R$ 0,00</span>
+                        </div>
+                        <div id="campaign-log" class="dsp-log">
+                            <div>Pronto para começar. Configure ao lado e clique em Iniciar disparo.</div>
                         </div>
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; color: var(--text-muted); font-size: 0.82rem;">
-                        <span id="campaign-progress-text">0 / 0 enviados</span>
-                        <span id="campaign-status" style="color: var(--accent-warning); font-weight: 600;">Aguardando início...</span>
-                    </div>
-                    <div style="color: var(--accent-success); font-size: 0.85rem; font-weight: 600;" id="campaign-cost-text">Custo estimado: R$ 0,00</div>
-
-                    <div id="campaign-log"
-                        style="background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.3rem; flex: 1;">
-                        <div>Pronto para começar. Selecione o público e clique em Iniciar.</div>
-                    </div>
-                </div>
+                </section>
             </div>
         </div>
 
@@ -2311,6 +2336,19 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             #view-contatos .ct-open { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); padding: 0.38rem 0.7rem; border-radius: 7px; font-size: 0.8rem; font-family: inherit; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
             #view-contatos .ct-open:hover { color: var(--accent-success); border-color: var(--accent-success); }
             #view-contatos :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+            #view-contatos .ct-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+            #view-contatos .ct-select { width: auto; max-width: 240px; height: 2.25rem; padding: 0 2rem 0 0.75rem; background-color: var(--header-btn-bg); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 8px; font-size: 0.82rem; font-family: inherit; cursor: pointer; text-overflow: ellipsis; }
+            #view-contatos .ct-select.is-active { border-color: var(--accent-primary); background-color: color-mix(in srgb, var(--accent-primary) 10%, var(--header-btn-bg)); }
+            #view-contatos .ct-select:disabled { opacity: 0.5; cursor: not-allowed; }
+            #view-contatos .ct-date { display: inline-flex; align-items: center; gap: 0.4rem; height: 2.25rem; padding: 0 0.6rem; background: var(--header-btn-bg); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.8rem; color: var(--text-muted); }
+            #view-contatos .ct-date.is-active { border-color: var(--accent-primary); }
+            #view-contatos .ct-date input { width: 86px; height: auto; padding: 0; border: 0; background: transparent; color: var(--text-main); font-size: 0.8rem; font-family: inherit; box-shadow: none; cursor: pointer; font-variant-numeric: tabular-nums; }
+            #view-contatos .ct-date input::placeholder { color: var(--text-muted); opacity: 0.8; }
+            #view-contatos h2 { color: var(--text-main); }
+            #view-contatos #count-contatos { background: color-mix(in srgb, var(--text-main) 10%, transparent) !important; color: var(--text-main); }
+            #view-contatos .ct-clear { display: inline-flex; align-items: center; gap: 0.4rem; height: 2.25rem; padding: 0 0.8rem; border: 0; border-radius: 8px; background: transparent; color: var(--accent-primary); font-size: 0.82rem; font-weight: 600; font-family: inherit; cursor: pointer; }
+            #view-contatos .ct-clear:hover { background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+            #view-contatos .ct-clear[hidden] { display: none; }
         </style>
 
         <div style="margin-bottom: 1.5rem;">
@@ -2322,7 +2360,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
             <p style="color: var(--text-muted); margin-top: 0.5rem;">Todo lead que já entrou em contato com a clínica pelo
                 WhatsApp. A lista se atualiza sozinha a cada nova conversa.</p>
         </div>
-        <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center;">
+        <div style="display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; align-items: center;">
             <div style="position: relative; flex: 1; min-width: 220px; max-width: 380px;">
                 <i class="fa-solid fa-magnifying-glass"
                     style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.8rem;"></i>
@@ -2330,11 +2368,53 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     oninput="filterContatos()"
                     style="width: 100%; background: var(--header-btn-bg); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem 0.55rem 2.1rem; border-radius: 8px; font-size: 0.9rem; outline: none;">
             </div>
-            <button type="button" class="btn-secondary" onclick="loadContatos(true)" title="Recarregar">
-                <i class="fa-solid fa-rotate"></i> Atualizar
-            </button>
-            <button type="button" class="btn-secondary" onclick="exportContatosCSV()">
-                <i class="fa-solid fa-file-csv"></i> Exportar CSV
+            <select id="ct-audience" class="ct-select" onchange="applyAudienceToContatos(this.value)" aria-label="Aplicar público salvo">
+                <option value="">Públicos salvos</option>
+            </select>
+            <div style="display: flex; gap: 0.5rem; margin-left: auto; flex-wrap: wrap;">
+                <button type="button" class="btn-secondary" onclick="loadContatos(true)" title="Recarregar">
+                    <i class="fa-solid fa-rotate"></i> Atualizar
+                </button>
+                <button type="button" class="btn-secondary" onclick="exportContatosCSV()" title="Exporta só os contatos filtrados">
+                    <i class="fa-solid fa-file-csv"></i> Exportar CSV
+                </button>
+                <button type="button" class="btn-primary" onclick="saveContatosAsAudience()" title="Salvar estes filtros como público para usar no disparo">
+                    <i class="fa-solid fa-bullseye"></i> Salvar como público
+                </button>
+            </div>
+        </div>
+
+        <!-- Filtros de segmentação (também viram público salvo pro disparo) -->
+        <div class="ct-filters" role="group" aria-label="Filtros dos contatos">
+            <select id="ct-f-etapa" class="ct-select" onchange="filterContatos()" aria-label="Etapa no funil"></select>
+            <select id="ct-f-origem" class="ct-select" onchange="filterContatos()" aria-label="Origem"></select>
+            <select id="ct-f-campaign" class="ct-select" onchange="onContatosCampaignChange()" aria-label="Campanha do anúncio"></select>
+            <select id="ct-f-adset" class="ct-select" onchange="filterContatos()" aria-label="Conjunto de anúncios" disabled></select>
+            <select id="ct-f-owner" class="ct-select" onchange="filterContatos()" aria-label="Responsável"></select>
+            <select id="ct-f-tag" class="ct-select" onchange="filterContatos()" aria-label="Etiqueta"></select>
+            <select id="ct-f-status" class="ct-select" onchange="filterContatos()" aria-label="Status">
+                <option value="">Qualquer status</option>
+                <option value="qualificado">Qualificado pela IA</option>
+                <option value="optin">Recebe campanhas</option>
+                <option value="optout">Fora das campanhas</option>
+                <option value="sem_lead">Sem lead no Kanban</option>
+            </select>
+            <select id="ct-f-last" class="ct-select" onchange="filterContatos()" aria-label="Último contato">
+                <option value="">Último contato: qualquer</option>
+                <option value="7">Últimos 7 dias</option>
+                <option value="30">Últimos 30 dias</option>
+                <option value="gt30">Sem contato há +30 dias</option>
+                <option value="gt90">Sem contato há +90 dias</option>
+            </select>
+            <label class="ct-date" title="1º contato a partir de">
+                <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                <span>1º contato</span>
+                <input type="date" id="ct-f-first-from" onchange="filterContatos()" placeholder="Início" aria-label="1º contato a partir de">
+                <span>até</span>
+                <input type="date" id="ct-f-first-to" onchange="filterContatos()" placeholder="Fim" aria-label="1º contato até">
+            </label>
+            <button type="button" class="ct-clear" id="ct-clear" onclick="clearContatosFilters()" hidden>
+                <i class="fa-solid fa-xmark" aria-hidden="true"></i> Limpar filtros
             </button>
         </div>
         <div class="table-container">

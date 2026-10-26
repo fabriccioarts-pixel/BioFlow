@@ -841,6 +841,7 @@ async function loadAudiences() {
     }
     populateKanbanAudienceSelect();
     populateCampaignAudienceOptions();
+    populateContatosAudienceSelect();
 }
 
 function populateKanbanAudienceSelect() {
@@ -918,6 +919,12 @@ function applyAudienceToKanbanFilters(audienceId) {
     if (scheduleEl) scheduleEl.checked = Number(audience.has_schedule) === 1;
 
     renderBoard();
+
+    const extra = parseAudienceFilters(audience);
+    const soNaBase = extra && ['etapa', 'tag', 'campaign', 'last', 'status'].some(k => extra[k]);
+    if (soNaBase && typeof showToast === 'function') {
+        showToast('Este público tem filtros que o Kanban não mostra (etapa, campanha, etiqueta…). Na Base de Contatos e no disparo ele vale completo.', 'warning', 6000);
+    }
 }
 
 async function deleteSelectedAudience() {
@@ -940,10 +947,69 @@ async function deleteSelectedAudience() {
     }
 }
 
+// Filtros extras salvos no público pela Base de Contatos (coluna "filters").
+function parseAudienceFilters(audience) {
+    if (!audience || !audience.filters) return null;
+    try {
+        const f = typeof audience.filters === 'string' ? JSON.parse(audience.filters) : audience.filters;
+        return f && typeof f === 'object' && Object.keys(f).length ? f : null;
+    } catch (e) { return null; }
+}
+
+// Data UTC do banco ("2026-10-26 12:25:00", sem fuso) -> "YYYY-MM-DD" no fuso local.
+function toLocalYmd(raw) {
+    if (!raw) return '';
+    let s = String(raw).trim().replace(' ', 'T');
+    if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Segmentação da Base de Contatos e dos públicos salvos com ela. Recebe uma
+// "linha" { lead, first, last } — na Base vem das mensagens (1º/último contato);
+// no público aplicado a leads vem de created_at / last_msg_at.
+function segmentRowFromLead(lead) {
+    return { lead, first: lead.created_at, last: lead.last_msg_at || lead.created_at };
+}
+function rowMatchesSegment(row, f) {
+    if (!f) return true;
+    const lead = row.lead;
+    if (f.status === 'sem_lead') return !lead;
+    if (!lead && (f.etapa || f.origem || f.owner || f.tag || f.campaign || f.status || f.agendado)) return false;
+    if (f.etapa && (lead.column || lead.column_id) !== f.etapa) return false;
+    if (f.origem && (lead.origem || '') !== f.origem) return false;
+    if (f.owner === '__none' && lead.owner_id) return false;
+    if (f.owner && f.owner !== '__none' && lead.owner_id !== f.owner) return false;
+    if (f.tag && !parseLeadTags(lead.tags).includes(f.tag)) return false;
+    if (f.campaign && !leadMatchesAdSegment(lead, { campaign: f.campaign, adset: f.adset || '', ad: '' })) return false;
+    if (f.agendado && (lead.column || lead.column_id) !== 'col-agendado' && !lead.agendamento) return false;
+    if (f.status === 'qualificado' && !(lead.qualificado_em || parseLeadTags(lead.tags).includes('ia-qualificado'))) return false;
+    if (f.status === 'optout' && Number(lead.campaign_opt_out) !== 1) return false;
+    if (f.status === 'optin' && Number(lead.campaign_opt_out) === 1) return false;
+    if (f.first_from || f.first_to) {
+        const d = toLocalYmd(row.first);
+        if (!d || (f.first_from && d < f.first_from) || (f.first_to && d > f.first_to)) return false;
+    }
+    if (f.last) {
+        const d = toLocalYmd(row.last);
+        if (!d) return false;
+        const dias = Math.floor((Date.now() - new Date(d + 'T12:00:00').getTime()) / 86400000);
+        if (f.last === '7' && dias > 7) return false;
+        if (f.last === '30' && dias > 30) return false;
+        if (f.last === 'gt30' && dias <= 30) return false;
+        if (f.last === 'gt90' && dias <= 90) return false;
+    }
+    return true;
+}
+
 // Mesma lógica de filtro do renderBoard() do Kanban, reaplicada em cima de um
 // Público salvo — usada pelo disparo de campanha (getEligibleCampaignLeads).
+// Público salvo pela Base de Contatos traz filtros extras (etapa, campanha...).
 function filterLeadsByAudience(audience) {
+    const extra = parseAudienceFilters(audience);
     return leads.filter(lead => {
+        if (extra && !rowMatchesSegment(segmentRowFromLead(lead), extra)) return false;
         if (audience.owner_id && lead.owner_id !== audience.owner_id) return false;
         if (audience.origem && lead.origem !== audience.origem) return false;
         if (Number(audience.has_schedule) === 1 && lead.column !== 'col-agendado' && !lead.agendamento) return false;
@@ -979,6 +1045,7 @@ async function loadAdCatalog() {
         console.error('Erro ao carregar catálogo de anúncios:', e);
     }
     populateCampaignAdSegmentOptions();
+    if (contatosLoaded) { populateContatosFilters(); renderContatos(); }
     if (typeof renderBoard === 'function' && leads.length) renderBoard();
 }
 
@@ -4411,10 +4478,12 @@ async function loadContatos(force = false) {
         contatosData = mergedRows.map(row => {
             const lead = (Array.isArray(leads) ? leads : []).find(l => typeof isSamePhone === 'function' && isSamePhone(l.telefone, row.phone));
             return {
+                lead: lead || null,
                 phone: row.phone,
                 nome: (lead && lead.nome) ? lead.nome : 'Lead WhatsApp',
                 origem: (lead && lead.origem) ? lead.origem : '',
                 column: lead ? (lead.column || lead.column_id) : null,
+                pipeline_id: lead ? leadPipelineId(lead) : null,
                 email: (lead && lead.email) ? lead.email : '',
                 leadId: lead ? lead.id : null,
                 first_contact: row.first_contact,
@@ -4424,6 +4493,7 @@ async function loadContatos(force = false) {
             };
         });
         contatosLoaded = true;
+        populateContatosFilters();
         renderContatos();
     } catch (e) {
         console.error('Erro ao carregar contatos:', e);
@@ -4442,20 +4512,173 @@ function fmtContatoDate(raw) {
     return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
+// --- Filtros da Base de Contatos (segmentação -> pesquisa e públicos salvos) ---
+const CT_FILTER_IDS = {
+    etapa: 'ct-f-etapa', origem: 'ct-f-origem', campaign: 'ct-f-campaign', adset: 'ct-f-adset',
+    owner: 'ct-f-owner', tag: 'ct-f-tag', status: 'ct-f-status', last: 'ct-f-last',
+    first_from: 'ct-f-first-from', first_to: 'ct-f-first-to'
+};
+
+function readContatosFilters() {
+    const f = {};
+    for (const [k, id] of Object.entries(CT_FILTER_IDS)) {
+        const v = document.getElementById(id)?.value || '';
+        if (v) f[k] = v;
+    }
+    return f;
+}
+
+function setSelectKeeping(sel, html, value) {
+    sel.innerHTML = html;
+    sel.value = [...sel.options].some(o => o.value === value) ? value : '';
+}
+
+// Opções montadas a partir da própria base (com contagem), pra só oferecer o
+// que existe — etapa, origem, campanha/conjunto, responsável e etiqueta.
+function populateContatosFilters() {
+    const cur = readContatosFilters();
+    const count = (fn) => {
+        const m = new Map();
+        for (const r of contatosData) { for (const k of [].concat(fn(r) || [])) if (k) m.set(k, (m.get(k) || 0) + 1); }
+        return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    const opt = (v, label, n) => `<option value="${escapeHtml(v)}">${escapeHtml(label)} (${n})</option>`;
+    const el = id => document.getElementById(id);
+
+    if (el('ct-f-etapa')) setSelectKeeping(el('ct-f-etapa'), '<option value="">Todas as etapas</option>'
+        + count(r => r.column).map(([id, n]) => opt(id, kanbanStageInfo(id)?.label || id, n)).join(''), cur.etapa);
+    if (el('ct-f-origem')) setSelectKeeping(el('ct-f-origem'), '<option value="">Todas as origens</option>'
+        + count(r => r.origem).map(([o, n]) => opt(o, o, n)).join(''), cur.origem);
+    if (el('ct-f-owner')) setSelectKeeping(el('ct-f-owner'), '<option value="">Todos os responsáveis</option>'
+        + opt('__none', 'Sem responsável', contatosData.filter(r => r.lead && !r.lead.owner_id).length)
+        + count(r => r.lead && r.lead.owner_id).map(([o, n]) => opt(o, resolveDisplayName(o), n)).join(''), cur.owner);
+    const tagLabel = id => (typeof getAvailableTags === 'function' ? getAvailableTags().find(t => t.id === id)?.label : '') || id;
+    if (el('ct-f-tag')) setSelectKeeping(el('ct-f-tag'), '<option value="">Todas as etiquetas</option>'
+        + count(r => r.lead ? parseLeadTags(r.lead.tags) : []).map(([t, n]) => opt(t, tagLabel(t), n)).join(''), cur.tag);
+
+    const attrOf = r => r.lead ? leadAdAttribution(r.lead) : null;
+    const anyAd = contatosData.filter(r => r.lead && leadMatchesAdSegment(r.lead, { campaign: '__any_ad' })).length;
+    if (el('ct-f-campaign')) setSelectKeeping(el('ct-f-campaign'), '<option value="">Todas as campanhas</option>'
+        + (anyAd ? opt('__any_ad', 'Qualquer anúncio Meta', anyAd) : '')
+        + count(r => attrOf(r)?.ad?.campaign_id && String(attrOf(r).ad.campaign_id))
+            .map(([id, n]) => opt(id, adCatalog.campaigns.get(id)?.name || `Campanha ${id}`, n)).join(''), cur.campaign);
+    populateContatosAdsetFilter(cur.adset);
+}
+
+function populateContatosAdsetFilter(keep) {
+    const camp = document.getElementById('ct-f-campaign')?.value || '';
+    const sel = document.getElementById('ct-f-adset');
+    if (!sel) return;
+    const realCamp = camp && camp !== '__any_ad';
+    const m = new Map();
+    if (realCamp) for (const r of contatosData) {
+        const a = r.lead ? leadAdAttribution(r.lead)?.ad : null;
+        if (a && String(a.campaign_id) === camp && a.adset_id) m.set(String(a.adset_id), (m.get(String(a.adset_id)) || 0) + 1);
+    }
+    setSelectKeeping(sel, '<option value="">Todos os conjuntos</option>' + [...m.entries()].sort((a, b) => b[1] - a[1])
+        .map(([id, n]) => `<option value="${escapeHtml(id)}">${escapeHtml(adCatalog.adsets.get(id)?.name || `Conjunto ${id}`)} (${n})</option>`).join(''), keep || '');
+    sel.disabled = !realCamp;
+}
+
+function onContatosCampaignChange() {
+    populateContatosAdsetFilter('');
+    filterContatos();
+}
+
+function clearContatosFilters() {
+    for (const id of Object.values(CT_FILTER_IDS)) {
+        const e = document.getElementById(id);
+        if (!e) continue;
+        e.value = '';
+        // Datas usam o AirDatepicker (initAirDatepicker): limpa a seleção dele também.
+        if (e._adpInstance && typeof e._adpInstance.clear === 'function') e._adpInstance.clear({ silent: true });
+    }
+    const aud = document.getElementById('ct-audience'); if (aud) aud.value = '';
+    populateContatosAdsetFilter('');
+    filterContatos();
+}
+
+// Destaca os filtros em uso e mostra "Limpar filtros" só quando há algum.
+function syncContatosFilterUI(f) {
+    for (const [k, id] of Object.entries(CT_FILTER_IDS)) {
+        const e = document.getElementById(id);
+        if (e && e.tagName === 'SELECT') e.classList.toggle('is-active', !!f[k]);
+    }
+    document.querySelector('#view-contatos .ct-date')?.classList.toggle('is-active', !!(f.first_from || f.first_to));
+    const clear = document.getElementById('ct-clear');
+    if (clear) clear.hidden = !Object.keys(f).length;
+}
+
+function getFilteredContatos() {
+    const q = (document.getElementById('contatos-search')?.value || '').trim().toLowerCase();
+    const f = readContatosFilters();
+    syncContatosFilterUI(f);
+    return contatosData.filter(r => {
+        if (q && !((r.nome || '').toLowerCase().includes(q) ||
+            String(r.phone || '').toLowerCase().includes(q) ||
+            formatPhone(r.phone).toLowerCase().includes(q))) return false;
+        return rowMatchesSegment({ lead: r.lead, first: r.first_contact, last: r.last_contact }, f);
+    });
+}
+
+// Público salvo: os filtros completos vão em "filters"; responsável, origem e
+// período também nos campos antigos, pro Kanban conseguir aplicar parte dele.
+async function saveContatosAsAudience() {
+    const f = readContatosFilters();
+    const rows = getFilteredContatos();
+    const comLead = rows.filter(r => r.lead).length;
+    if (!Object.keys(f).length && !(await customConfirm('Nenhum filtro está ativo — esse público vai representar TODOS os leads. Continuar?', 'Salvar público'))) return;
+    const name = await customPrompt(`Nome do público (${comLead} lead${comLead === 1 ? '' : 's'} com os filtros atuais):`, '', 'Salvar como público');
+    if (!name || !name.trim()) return;
+    const payload = {
+        name: name.trim(),
+        owner_id: f.owner && f.owner !== '__none' ? f.owner : '',
+        origem: f.origem || '',
+        date_start: '', date_end: '', has_schedule: 0,
+        filters: f
+    };
+    try {
+        const res = await fetch('/api/audiences', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Erro ao salvar público');
+        await loadAudiences();
+        populateContatosAudienceSelect(json.id);
+        if (typeof showToast === 'function') showToast(`Público "${payload.name}" salvo — já aparece no disparo de campanha.`, 'success');
+    } catch (e) {
+        await customAlert('Não foi possível salvar o público: ' + e.message, 'Salvar público');
+    }
+}
+
+function populateContatosAudienceSelect(selectId) {
+    const sel = document.getElementById('ct-audience');
+    if (!sel) return;
+    setSelectKeeping(sel, '<option value="">Públicos salvos</option>'
+        + cachedAudiences.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join(''), selectId || sel.value);
+}
+
+// Aplica um público salvo nos filtros da Base (os antigos, sem "filters", usam
+// os campos de responsável/origem/período).
+function applyAudienceToContatos(audienceId) {
+    const audience = cachedAudiences.find(a => a.id === audienceId);
+    if (!audience) return;
+    const f = parseAudienceFilters(audience) || {
+        owner: audience.owner_id || '', origem: audience.origem || '',
+        first_from: audience.date_start || '', first_to: audience.date_end || ''
+    };
+    for (const [k, id] of Object.entries(CT_FILTER_IDS)) {
+        const e = document.getElementById(id);
+        if (e && k !== 'adset') e.value = f[k] || '';
+    }
+    populateContatosAdsetFilter(f.adset || '');
+    filterContatos();
+}
+
 function renderContatos() {
     const tbody = document.getElementById('list-contatos');
     const countEl = document.getElementById('count-contatos');
     if (!tbody) return;
 
-    const q = (document.getElementById('contatos-search')?.value || '').trim().toLowerCase();
-    let rows = contatosData;
-    if (q) {
-        rows = rows.filter(r =>
-            (r.nome || '').toLowerCase().includes(q) ||
-            String(r.phone || '').toLowerCase().includes(q) ||
-            formatPhone(r.phone).toLowerCase().includes(q)
-        );
-    }
+    const rows = getFilteredContatos();
     if (countEl) countEl.textContent = rows.length;
 
     if (rows.length === 0) {
@@ -4514,7 +4737,8 @@ function abrirConversaContato(phone, name) {
 }
 
 function exportContatosCSV() {
-    if (!contatosData.length) {
+    const rows = getFilteredContatos();
+    if (!rows.length) {
         alert('Nenhum contato para exportar.');
         return;
     }
@@ -4524,7 +4748,7 @@ function exportContatosCSV() {
         return /[",\n;]/.test(s) ? `"${s}"` : s;
     };
     const lines = [header.join(',')];
-    contatosData.forEach(r => {
+    rows.forEach(r => {
         const col = kanbanStageInfo(r.column, r.pipeline_id);
         lines.push([
             r.nome || '', r.phone || '', r.origem || '', col ? col.label : '',
@@ -8553,7 +8777,13 @@ async function updateCampaignLeadCount() {
     slider.max = String(max);
     slider.value = String(max);
     slider.disabled = eligibleCount === 0;
-    if (display) display.textContent = String(cappedEligible);
+    campaignEligibleCount = eligibleCount;
+    if (display) {
+        display.max = String(max);
+        display.value = String(cappedEligible);
+        display.disabled = eligibleCount === 0;
+    }
+    updateDispatchSummary();
     if (hint) {
         if (eligibleCount === 0) {
             hint.textContent = 'Nenhum lead elegível nesse público (sem opt-in confirmado, todos já receberam esse template, ou pediram pra não receber campanhas).';
@@ -8563,6 +8793,61 @@ async function updateCampaignLeadCount() {
             hint.textContent = `Arraste pra limitar quantos dos ${eligibleCount} leads elegíveis recebem esse disparo.`;
         }
     }
+}
+
+// Controle deslizante e campo numérico da quantidade andam juntos (o número
+// permite digitar o valor exato, inclusive pelo teclado).
+let campaignEligibleCount = 0;
+function syncCampaignLimit(raw) {
+    const slider = document.getElementById('campaign-lead-limit');
+    const num = document.getElementById('campaign-lead-limit-display');
+    if (!slider) return;
+    const max = Number(slider.max) || 1;
+    let v = parseInt(raw, 10);
+    if (isNaN(v)) return; // campo vazio enquanto digita: espera
+    v = Math.min(Math.max(v, 1), max);
+    slider.value = String(v);
+    if (num && String(num.value) !== String(v)) num.value = String(v);
+    updateDispatchSummary();
+}
+
+// Resumo do disparo (coluna da direita): prévia da mensagem, destinatários,
+// custo estimado (destinatários × tarifa da categoria) e categoria do template.
+async function updateDispatchSummary() {
+    const sel = document.getElementById('campaign-template-select');
+    const bubble = document.getElementById('dsp-preview-bubble');
+    const btns = document.getElementById('dsp-preview-buttons');
+    if (!sel || !bubble) return;
+    const [name, lang] = (sel.value || '').split('|');
+    const tpl = (cachedWhatsappTemplates || []).find(t => t.name === name && t.language === lang);
+    const comps = tpl ? (tpl.components || []) : [];
+    const body = comps.find(c => c.type === 'BODY');
+    const header = comps.find(c => c.type === 'HEADER' && String(c.format || 'TEXT').toUpperCase() === 'TEXT');
+    const replies = ((comps.find(c => c.type === 'BUTTONS') || {}).buttons || []).map(b => b.text).filter(Boolean);
+    const nl2br = s => escapeHtml(s).replace(/\n/g, '<br>');
+    const fill = s => String(s || '').replace(/\{\{\s*[\w\d_]+\s*\}\}/g, '<span class="dsp-var">Maria</span>');
+    bubble.innerHTML = tpl
+        ? (header && header.text ? `<strong>${fill(nl2br(header.text))}</strong>` : '') + fill(nl2br(body ? body.text : ''))
+        : 'Escolha um template para ver a mensagem.';
+    bubble.classList.toggle('is-empty', !tpl);
+    if (btns) btns.innerHTML = replies.map(r => `<span class="dsp-bubble-btn"><i class="fa-solid fa-reply" aria-hidden="true"></i> ${escapeHtml(r)}</span>`).join('');
+
+    const slider = document.getElementById('campaign-lead-limit');
+    const qtd = campaignEligibleCount > 0 && slider ? Number(slider.value) || 0 : 0;
+    const CATEGORIA = { MARKETING: 'Marketing', UTILITY: 'Utilidade', AUTHENTICATION: 'Autenticação' };
+    const cat = (tpl && tpl.category) || '';
+    const rates = await getWhatsappPricingRates();
+    const rate = rates[cat] ?? rates.UTILITY;
+    const brl = v => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const set = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
+    set('dsp-metric-leads', qtd ? `${qtd}<small> de ${campaignEligibleCount} elegíveis</small>` : '0');
+    set('dsp-metric-cost', tpl ? `${brl(qtd * rate)}<small>${brl(rate)} por mensagem</small>` : '—');
+    set('dsp-metric-category', cat ? escapeHtml(CATEGORIA[cat] || cat) : '—');
+
+    const label = document.getElementById('dsp-start-label');
+    const btn = document.getElementById('btn-start-campaign');
+    if (label) label.textContent = qtd ? `Disparar para ${qtd} lead${qtd === 1 ? '' : 's'}` : 'Iniciar disparo';
+    if (btn && !btn.querySelector('.amicro-loader')) btn.disabled = !tpl || !qtd;
 }
 
 // === CUSTO DO DISPARO (tarifa por mensagem, por categoria de template) ===
@@ -9105,7 +9390,7 @@ async function dispatchTemplateCampaign(recipients, opts) {
     let successCount = 0;
     let failCount = 0;
     let costTotal = 0;
-    if (costText) costText.innerText = 'Custo estimado: R$ 0,00';
+    if (costText) costText.innerText = 'Custo até agora: R$ 0,00';
 
     for (let i = 0; i < recipients.length; i++) {
         const lead = recipients[i];
@@ -9136,7 +9421,7 @@ async function dispatchTemplateCampaign(recipients, opts) {
                 success = true;
                 successCount++;
                 costTotal += costPerMessage;
-                if (costText) costText.innerText = 'Custo estimado: R$ ' + costTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                if (costText) costText.innerText = 'Custo até agora: R$ ' + costTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                 logBox.innerHTML += `<div style="color: var(--accent-success);">[OK] ${lead.nome} (${phone})</div>`;
             } else {
                 failCount++;
@@ -9273,7 +9558,11 @@ function renderCampaignTemplateSelect() {
         selectEl.innerHTML = '<option value="">Nenhum template aprovado ainda</option>';
         return;
     }
-    selectEl.innerHTML = approved.map(t => `<option value="${escapeHtml(t.name)}|${escapeHtml(t.language)}">${escapeHtml(t.name)} (${escapeHtml(t.language)})</option>`).join('');
+    const CATEGORIA = { MARKETING: 'Marketing', UTILITY: 'Utilidade', AUTHENTICATION: 'Autenticação' };
+    const current = selectEl.value;
+    selectEl.innerHTML = approved.map(t => `<option value="${escapeHtml(t.name)}|${escapeHtml(t.language)}">${escapeHtml(t.name.replace(/_/g, ' '))} · ${escapeHtml(CATEGORIA[t.category] || t.category || '')} (${escapeHtml(t.language)})</option>`).join('');
+    if ([...selectEl.options].some(o => o.value === current)) selectEl.value = current;
+    if (typeof updateDispatchSummary === 'function') updateDispatchSummary();
 }
 
 async function deleteWhatsappTemplate(name) {

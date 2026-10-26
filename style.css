@@ -5374,6 +5374,236 @@ select.form-control option,
     }
 }
 
+/* Novo disparo: formulário em seções (Mensagem / Destinatários / Quantidade)
+   e coluna de resumo (prévia + destinatários + custo) que vira progresso. */
+/* A view é uma coluna flex com rolagem: sem isso, conteúdo alto esmagava a
+   barra de abas (que tem overflow próprio e por isso podia encolher). */
+#view-campanhas > * { flex-shrink: 0; }
+#view-campanhas .dsp-form,
+#view-campanhas .dsp-side { display: flex; flex-direction: column; gap: 1.35rem; }
+#view-campanhas .dsp-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-main);
+}
+#view-campanhas .dsp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.95rem;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+#view-campanhas .dsp-section + .dsp-section {
+    padding-top: 1.2rem;
+    border-top: 1px solid color-mix(in srgb, var(--text-main) 8%, transparent);
+}
+#view-campanhas .dsp-section-title {
+    /* float + largura total tira a legend de cima da borda do fieldset
+       (senão a linha divisória "corta" ao lado do título) */
+    float: left;
+    width: 100%;
+    padding: 0;
+    margin-bottom: 0.1rem;
+    font-size: 0.86rem;
+    font-weight: 650;
+    color: var(--text-main);
+}
+#view-campanhas .dsp-section-title + * { clear: both; }
+#view-campanhas .utm-field label { font-size: 0.8rem; color: var(--text-muted); }
+/* altura automática: o "select { height: 2.25rem }" global cortava o texto */
+#view-campanhas .utm-field select,
+#view-campanhas .utm-field .dsp-qty-input { height: auto; min-height: 40px; line-height: 1.4; }
+#view-campanhas .utm-field .utm-hint { font-size: 0.75rem; line-height: 1.45; }
+#view-campanhas .dsp-optional {
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 99px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    background: color-mix(in srgb, var(--text-main) 7%, transparent);
+}
+#view-campanhas .dsp-two {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+#view-campanhas .utm-field select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Quantidade: controle deslizante + número exato */
+#view-campanhas .dsp-qty { display: flex; align-items: center; gap: 0.85rem; }
+#view-campanhas .dsp-qty input[type="range"] { flex: 1; accent-color: var(--accent-primary); cursor: pointer; }
+#view-campanhas .dsp-qty input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
+#view-campanhas .utm-field .dsp-qty-input {
+    width: 84px;
+    flex: none;
+    text-align: right;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+
+#view-campanhas .dsp-start {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    width: 100%;
+    min-height: 46px;
+    margin-top: 0.15rem;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent-primary);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.92rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    transition: filter 0.15s, transform 0.08s, opacity 0.15s;
+}
+#view-campanhas .dsp-start:hover { filter: brightness(1.08); }
+#view-campanhas .dsp-start:active { transform: scale(0.99); }
+#view-campanhas .dsp-start:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; filter: none; transform: none; }
+#view-campanhas .dsp-start:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+
+/* Prévia da mensagem */
+#view-campanhas .dsp-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 1rem;
+    border-radius: 12px;
+    background: var(--bg-main);
+    border: 1px solid color-mix(in srgb, var(--text-main) 8%, transparent);
+}
+#view-campanhas .dsp-bubble {
+    max-width: 88%;
+    padding: 0.65rem 0.85rem;
+    border-radius: 4px 14px 14px 14px;
+    font-size: 0.86rem;
+    line-height: 1.5;
+    color: var(--text-main);
+    background: color-mix(in srgb, var(--accent-success) 14%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--accent-success) 22%, transparent);
+}
+#view-campanhas .dsp-bubble strong { display: block; margin-bottom: 0.25rem; }
+#view-campanhas .dsp-bubble.is-empty { background: transparent; border-style: dashed; border-color: color-mix(in srgb, var(--text-main) 14%, transparent); color: var(--text-muted); }
+#view-campanhas .dsp-var { text-decoration: underline dotted; text-underline-offset: 3px; color: var(--accent-info); }
+#view-campanhas .dsp-bubble-buttons { width: 88%; display: flex; flex-direction: column; gap: 4px; }
+#view-campanhas .dsp-bubble-buttons:empty { display: none; }
+#view-campanhas .dsp-bubble-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.5rem;
+    border-radius: 10px;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--accent-info);
+    background: color-mix(in srgb, var(--accent-success) 14%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--accent-success) 22%, transparent);
+}
+
+/* Números do resumo */
+#view-campanhas .dsp-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin: 0;
+}
+#view-campanhas .dsp-metric {
+    min-width: 0;
+    padding: 0.8rem 0.9rem;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--text-main) 3.5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-main) 7%, transparent);
+}
+#view-campanhas .dsp-metric dt { font-size: 0.75rem; color: var(--text-muted); }
+#view-campanhas .dsp-metric dd {
+    margin: 0.25rem 0 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#view-campanhas .dsp-metric dd small {
+    display: block;
+    margin-top: 0.1rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* Progresso */
+#view-campanhas .dsp-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    flex: 1;
+    min-height: 0;
+    padding-top: 1.2rem;
+    border-top: 1px solid color-mix(in srgb, var(--text-main) 8%, transparent);
+}
+#view-campanhas .dsp-progress-head,
+#view-campanhas .dsp-progress-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+#view-campanhas .dsp-progress-title { font-size: 0.86rem; font-weight: 650; color: var(--text-main); }
+#view-campanhas .dsp-status { font-weight: 600; color: var(--text-muted); text-align: right; }
+#view-campanhas .dsp-bar {
+    height: 8px;
+    border-radius: 99px;
+    overflow: hidden;
+    background: var(--bg-main);
+    border: 1px solid color-mix(in srgb, var(--text-main) 8%, transparent);
+}
+#view-campanhas .dsp-bar-fill {
+    width: 100%;
+    height: 100%;
+    transform: scaleX(0);
+    transform-origin: left center;
+    background: var(--accent-success);
+    transition: transform 0.3s ease-out;
+}
+#view-campanhas .dsp-log {
+    flex: 1;
+    min-height: 120px;
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 10px;
+    background: var(--bg-main);
+    border: 1px solid color-mix(in srgb, var(--text-main) 8%, transparent);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+@media (max-width: 560px) {
+    #view-campanhas .dsp-metrics { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+    #view-campanhas .dsp-bar-fill, #view-campanhas .dsp-start { transition: none; }
+}
+
 .utm-kpi-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
