@@ -58,20 +58,26 @@ self.addEventListener('push', (event) => {
             icon: '/favicon.png',
             badge: '/favicon.png',
             tag: data.phone || undefined, // mesma origem substitui a notificação anterior, não empilha
+            renotify: !!data.phone,       // ...mas toca/vibra de novo a cada mensagem nova do lead
             data: { phone: data.phone || null }
         })
     );
 });
 
-// Clicar na notificação: foca uma aba já aberta do CRM, ou abre uma nova.
+// Clicar na notificação: foca uma aba já aberta do CRM (e pede pra ela abrir a
+// conversa do lead), ou abre uma nova já na conversa (?open_chat= do initApp).
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
+    const phone = event.notification.data && event.notification.data.phone;
     event.waitUntil(
         self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
             for (const client of list) {
-                if ('focus' in client) return client.focus();
+                if ('focus' in client) {
+                    if (phone) client.postMessage({ type: 'open-chat', phone });
+                    return client.focus();
+                }
             }
-            if (self.clients.openWindow) return self.clients.openWindow('/');
+            if (self.clients.openWindow) return self.clients.openWindow(phone ? `/?open_chat=${encodeURIComponent(phone)}` : '/');
         })
     );
 });

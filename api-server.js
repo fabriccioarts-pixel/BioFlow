@@ -500,7 +500,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                             'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                             [`lead-${newLeadId}`, notifMsg]
                         );
-                        sendPushToAll('Novo lead', notifMsg).catch(() => {});
+                        sendPushToAll(`🌱 Novo lead: ${leadName}`, pushPreviewText(msg_body), { phone: from }).catch(() => {});
                     } catch (e) {
                         console.error('Falha ao registrar notificação de novo lead:', e.message);
                     }
@@ -574,6 +574,13 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                     if (!handledByFlow) {
                         await handleWhatsappAiAutoReply(resolvedLeadId, from, msg_id, msgTimestamp).catch(e => console.error('Erro no agente de IA:', e));
                     }
+                }
+
+                // Clique no botão de um template: manda a mensagem que o atendente
+                // deixou pronta no envio, ou — no template de retomada — a IA responde
+                // na hora o que tinha ficado pendente na conversa.
+                if (msg_type === 'button' && quoted_id && resolvedLeadId) {
+                    await handleTemplateButtonClick(resolvedLeadId, from, msg_id, msgTimestamp, quoted_id).catch(e => console.error('Erro na resposta ao clique do template:', e));
                 }
             } catch(e) {
                 console.error("Erro ao processar webhook no DB:", e);
@@ -1063,6 +1070,16 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 await queryD1(
                     'INSERT INTO wa_template_sends (phone, template_name) VALUES (?, ?)',
                     [finalTo, templateName]
+                );
+            }
+
+            // Mensagem escrita no modal "Enviar Template" pra sair sozinha quando o
+            // lead tocar no botão desse template (ver handleTemplateButtonClick).
+            const clickReply = isTemplate && typeof req.body.clickReplyText === 'string' ? req.body.clickReplyText.trim() : '';
+            if (clickReply) {
+                await queryD1(
+                    'INSERT OR REPLACE INTO wa_template_click_replies (template_msg_id, phone, text, created_by) VALUES (?, ?, ?, ?)',
+                    [msg_id, finalTo, clickReply.slice(0, 4000), sentBy]
                 );
             }
         } catch(e) {
@@ -2012,26 +2029,62 @@ app.post('/api/ai-media-test', async (req, res) => {
 // hoje e que horas são — sem isso ela só inferia por conta própria e chegou a
 // oferecer "quinta ou sexta" (sendo que HOJE já era quinta) e "hoje à tarde"
 // faltando 17 minutos pra fechar o expediente, sem perceber nenhum dos dois.
-// Usa CLINICA_FECHAMENTO_MIN (definida acima, no bloco da agenda) como a
-// mesma fonte de horário de funcionamento — evitando duas verdades diferentes
-// sobre quando a clínica fecha.
-function getNowContextForPrompt() {
+// O horário de cada dia vem do "Horário de atendimento" configurado na tela do
+// Agente de IA (getHorarioAtendimento) — a agenda continua com as próprias
+// constantes CLINICA_*_MIN, que não mudam por aqui.
+function getNowContextForPrompt(horario) {
     const now = new Date();
     const fmt = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
     });
     const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]));
     const minutosAgora = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
-    const minutosAteFechar = CLINICA_FECHAMENTO_MIN - minutosAgora;
+    const dow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).getDay();
+    const hoje = horario[dow];
 
     let avisoHorario = '';
-    if (minutosAteFechar <= 60) {
-        avisoHorario = minutosAteFechar <= 0
-            ? ' O expediente de hoje já encerrou — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia útil.'
-            : ` Faltam só ${minutosAteFechar} minutos pra fechar o expediente de hoje — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia útil.`;
+    if (!hoje.aberto) {
+        avisoHorario = ' A clínica não abre hoje — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia de atendimento.';
+    } else {
+        const minutosAteFechar = horarioToMin(hoje.fecha) - minutosAgora;
+        if (minutosAteFechar <= 60) {
+            avisoHorario = minutosAteFechar <= 0
+                ? ' O expediente de hoje já encerrou — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia de atendimento.'
+                : ` Faltam só ${minutosAteFechar} minutos pra fechar o expediente de hoje — NÃO ofereça "hoje" como opção de horário, pule direto pro próximo dia de atendimento.`;
+        }
     }
 
-    return `\n\n[AGORA] Hoje é ${parts.weekday}, ${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute} (horário de Brasília).${avisoHorario} Quando mencionar um dia da semana que é HOJE, deixe isso explícito ("hoje" ou "ainda hoje") — nunca cite o nome do dia sozinho nesse caso, senão o paciente pode entender como uma data futura.`;
+    const linhasHorario = [1, 2, 3, 4, 5, 6, 0]
+        .map(d => `- ${DIAS_SEMANA_NOME[d]}: ${horario[d].aberto ? `${horario[d].abre} às ${horario[d].fecha}` : 'fechado'}`)
+        .join('\n');
+
+    return `\n\n[AGORA] Hoje é ${parts.weekday}, ${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute} (horário de Brasília).${avisoHorario} Quando mencionar um dia da semana que é HOJE, deixe isso explícito ("hoje" ou "ainda hoje") — nunca cite o nome do dia sozinho nesse caso, senão o paciente pode entender como uma data futura.`
+        + `\n\n[HORÁRIO DE ATENDIMENTO] Horário oficial e atualizado — se o contexto acima citar outro horário, vale este:\n${linhasHorario}`;
+}
+
+// Horário de atendimento por dia da semana (índice 0=domingo ... 6=sábado),
+// editável na tela do Agente de IA. Salvo em crm_settings ('horario_atendimento').
+const DIAS_SEMANA_NOME = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+const HORARIO_ATENDIMENTO_DEFAULT = [
+    { aberto: false, abre: '08:00', fecha: '12:00' },
+    { aberto: true,  abre: '08:00', fecha: '18:00' },
+    { aberto: true,  abre: '08:00', fecha: '18:00' },
+    { aberto: true,  abre: '08:00', fecha: '18:00' },
+    { aberto: true,  abre: '08:00', fecha: '18:00' },
+    { aberto: true,  abre: '08:00', fecha: '18:00' },
+    { aberto: true,  abre: '08:00', fecha: '12:00' },
+];
+function horarioToMin(str) {
+    const [h, m] = String(str || '').split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+}
+async function getHorarioAtendimento() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'horario_atendimento'");
+        const saved = rows && rows[0] && rows[0].value ? JSON.parse(rows[0].value) : null;
+        if (Array.isArray(saved) && saved.length === 7) return saved;
+    } catch (e) {}
+    return HORARIO_ATENDIMENTO_DEFAULT.map(d => ({ ...d }));
 }
 
 // Devolve { text, mediaId } — mediaId só vem preenchido quando o agente usou a
@@ -2045,7 +2098,7 @@ async function callGeminiForWhatsappReply(phone) {
 
     const history = await getWhatsappAiHistory(phone);
     const context = await getWhatsappAiContext();
-    const nowContext = getNowContextForPrompt();
+    const nowContext = getNowContextForPrompt(await getHorarioAtendimento());
     const adContext = await getAdContextForPhone(phone);
     const mode = await getWhatsappAiMode();
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
@@ -2621,6 +2674,138 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         console.error('Erro no agente de IA do WhatsApp:', e);
     }
 }
+
+// ==========================================
+// RETOMADA DE CONVERSA (janela de 24h fechada)
+// ==========================================
+// Quando a conversa ficou sem resposta até a janela fechar, a equipe manda o
+// template de retomada (padrão "retomar_conversa": "...posso continuar seu
+// atendimento?" + botão "Sim, pode continuar"). O clique reabre a janela, e
+// aqui a IA manda UMA mensagem livre retomando exatamente o que tinha ficado
+// pendente — a parte personalizada fica fora do template, que só serve pra
+// conseguir o clique. Não mexe em ai_enabled: lead qualificado continua com a
+// equipe depois disso, lead com IA ligada segue no fluxo normal dela.
+// Configurável na tela do Agente de IA (crm_settings 'retomada_config').
+const RETOMADA_DEFAULT = { ativo: true, template_name: 'retomar_conversa', instrucoes: '' };
+async function getRetomadaConfig() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'retomada_config'");
+        if (rows && rows[0] && rows[0].value) return Object.assign({}, RETOMADA_DEFAULT, JSON.parse(rows[0].value));
+    } catch (e) {}
+    return Object.assign({}, RETOMADA_DEFAULT);
+}
+
+// Corpo da regra de retomada, comum à resposta na hora do clique e ao
+// rascunho gerado no modal "Enviar Template" — só a introdução muda.
+const WHATSAPP_AI_RETOMADA_TASK = `
+Sua tarefa é escrever UMA mensagem curta que retoma exatamente de onde a conversa parou:
+- Ache a última pergunta ou pedido do paciente que ficou sem resposta e responda usando só as informações do contexto acima.
+- Se ele estava pronto pra agendar/fechar, retome isso propondo o próximo passo (ex.: perguntar o melhor dia), sem prometer horário livre na agenda.
+- Preço: só informe se estiver documentado como autorizado no contexto acima. Se a resposta depender de algo que não está no contexto (preço não autorizado, disponibilidade de agenda, dúvida médica), diga que vai confirmar com a equipe e já retorna — sem inventar.
+- NÃO peça desculpas pela demora, NÃO explique por que ficou sem resposta, NÃO cumprimente como se fosse a primeira conversa, NÃO agradeça pelo clique no botão.
+- Nunca diga que é IA/robô/sistema. Nunca responda a palavra ${WHATSAPP_AI_QUALIFIED_TOKEN}.
+
+FORMATO: uma única mensagem de no máximo 3 frases curtas, como no WhatsApp (sem listas, sem títulos), terminando com no máximo UMA pergunta que leve ao próximo passo.`;
+
+const WHATSAPP_AI_RETOMADA_RULE = `
+
+REGRA DE MODO — RETOMADA DE CONVERSA:
+Esta conversa ficou parada porque ninguém da equipe respondeu a tempo. A última mensagem nossa foi um aviso perguntando se podia continuar o atendimento, e o paciente acabou de tocar em "Sim, pode continuar".` + WHATSAPP_AI_RETOMADA_TASK;
+
+function buildRetomadaDraftRule(templateText, buttonText) {
+    return `
+
+REGRA DE MODO — RASCUNHO DE RETOMADA:
+Esta conversa ficou parada e a janela do WhatsApp fechou. Agora vamos mandar ao paciente o aviso abaixo; quando ele tocar no botão "${buttonText || 'Sim'}", a mensagem que você escrever agora é enviada automaticamente, logo depois do clique.
+AVISO QUE VAI SER ENVIADO: "${templateText || 'Posso continuar seu atendimento?'}"` + WHATSAPP_AI_RETOMADA_TASK;
+}
+
+// Monta o prompt da retomada (contexto + horário + anúncio + regra + instruções
+// extras da tela do Agente de IA) e devolve o texto gerado ('' se nada útil).
+async function generateRetomadaText(phone, rule) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
+    const cfg = await getRetomadaConfig();
+    // Histórico maior que o da IA normal: o que ficou pendente pode estar bem antes do template.
+    const history = await getWhatsappAiHistory(phone, 20);
+    if (!history.length) return '';
+    const instrucoes = String(cfg.instrucoes || '').trim();
+    const systemPrompt = (await getWhatsappAiContext()) + getNowContextForPrompt(await getHorarioAtendimento()) + (await getAdContextForPhone(phone)) + rule
+        + (instrucoes ? `\n\nINSTRUÇÕES EXTRAS DA EQUIPE PARA A RETOMADA:\n${instrucoes}` : '');
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt }] }, contents: history })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error ? j.error.message : 'Erro desconhecido na API do Gemini');
+    const text = normalizeAiReply((j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim());
+    return (!text || isQualifiedSilenceToken(text)) ? '' : text;
+}
+
+// Lead tocou no botão de um template. Duas origens possíveis pra resposta:
+// 1) o atendente deixou a mensagem pronta no modal "Enviar Template"
+//    (wa_template_click_replies) — vai exatamente o que ele escreveu;
+// 2) senão, se for o template de retomada configurado, a IA escreve na hora.
+// Os outros templates com botão (campanhas) seguem como antes.
+async function handleTemplateButtonClick(leadId, phone, clickWamid, clickTs, quotedId) {
+    const pendingRows = await queryD1('SELECT text, created_by FROM wa_template_click_replies WHERE template_msg_id = ? AND sent_at IS NULL', [quotedId]);
+    const pending = pendingRows && pendingRows[0];
+
+    const cfg = await getRetomadaConfig();
+    let isRetomada = false;
+    if (!pending && cfg.ativo && cfg.template_name) {
+        // Compara com os dois formatos que renderTemplateForHistory grava no histórico.
+        const quoted = await queryD1("SELECT message FROM wa_messages WHERE id = ? AND direction = 'out' LIMIT 1", [quotedId]);
+        const quotedMsg = (quoted && quoted[0] && quoted[0].message) || '';
+        isRetomada = quotedMsg.includes(`_Template: ${cfg.template_name}_`) || quotedMsg.includes(`Template enviado: *${cfg.template_name}*`);
+    }
+    if (!pending && !isRetomada) return;
+
+    // Uma resposta por template enviado — tocar no botão duas vezes não gera duas respostas.
+    const claim = await queryD1Meta('INSERT OR IGNORE INTO ai_reply_claims (wamid) VALUES (?)', [`retomada-${quotedId}`]);
+    if (claim && claim.meta && !claim.meta.changes) return;
+
+    const leadRows = await queryD1('SELECT campaign_opt_out FROM leads WHERE id = ?', [leadId]);
+    if (!leadRows || !leadRows[0] || Number(leadRows[0].campaign_opt_out) === 1) return;
+
+    if (pending) {
+        if (await hasOutboundSince(phone, clickTs)) return;
+        await sendWhatsappTextInternal(phone, pending.text, pending.created_by || 'template');
+        await queryD1('UPDATE wa_template_click_replies SET sent_at = CURRENT_TIMESTAMP WHERE template_msg_id = ?', [quotedId]);
+        logLeadEvent(leadId, 'clique_template', pending.created_by || null, 'Mensagem automática enviada após o clique no template');
+        return;
+    }
+
+    const globalSetting = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_enabled'");
+    if (globalSetting && globalSetting[0] && globalSetting[0].value !== '1') return;
+
+    await sendTypingIndicator(clickWamid);
+    const text = await generateRetomadaText(phone, WHATSAPP_AI_RETOMADA_RULE);
+    if (!text) return;
+
+    // Atendente respondeu (ou o lead mandou outra mensagem) enquanto a IA escrevia — quem chegou primeiro fica.
+    if (await aiReplySupersededBy(phone, clickWamid, clickTs)) return;
+
+    await sendWhatsappTextInternal(phone, text, 'ia');
+    logLeadEvent(leadId, 'retomada_ia', 'ia', 'Lead aceitou retomar a conversa');
+}
+
+// Rascunho da mensagem pós-clique, gerado pela IA no modal "Enviar Template" —
+// o atendente revisa/edita antes de enviar o template. Não envia nada.
+app.post('/api/whatsapp/click-reply-draft', async (req, res) => {
+    try {
+        const { phone, templateText, buttonText } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'Telefone é obrigatório.' });
+        const rule = buildRetomadaDraftRule(String(templateText || '').slice(0, 1000), String(buttonText || '').slice(0, 60));
+        const text = await generateRetomadaText(phone, rule);
+        if (!text) return res.status(422).json({ error: 'A IA não conseguiu escrever uma mensagem para essa conversa. Escreva manualmente.' });
+        res.json({ text });
+    } catch (e) {
+        console.error('Erro ao gerar rascunho pós-clique:', e);
+        res.status(502).json({ error: e.message || 'Falha ao gerar a mensagem.' });
+    }
+});
 
 // 3.8. Excluir Mensagem do WhatsApp (Localmente e na Meta se for enviada)
 app.post('/api/whatsapp/delete-message', async (req, res) => {
@@ -3480,6 +3665,17 @@ queryD1(`CREATE TABLE IF NOT EXISTS ai_reply_claims (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
 
+// Mensagem que o atendente deixou pronta no envio de um template, pra sair
+// sozinha quando o lead tocar no botão — ver handleTemplateButtonClick.
+queryD1(`CREATE TABLE IF NOT EXISTS wa_template_click_replies (
+    template_msg_id TEXT PRIMARY KEY,
+    phone TEXT,
+    text TEXT NOT NULL,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sent_at DATETIME
+)`).catch(() => {});
+
 // Web Push: inscrições de notificação nativa (Windows/Android) por dispositivo
 // logado. Uma linha por par (usuário, navegador/dispositivo) — a mesma pessoa
 // pode ter várias (celular + PC).
@@ -3530,14 +3726,20 @@ if (pushEnabled) {
 }
 
 // Manda uma notificação nativa (Windows/Android/etc.) pra TODOS os
-// dispositivos inscritos. Nunca lança — falha em silêncio (a notificação
-// dentro do app, via crm_notifications, já cobre o essencial). Inscrições
-// mortas (endpoint expirado/revogado) são removidas automaticamente.
-async function sendPushToAll(title, body, extra = {}) {
+// dispositivos inscritos — ou só pros de `usernames`, se passado (cai pra
+// todos se nenhum deles tiver aparelho inscrito, pra não perder o aviso).
+// Nunca lança — falha em silêncio (a notificação dentro do app, via
+// crm_notifications, já cobre o essencial). Inscrições mortas (endpoint
+// expirado/revogado) são removidas automaticamente.
+async function sendPushToAll(title, body, extra = {}, usernames = null) {
     if (!pushEnabled) return;
     try {
-        const subs = await queryD1('SELECT id, endpoint, p256dh, auth FROM crm_push_subscriptions');
+        let subs = await queryD1('SELECT id, username, endpoint, p256dh, auth FROM crm_push_subscriptions');
         if (!subs || !subs.length) return;
+        if (Array.isArray(usernames) && usernames.length) {
+            const alvo = subs.filter(s => usernames.includes(s.username));
+            if (alvo.length) subs = alvo;
+        }
         const payload = JSON.stringify({ title, body, ...extra });
         await Promise.all(subs.map(async (s) => {
             try {
@@ -3557,6 +3759,22 @@ async function sendPushToAll(title, body, extra = {}) {
     } catch (e) {
         console.error('[push] sendPushToAll falhou:', e.message);
     }
+}
+
+// Texto da mensagem do lead pra notificação: mídia vira "📷 Foto", "🎧 Áudio"
+// etc. (com a legenda, se tiver) em vez do caminho interno do arquivo.
+function pushPreviewText(texto) {
+    const raw = String(texto || '');
+    const media = raw.match(/\/api\/whatsapp\/media\/\d+\.(\w+)/);
+    if (media) {
+        const ext = media[1].toLowerCase();
+        const tipo = ['jpg', 'jpeg', 'png', 'webp'].includes(ext) ? '📷 Foto'
+            : ['ogg', 'oga', 'opus', 'mp3', 'm4a', 'amr'].includes(ext) ? '🎧 Áudio'
+            : ['mp4', '3gp'].includes(ext) ? '🎥 Vídeo' : '📎 Arquivo';
+        const cap = (raw.match(/\[CAPTION:(.*?)\]/s) || [])[1];
+        return cap ? `${tipo}: ${cap.trim().slice(0, 140)}` : tipo;
+    }
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
 app.get('/api/push/vapid-public-key', (req, res) => res.json({ publicKey: VAPID_PUBLIC || null }));
@@ -4695,6 +4913,54 @@ app.put('/api/settings/whatsapp-ai-context', async (req, res) => {
         console.error('Erro ao salvar contexto da IA:', e);
         res.status(500).json({ error: 'Erro interno ao salvar contexto.' });
     }
+});
+
+// Horário de atendimento por dia da semana — usado pela IA (ver getNowContextForPrompt).
+app.get('/api/settings/horario-atendimento', async (req, res) => {
+    try {
+        res.json({ horario: await getHorarioAtendimento() });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/settings/horario-atendimento', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const h = req.body?.horario;
+        if (!Array.isArray(h) || h.length !== 7) return res.status(400).json({ error: 'Envie os 7 dias da semana.' });
+        const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+        const clean = h.map((d, i) => {
+            const aberto = !!(d && d.aberto);
+            const abre = hhmm.test(d?.abre) ? d.abre : HORARIO_ATENDIMENTO_DEFAULT[i].abre;
+            const fecha = hhmm.test(d?.fecha) ? d.fecha : HORARIO_ATENDIMENTO_DEFAULT[i].fecha;
+            return { aberto, abre, fecha };
+        });
+        const invalido = clean.findIndex(d => d.aberto && horarioToMin(d.abre) >= horarioToMin(d.fecha));
+        if (invalido !== -1) return res.status(400).json({ error: `${DIAS_SEMANA_NOME[invalido]}: o horário de abertura precisa ser antes do fechamento.` });
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('horario_atendimento', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        res.json({ success: true, horario: clean });
+    } catch (e) { console.error('Erro ao salvar horário de atendimento:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// Retomada após a janela de 24h (ver handleTemplateButtonClick).
+app.get('/api/settings/retomada', async (req, res) => {
+    try {
+        res.json({ config: await getRetomadaConfig() });
+    } catch (e) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+app.put('/api/settings/retomada', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const b = req.body || {};
+        const cur = await getRetomadaConfig();
+        const clean = {
+            ativo: b.ativo !== undefined ? !!b.ativo : cur.ativo,
+            template_name: b.template_name !== undefined ? String(b.template_name || '').trim().slice(0, 512) : cur.template_name,
+            instrucoes: b.instrucoes !== undefined ? String(b.instrucoes || '').slice(0, 2000) : cur.instrucoes,
+        };
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('retomada_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
+        res.json({ success: true, config: clean });
+    } catch (e) { console.error('Erro ao salvar retomada:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
 // Etiquetas de lead (compartilhadas entre todos os atendentes) — antes viviam
@@ -6044,6 +6310,11 @@ async function notifyLeadReply(leadId, phone, texto) {
             count = COALESCE(crm_notifications.count, 1) + 1`,
         [`reply-${leadId}`, message, phone, String(leadId), JSON.stringify({ nome, preview, responsavel })]
     );
+
+    // Aviso nativo no Windows/celular com a mensagem do lead. Lead com
+    // responsável avisa só os aparelhos dele; sem responsável, todo mundo.
+    sendPushToAll(`💬 ${nome}`, pushPreviewText(texto) + (responsavel ? '' : ' · sem responsável'),
+        { phone }, lead.owner_id ? [lead.owner_id] : null).catch(() => {});
 }
 
 app.post('/api/clear-notif', async (req, res) => {
