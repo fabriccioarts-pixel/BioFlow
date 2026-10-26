@@ -1457,7 +1457,8 @@ const WHATSAPP_AI_MEDIA_RULE = `
 REGRA DE IMAGEM DE EXEMPLO:
 Você tem a ferramenta buscar_imagem_resultado, que busca uma foto de exemplo/resultado de um procedimento na biblioteca da clínica.
 - Só use depois que o paciente já demonstrou interesse CONCRETO num procedimento específico (não na primeira ou segunda mensagem, não só por ele ter perguntado "o que vocês fazem").
-- Ao usar, inclua no "procedimento" da busca qualquer detalhe que o paciente tenha dado (região do corpo/rosto, queixa) além do nome do procedimento — melhora muito a chance de achar a imagem certa entre várias parecidas.
+- Ao usar, em "procedimento" vai SÓ o nome do procedimento que está sendo conversado (ex.: "limpeza de pele") e em "detalhes" a região/queixa que o paciente deu (ex.: "queixo, cravos") — os detalhes ajudam a escolher a imagem certa entre várias do mesmo procedimento.
+- A imagem tem que ser DO MESMO procedimento da conversa. Nunca busque nem mande foto de outro procedimento só porque a região do corpo é parecida (ex.: cravos no queixo é limpeza de pele, não perfiloplastia).
 - Se a busca não encontrar nada (encontrada: false), NÃO invente nem diga que vai mandar uma imagem — só continue a conversa normalmente, sem mencionar a tentativa.
 - Nunca use mais de uma vez na mesma conversa a não ser que o paciente pergunte por outro procedimento diferente.
 - Não descreva a imagem em texto nem coloque um placeholder tipo "[imagem]" na sua resposta — o sistema anexa a foto de verdade logo depois da sua mensagem. Só fale naturalmente que vai mandar um exemplo.`;
@@ -1915,23 +1916,43 @@ function tokenizeProcText(s) {
     return normalizeProcText(s).split(/[^a-z0-9]+/).filter(t => t && !MEDIA_MATCH_STOPWORDS.has(t));
 }
 
-// Casa o procedimento pedido com um arquivo da biblioteca por SOBREPOSIÇÃO DE
-// PALAVRAS (score = quantos termos da busca aparecem no nome/legenda), não por
-// igualdade exata ganhando na hora — com várias imagens do mesmo procedimento
-// (ex.: "perfiloplastia", "perfiloplastia mento", "perfiloplastia paciente
-// caso de queixo retraído"), igualdade exata sempre escolhia a mais genérica
-// e ignorava um detalhe que o paciente deu (ex.: "queixo"), mesmo quando
-// existia uma imagem bem mais específica pra esse caso.
-async function matchMediaForProcedure(procedimentoPedido) {
+// Região do corpo/rosto e termos genéricos de pele: são DETALHE, nunca dizem
+// qual é o procedimento. Antes contavam igual ao nome — numa conversa de
+// limpeza de pele (sem foto na biblioteca), "queixo" casou sozinho com
+// "perfiloplastia paciente caso de queixo retraído" e a IA mandou foto de
+// perfiloplastia pra quem queria tirar cravos.
+const MEDIA_MATCH_REGION_WORDS = new Set([
+    'pele', 'rosto', 'face', 'facial', 'corpo', 'corporal', 'regiao', 'area', 'lado', 'perfil',
+    'queixo', 'mento', 'papada', 'nariz', 'boca', 'labio', 'labios', 'testa', 'olho', 'olhos', 'olheira', 'olheiras',
+    'bochecha', 'bochechas', 'mandibula', 'pescoco', 'colo', 'axila', 'axilas', 'virilha', 'perna', 'pernas',
+    'coxa', 'coxas', 'gluteo', 'gluteos', 'bumbum', 'barriga', 'abdomen', 'costas', 'braco', 'bracos',
+    'mao', 'maos', 'pe', 'pes', 'intima', 'buco'
+]);
+
+// Casa o procedimento pedido com um arquivo da biblioteca em duas camadas:
+// 1) o NOME do procedimento tem que bater (palavras de região não contam) —
+//    sem foto daquele procedimento, não manda nada;
+// 2) entre as fotos do mesmo procedimento, os detalhes (região, queixa)
+//    desempatam — com "perfiloplastia", "perfiloplastia mento" e
+//    "perfiloplastia paciente caso de queixo retraído", "queixo" escolhe a
+//    mais específica em vez da genérica.
+// `detalhes` é opcional; chamada antiga com tudo junto em `procedimentoPedido`
+// continua funcionando, porque as palavras de região são separadas aqui.
+async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
     const rows = await queryD1('SELECT id, nome, tipo, mime, thumb_base64, legenda_padrao FROM crm_media');
-    const alvoTokens = tokenizeProcText(procedimentoPedido);
-    if (!alvoTokens.length) return null;
+    const pedidoTokens = tokenizeProcText(procedimentoPedido);
+    const nomeTokens = pedidoTokens.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
+    const detalheTokens = [...new Set([...pedidoTokens.filter(t => MEDIA_MATCH_REGION_WORDS.has(t)), ...tokenizeProcText(detalhes)])];
+    if (!nomeTokens.length) return null;
+    const minimoNome = Math.max(1, Math.ceil(nomeTokens.length / 2));
 
     const candidatos = (rows || []).filter(m => m.tipo === 'image');
     let melhor = null, melhorScore = 0;
     for (const m of candidatos) {
-        const refTokens = new Set(tokenizeProcText(m.legenda_padrao || m.nome));
-        const score = alvoTokens.filter(t => refTokens.has(t)).length;
+        const refTokens = new Set(tokenizeProcText(`${m.nome || ''} ${m.legenda_padrao || ''}`));
+        const nomeHits = nomeTokens.filter(t => refTokens.has(t)).length;
+        if (nomeHits < minimoNome) continue;
+        const score = nomeHits * 100 + detalheTokens.filter(t => refTokens.has(t)).length;
         if (score > melhorScore) { melhor = m; melhorScore = score; }
     }
     if (!melhor) return null;
@@ -1944,7 +1965,8 @@ const MEDIA_TOOL_DECLARATION = {
     parameters: {
         type: 'OBJECT',
         properties: {
-            procedimento: { type: 'STRING', description: 'Nome do procedimento MAIS qualquer detalhe específico que o paciente tenha mencionado (região do corpo/rosto, queixa específica) — ex.: não "perfiloplastia" sozinho se o paciente falou de queixo, e sim "perfiloplastia queixo". Quanto mais palavras relevantes da conversa, melhor a busca encontra a imagem certa entre várias do mesmo procedimento.' }
+            procedimento: { type: 'STRING', description: 'SÓ o nome do procedimento que está sendo conversado, como aparece na lista de serviços — ex.: "limpeza de pele", "perfiloplastia", "depilação a laser". Sem região nem queixa aqui.' },
+            detalhes: { type: 'STRING', description: 'Opcional: região do corpo/rosto e queixa que o paciente mencionou — ex.: "queixo, cravos". Serve só pra escolher a foto mais parecida ENTRE as do mesmo procedimento.' }
         },
         required: ['procedimento']
     }
@@ -1984,7 +2006,7 @@ async function callGeminiWithMediaTool(systemPrompt, contents) {
 
     let midia = null, erro = null;
     try {
-        midia = await matchMediaForProcedure(fnCall.args.procedimento);
+        midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes);
     } catch (e) {
         erro = e.message;
     }
@@ -2134,7 +2156,7 @@ async function callGeminiForWhatsappReply(phone) {
     }
 
     let midia = null;
-    try { midia = await matchMediaForProcedure(fnCall.args.procedimento); } catch (e) { /* segue sem mídia */ }
+    try { midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes); } catch (e) { /* segue sem mídia */ }
 
     const contentsWithFnResult = [
         ...history,
@@ -8377,16 +8399,32 @@ app.get('/api/audiences', async (req, res) => {
     }
 });
 
+// Filtros extras do público (etapa, campanha, conjunto, etiqueta, último contato,
+// status...) — JSON montado na Base de Contatos. Coluna criada sob demanda: o
+// ALTER do boot não roda na Vercel.
+let _audienceFiltersColReady = false;
+async function ensureAudienceFiltersColumn() {
+    if (_audienceFiltersColReady) return;
+    try { await queryD1('ALTER TABLE lead_audiences ADD COLUMN filters TEXT'); } catch (e) {}
+    _audienceFiltersColReady = true;
+}
+
 app.post('/api/audiences', async (req, res) => {
-    const { name, owner_id, origem, date_start, date_end, has_schedule } = req.body;
+    const { name, owner_id, origem, date_start, date_end, has_schedule, filters } = req.body;
     if (!name || !name.trim()) {
         return res.status(400).json({ error: 'Nome do público é obrigatório.' });
     }
+    let filtersJson = null;
+    if (filters && typeof filters === 'object') {
+        filtersJson = JSON.stringify(filters);
+        if (filtersJson.length > 2000) return res.status(400).json({ error: 'Filtros demais para um público.' });
+    }
     try {
+        await ensureAudienceFiltersColumn();
         const id = Date.now().toString();
         await queryD1(
-            'INSERT INTO lead_audiences (id, name, owner_id, origem, date_start, date_end, has_schedule) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [id, name.trim(), owner_id || '', origem || '', date_start || '', date_end || '', has_schedule ? 1 : 0]
+            'INSERT INTO lead_audiences (id, name, owner_id, origem, date_start, date_end, has_schedule, filters) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, name.trim(), owner_id || '', origem || '', date_start || '', date_end || '', has_schedule ? 1 : 0, filtersJson]
         );
         res.status(201).json({ success: true, id });
     } catch (e) {
