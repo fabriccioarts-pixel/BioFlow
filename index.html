@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=30">
+    <link rel="stylesheet" href="style.css?v=31">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -1818,6 +1818,16 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
 
                 <div class="aix-block">
+                    <div class="aix-block-label">Retorno combinado</div>
+                    <p class="aix-block-help">Quando o paciente aceita ser chamado depois ("me chama mês que vem"), a IA
+                        programa a mensagem na data combinada. Ela aparece no chat do paciente, onde a equipe pode editar ou
+                        cancelar. Se na data o paciente não tiver falado nas últimas 24h, o WhatsApp só aceita template
+                        aprovado: este é o que vai no lugar do texto.</p>
+                    <label class="aix-field-label" for="whatsapp-ai-retorno-template">Template de reserva</label>
+                    <select id="whatsapp-ai-retorno-template" class="aix-input"></select>
+                </div>
+
+                <div class="aix-block">
                     <div class="aix-block-label">Horário de atendimento</div>
                     <p class="aix-block-help">Horário oficial que a IA usa para responder "até que horas?", não oferecer
                         "hoje" quando a clínica já fechou e dizer quando a equipe volta. Vale mais que qualquer horário
@@ -2737,6 +2747,32 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 oncontextmenu="midxOnGridCtx(event)"
                 ondragover="event.preventDefault(); this.classList.add('is-drop');"
                 ondragleave="this.classList.remove('is-drop');" ondrop="midxDrop(event)"></div>
+        </div>
+    </div>
+
+    <!-- Programar mensagem (chat) -->
+    <div class="modal-overlay" id="modalScheduleMsg">
+        <div class="modal" style="max-width: 520px;">
+            <h2><i class="fa-regular fa-clock" style="color: var(--accent-primary);"></i> <span id="sched-title">Programar mensagem</span></h2>
+            <p class="modal-subtitle">Para <strong id="sched-para">—</strong></p>
+            <label class="sched-label" for="sched-texto">Mensagem</label>
+            <textarea id="sched-texto" class="sched-input" rows="4" placeholder="Oi! Como combinamos, tô passando pra gente marcar seu horário 😊"></textarea>
+            <label class="sched-label" for="sched-when">Enviar em</label>
+            <input type="datetime-local" id="sched-when" class="sched-input">
+            <label class="sched-label" for="sched-template">Template de reserva</label>
+            <select id="sched-template" class="sched-input" onchange="schedShowTemplatePreview()"></select>
+            <p class="sched-help">O WhatsApp só deixa mandar texto livre até 24h depois da última mensagem do paciente. Se na hora
+                a janela estiver fechada, vai este template no lugar do texto.</p>
+            <p class="sched-template-preview" id="sched-template-preview"></p>
+            <label class="sched-check">
+                <input type="checkbox" id="sched-cancelar" checked>
+                <span>Cancelar se o paciente voltar a falar antes (respostas nas 6h seguintes não contam)</span>
+            </label>
+            <div class="modal-separator"></div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Fechar</button>
+                <button class="btn-save" id="sched-save-btn" onclick="saveScheduledMsg()"><i class="fa-regular fa-clock"></i> Programar</button>
+            </div>
         </div>
     </div>
 
@@ -3894,6 +3930,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <!-- As mensagens serão injetadas aqui -->
             </div>
 
+            <!-- Mensagens programadas desta conversa (equipe ou IA) -->
+            <div id="chat-scheduled-strip" class="sched-strip" style="display: none;"></div>
+
             <!-- Input Footer -->
             <div id="chat-active-input"
                 style="display: none; padding: 1.2rem 1.5rem; background: var(--bg-card); border-top: 1px solid var(--border-color); align-items: flex-end; gap: 0.8rem;">
@@ -4000,6 +4039,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <!-- Botões Redondos de Ação à Direita -->
                 <div style="display: flex; gap: 0.5rem; flex-shrink: 0; align-items: center;">
 
+                    <button id="btn-chat-schedule" title="Programar mensagem" onclick="openScheduleMsgModal()" class="chat-input-icon-btn">
+                        <i class="fa-regular fa-clock"></i>
+                    </button>
                     <button id="btn-copilot-draft" title="Escrever resposta com IA" onclick="copilotDraftReply()" class="chat-input-icon-btn copilot-icon-btn">
                         <i class="fa-solid fa-wand-magic-sparkles"></i>
                     </button>
@@ -5224,8 +5266,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- Scripts da Aplicação -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
-    <script src="wa_chat_logic.js?v=27"></script>
-    <script src="app.js?v=31"></script>
+    <script src="wa_chat_logic.js?v=29"></script>
+    <script src="app.js?v=32"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->

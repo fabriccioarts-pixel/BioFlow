@@ -9067,8 +9067,8 @@ function readHorarioAtendimento() {
 
 // Select do template de retomada: lista os templates da Meta com o status ao
 // lado, e mantém o salvo na lista mesmo se a Meta não devolver (ex.: excluído).
-async function renderRetomadaTemplateSelect(selected) {
-    const sel = document.getElementById('retomada-template');
+async function renderRetomadaTemplateSelect(selected, selectId = 'retomada-template') {
+    const sel = document.getElementById(selectId);
     if (!sel) return;
     sel.innerHTML = `<option value="${escapeHtml(selected || '')}">${escapeHtml(selected || 'Carregando templates…')}</option>`;
     try {
@@ -9113,6 +9113,7 @@ async function openWhatsappAiSettingsModal() {
         if (visionEl) visionEl.checked = toggleJson.vision !== false;
         if (audioEl) audioEl.checked = toggleJson.audio !== false;
         if (mediaEl) mediaEl.checked = !!toggleJson.media;            // desliga por padrão
+        renderRetomadaTemplateSelect(toggleJson.retornoTemplate || '', 'whatsapp-ai-retorno-template');
 
         try {
             const oppsJson = await oppsRes.json();
@@ -9148,6 +9149,7 @@ async function saveWhatsappAiSettings() {
     const vision = !!(document.getElementById('whatsapp-ai-vision') || {}).checked;
     const audio = !!(document.getElementById('whatsapp-ai-audio') || {}).checked;
     const media = !!(document.getElementById('whatsapp-ai-media') || {}).checked;
+    const retornoTemplate = (document.getElementById('whatsapp-ai-retorno-template') || {}).value || '';
     const oppsAtivo = !!(document.getElementById('opps-ativo') || {}).checked;
     const oppsIntervalo = parseInt((document.getElementById('opps-intervalo') || {}).value, 10) || 8;
     const oppsPalavras = (document.getElementById('opps-palavras') || {}).value || '';
@@ -9162,7 +9164,7 @@ async function saveWhatsappAiSettings() {
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio, media })
+                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio, media, retornoTemplate })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',

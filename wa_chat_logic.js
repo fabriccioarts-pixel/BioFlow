@@ -5232,6 +5232,9 @@ async function openChat(phone, name, silent = false) {
     phone = normalizedPhone;
 
     window.currentActiveChat = { phone, name };
+    // Programadas: na abertura e, durante o polling, no máximo 1x por minuto
+    // (a IA pode programar um retorno com a conversa aberta).
+    if (!silent || schedLastLoad.phone !== phone || Date.now() - schedLastLoad.at > 60000) loadScheduledMsgs(phone);
 
     if (!silent) {
         cancelReplyTo();
@@ -6464,3 +6467,163 @@ startGlobalChatCheck();
 
 // Primeira carga da presença assim que o script sobe (sem esperar os 6s).
 if (typeof refreshChatPresence === 'function') setTimeout(refreshChatPresence, 800);
+
+// ============================================================================
+// MENSAGENS PROGRAMADAS — programar pelo chat e ver/editar/cancelar as desta
+// conversa, inclusive as que a IA programou ao combinar um retorno.
+// ============================================================================
+let schedMsgs = [];
+let schedEditId = null;
+let schedTemplates = null;
+let schedLastLoad = { phone: null, at: 0 };
+
+function schedParse(sql) { return new Date(String(sql).replace(' ', 'T') + 'Z'); }
+function schedFmt(sql) {
+    return schedParse(sql).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function schedLocalInput(d) {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadScheduledMsgs(phone) {
+    schedLastLoad = { phone, at: Date.now() };
+    try {
+        const res = await fetch('/api/scheduled-msgs?phone=' + encodeURIComponent(phone));
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        if (!window.currentActiveChat || window.currentActiveChat.phone !== phone) return; // já trocou de conversa
+        schedMsgs = json.mensagens || [];
+    } catch (e) {
+        schedMsgs = [];
+    }
+    renderScheduledStrip();
+}
+
+function renderScheduledStrip() {
+    const strip = document.getElementById('chat-scheduled-strip');
+    if (!strip) return;
+    if (!schedMsgs.length) { strip.style.display = 'none'; strip.innerHTML = ''; return; }
+    strip.style.display = 'flex';
+    strip.innerHTML = schedMsgs.map(m => {
+        const falhou = m.status === 'falhou';
+        const quem = m.origem === 'ia' ? 'combinado pela IA' : 'por ' + (m.created_by || 'equipe');
+        return '<div class="sched-item' + (falhou ? ' is-failed' : '') + '">' +
+            '<i class="fa-regular ' + (falhou ? 'fa-circle-xmark' : 'fa-clock') + '"></i>' +
+            '<div class="sched-item-body">' +
+            '<div class="sched-item-when">' + (falhou ? 'Não saiu em ' : 'Programada para ') + escapeHtml(schedFmt(m.send_at)) +
+            ' <span>· ' + escapeHtml(quem) + '</span></div>' +
+            '<div class="sched-item-text">' + escapeHtml(falhou ? (m.erro || '') : m.texto) + '</div>' +
+            '</div>' +
+            '<button class="sched-item-btn" onclick="openScheduleMsgModal(\'' + m.id + '\')">' + (falhou ? 'Refazer' : 'Editar') + '</button>' +
+            '<button class="sched-item-btn is-danger" onclick="cancelScheduledMsg(\'' + m.id + '\')">Cancelar</button>' +
+            '</div>';
+    }).join('');
+}
+
+// Só templates que o envio interno sabe preencher: até 1 variável no corpo
+// (vai o primeiro nome) e sem cabeçalho de mídia.
+function schedTemplateUsavel(t) {
+    if (t.status !== 'APPROVED') return false;
+    const comps = t.components || [];
+    const body = comps.find(c => c.type === 'BODY');
+    const header = comps.find(c => c.type === 'HEADER');
+    const vars = ((body && body.text) || '').match(/\{\{[^}]+\}\}/g) || [];
+    return vars.length <= 1 && (!header || (String(header.format || 'TEXT').toUpperCase() === 'TEXT' && !/\{\{/.test(header.text || '')));
+}
+
+async function schedFillTemplates(selected) {
+    const sel = document.getElementById('sched-template');
+    if (!schedTemplates) {
+        sel.innerHTML = '<option value="">Carregando templates…</option>';
+        try {
+            const res = await fetch('/api/whatsapp/templates');
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error);
+            schedTemplates = (json.data || []).filter(schedTemplateUsavel);
+        } catch (e) {
+            sel.innerHTML = '<option value="">Não consegui carregar os templates</option>';
+            return;
+        }
+    }
+    const nomes = [...new Set(schedTemplates.map(t => t.name))];
+    if (!nomes.includes(selected)) selected = '';
+    sel.innerHTML = '<option value="">Nenhum (só sai se a janela de 24h estiver aberta)</option>' +
+        nomes.map(n => '<option value="' + escapeHtml(n) + '"' + (n === selected ? ' selected' : '') + '>' + escapeHtml(n) + '</option>').join('');
+    schedShowTemplatePreview();
+}
+
+function schedShowTemplatePreview() {
+    const name = document.getElementById('sched-template').value;
+    const t = (schedTemplates || []).find(x => x.name === name);
+    const body = t && (t.components || []).find(c => c.type === 'BODY');
+    document.getElementById('sched-template-preview').textContent = body ? body.text : '';
+}
+
+async function openScheduleMsgModal(id) {
+    if (!window.currentActiveChat) return;
+    schedEditId = id || null;
+    const m = id ? schedMsgs.find(x => x.id === id) : null;
+    const input = document.getElementById('chat-input-text');
+    document.getElementById('sched-texto').value = m ? m.texto : (input ? input.value.trim() : '');
+    let quando = m && m.status === 'agendada' ? schedParse(m.send_at) : null;
+    if (!quando) {
+        quando = new Date();
+        quando.setDate(quando.getDate() + 1);
+        quando.setHours(9, 30, 0, 0);
+    }
+    document.getElementById('sched-when').value = schedLocalInput(quando);
+    document.getElementById('sched-cancelar').checked = m ? !!m.cancelar_se_responder : true;
+    document.getElementById('sched-title').textContent = m ? 'Editar mensagem programada' : 'Programar mensagem';
+    document.getElementById('sched-para').textContent = window.currentActiveChat.name || window.currentActiveChat.phone;
+    document.getElementById('sched-save-btn').disabled = false;
+    document.getElementById('modalScheduleMsg').classList.add('active');
+    await schedFillTemplates(m ? (m.template_name || '') : 'continuidade');
+}
+
+async function saveScheduledMsg() {
+    const chat = window.currentActiveChat;
+    const texto = document.getElementById('sched-texto').value.trim();
+    const quando = document.getElementById('sched-when').value;
+    if (!chat || !texto || !quando) { showToast('Preencha a mensagem e a data.', 'danger'); return; }
+    const btn = document.getElementById('sched-save-btn');
+    btn.disabled = true;
+    try {
+        const res = await fetch(schedEditId ? '/api/scheduled-msgs/' + schedEditId : '/api/scheduled-msgs', {
+            method: schedEditId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: chat.phone,
+                texto,
+                send_at: new Date(quando).toISOString(),
+                template_name: document.getElementById('sched-template').value,
+                cancelar_se_responder: document.getElementById('sched-cancelar').checked
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error);
+        // O texto veio do campo do chat: limpa o campo (e o rascunho) pra não mandar duas vezes.
+        const input = document.getElementById('chat-input-text');
+        if (!schedEditId && input && input.value.trim() === texto) {
+            input.value = '';
+            if (typeof autoExpandChatInput === 'function') autoExpandChatInput(input);
+            if (typeof saveChatDraftFromInput === 'function') saveChatDraftFromInput();
+        }
+        document.getElementById('modalScheduleMsg').classList.remove('active');
+        showToast('Mensagem programada para ' + new Date(quando).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + '.');
+        loadScheduledMsgs(chat.phone);
+    } catch (e) {
+        showToast(e.message || 'Erro ao programar a mensagem.', 'danger');
+        btn.disabled = false;
+    }
+}
+
+async function cancelScheduledMsg(id) {
+    if (!await customConfirm('Cancelar esta mensagem programada? Ela não vai mais sair.', 'Cancelar mensagem')) return;
+    try {
+        const res = await fetch('/api/scheduled-msgs/' + id, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error);
+        showToast('Mensagem programada cancelada.');
+        if (window.currentActiveChat) loadScheduledMsgs(window.currentActiveChat.phone);
+    } catch (e) { showToast(e.message || 'Erro ao cancelar.', 'danger'); }
+}

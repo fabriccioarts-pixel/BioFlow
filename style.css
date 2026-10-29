@@ -10055,6 +10055,54 @@ h1, h2,
 .csb-all:focus-visible, .csb-close:focus-visible, .csb-act:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
 /* ============================================================================
+   MENSAGENS PROGRAMADAS — faixa acima do campo do chat + modal de programar
+   ============================================================================ */
+.sched-strip {
+    flex-direction: column; gap: 0.4rem; padding: 0.6rem 1.5rem;
+    background: var(--bg-card); border-top: 1px solid var(--border-color);
+}
+.sched-item {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.75rem;
+    background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 10px;
+    font-size: 0.84rem; color: var(--text-main);
+}
+.sched-item > i { color: var(--accent-primary); flex: none; }
+.sched-item.is-failed { border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent); }
+.sched-item.is-failed > i { color: var(--accent-danger); }
+.sched-item-body { flex: 1; min-width: 0; }
+.sched-item-when { font-weight: 600; }
+.sched-item-when span { font-weight: 400; color: var(--text-muted); }
+.sched-item-text { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sched-item-btn {
+    flex: none; background: none; border: 1px solid var(--border-color); color: var(--text-main);
+    border-radius: 7px; padding: 0.3rem 0.65rem; font-size: 0.78rem; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.sched-item-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+.sched-item-btn.is-danger:hover { border-color: var(--accent-danger); color: var(--accent-danger); }
+
+.sched-label { display: block; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; margin: 0.8rem 0 0.3rem; }
+.sched-input {
+    width: 100%; box-sizing: border-box; background: var(--bg-card); border: 1px solid var(--border-color);
+    color: var(--text-main); border-radius: 8px; padding: 0.55rem 0.8rem; font-size: 0.9rem; font-family: inherit; outline: none;
+}
+.sched-input:focus { border-color: var(--accent-primary); }
+textarea.sched-input { resize: vertical; min-height: 84px; line-height: 1.45; }
+.sched-help { margin: 0.4rem 0 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; }
+.sched-template-preview {
+    margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--text-main); white-space: pre-wrap;
+    background: var(--bg-main); border-left: 3px solid var(--accent-primary); border-radius: 0 8px 8px 0; padding: 0.5rem 0.7rem;
+}
+.sched-template-preview:empty { display: none; }
+.sched-check { display: flex; align-items: flex-start; gap: 0.5rem; margin-top: 0.9rem; font-size: 0.84rem; color: var(--text-main); cursor: pointer; }
+.sched-check input { margin-top: 0.2rem; }
+
+@media (max-width: 720px) {
+    .sched-strip { padding: 0.5rem 0.75rem; }
+    .sched-item { flex-wrap: wrap; }
+    .sched-item-body { flex-basis: calc(100% - 2rem); }
+}
+
+/* ============================================================================
    SEGUNDO CÉREBRO — notas da clínica (#view-cerebro)
    ============================================================================ */
 #view-cerebro { background: var(--bg-main); flex-direction: column; min-height: 0; overflow-y: auto; }
