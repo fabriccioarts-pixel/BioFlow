@@ -532,6 +532,13 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [resolvedLeadId]);
                     }
                 } catch (e) { console.error('follow-up: hook de inbound falhou:', e.message); }
+                try {
+                    const vIn = phoneVariants(from);
+                    await queryD1(
+                        `UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = 'paciente retomou a conversa antes'
+                         WHERE status = 'agendada' AND cancelar_se_responder = 1 AND created_at <= ? AND phone IN (${vIn.map(() => '?').join(', ')})`,
+                        [flowDbTime(-SCHED_RETOMADA_MS), ...vIn]);
+                } catch (e) { console.error('mensagens programadas: hook de inbound falhou:', e.message); }
 
                 // Lead que já existia respondeu: notificação agrupada por lead (lead
                 // novo já ganhou a de "Novo lead" lá em cima). ANTES do broadcast: quem
@@ -1959,6 +1966,32 @@ async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
     return { id: melhor.id, nome: melhor.nome, mime: melhor.mime, thumb_base64: melhor.thumb_base64 || null };
 }
 
+// Sempre disponível pra IA do WhatsApp (ver aiAgendarRetorno). Sem ela a IA
+// prometia "já deixei anotado pra te chamar no início do mês" e nada acontecia.
+const RETORNO_TOOL_DECLARATION = {
+    name: 'agendar_retorno',
+    description: 'Programa uma mensagem de WhatsApp para o paciente numa data futura. Use quando o paciente concordar em ser chamado depois (ex.: "pode me chamar mês que vem", "me procura depois do dia 10").',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            data: { type: 'STRING', description: 'Data do envio no formato AAAA-MM-DD (horário de Brasília). "Início do mês que vem" = um dia útil entre os dias 1 e 3 do mês seguinte.' },
+            hora: { type: 'STRING', description: 'Hora do envio, HH:MM, dentro do horário de atendimento. Se o paciente não disse, use 09:30.' },
+            mensagem: { type: 'STRING', description: 'Texto que será enviado na data: curto, chamando pelo nome e retomando o combinado. Ex.: "Oi Tay! Tudo bem? Como combinamos, tô passando pra gente ver um horário pra sua limpeza de pele 😊"' },
+            motivo: { type: 'STRING', description: 'Resumo em uma frase do que foi combinado, para a equipe.' }
+        },
+        required: ['data', 'mensagem', 'motivo']
+    }
+};
+
+const WHATSAPP_AI_RETORNO_RULE = `
+
+REGRA DE RETORNO COMBINADO:
+Você tem a ferramenta agendar_retorno, que programa uma mensagem para o paciente numa data futura.
+- Use quando o paciente concordar em ser chamado depois (ele disse que agora não dá e aceitou que você chame numa data).
+- Só diga que vai chamar, que "anotou" ou que "programou" DEPOIS de usar a ferramenta e ela devolver agendado: true. Nunca prometa retorno sem usar a ferramenta.
+- Se ela devolver agendado: false, não prometa data: diga que ele pode chamar por aqui quando quiser.
+- Nunca domingo, nunca fora do horário de atendimento, no máximo 60 dias à frente.`;
+
 const MEDIA_TOOL_DECLARATION = {
     name: 'buscar_imagem_resultado',
     description: 'Busca na biblioteca de mídia da clínica uma imagem de exemplo/resultado de um procedimento, pra mandar pro paciente se identificar visualmente. Use quando o paciente demonstrar interesse num procedimento específico e uma imagem de exemplo ajudar a ilustrar o resultado — não use pra toda mensagem, só quando fizer sentido.',
@@ -2126,13 +2159,14 @@ async function callGeminiForWhatsappReply(phone) {
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
     const mediaEnabled = await getWhatsappAiMediaEnabled();
     const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
-    const systemPrompt = context + nowContext + adContext + behaviorRule + mediaRule + WHATSAPP_AI_FORMAT_RULE;
+    const systemPrompt = context + nowContext + adContext + behaviorRule + mediaRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: history
     };
-    if (mediaEnabled) body.tools = [{ functionDeclarations: [MEDIA_TOOL_DECLARATION] }];
+    // agendar_retorno sempre; busca de imagem só com o opt-in.
+    body.tools = [{ functionDeclarations: mediaEnabled ? [RETORNO_TOOL_DECLARATION, MEDIA_TOOL_DECLARATION] : [RETORNO_TOOL_DECLARATION] }];
 
     const call = async (b) => {
         const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
@@ -2147,12 +2181,26 @@ async function callGeminiForWhatsappReply(phone) {
 
     const first = await call(body);
     const parts = first.candidates?.[0]?.content?.parts || [];
-    const fnCallPart = mediaEnabled ? parts.find(p => p.functionCall) : null;
+    const fnCallPart = parts.find(p => p.functionCall);
     const fnCall = fnCallPart?.functionCall;
 
     if (!fnCall) {
         const text = parts.map(p => p.text || '').join('').trim();
         return { text: normalizeAiReply(text), mediaId: null };
+    }
+
+    if (fnCall.name === 'agendar_retorno') {
+        let resultado;
+        try { resultado = await aiAgendarRetorno(phone, fnCall.args || {}); }
+        catch (e) { resultado = { agendado: false, motivo: e.message }; }
+        const comResultado = [
+            ...history,
+            { role: 'model', parts: [fnCallPart] },
+            { role: 'user', parts: [{ functionResponse: { name: 'agendar_retorno', response: resultado } }] }
+        ];
+        const seguinte = await call({ ...body, contents: comResultado });
+        const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+        return { text: normalizeAiReply(texto), mediaId: null };
     }
 
     let midia = null;
@@ -4620,7 +4668,7 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
         const timing = await getWhatsappAiTiming();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled(), retornoTemplate: await getRetornoTemplateIa() });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -4662,6 +4710,12 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                     [req.body[k] ? '1' : '0']
                 );
             }
+        }
+        if (req.body?.retornoTemplate !== undefined) {
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_retorno_template', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [String(req.body.retornoTemplate || '').trim()]
+            );
         }
         const timing = await getWhatsappAiTiming();
         res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
@@ -10672,6 +10726,9 @@ app.all('/api/flow-tick', async (req, res) => {
         let followup = { opened: 0, processed: 0 };
         try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
 
+        let programadas = { skipped: 'erro' };
+        try { programadas = await scheduledMsgsTick(); } catch (e) { console.error('Erro nas mensagens programadas:', e); }
+
         // Lembrete de consulta — busca a agenda do Amigo só a cada APPT_SYNC_MIN;
         // o envio da fila vencida roda em todo tick.
         let lembretes = { skipped: 'erro' };
@@ -10706,7 +10763,7 @@ app.all('/api/flow-tick', async (req, res) => {
         let gestor = { skipped: 'erro' };
         try { gestor = await gestorBriefingTick(); } catch (e) { console.error('Erro no briefing do gestor:', e); }
 
-        res.json({ processed, followup, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -10829,6 +10886,214 @@ function followupNextAllowed(cfg, fromDate) {
     return d;
 }
 function followupAtSql(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
+
+// ============================================================================
+// MENSAGENS PROGRAMADAS — mensagem que sai sozinha na data/hora marcada. Criada
+// pela equipe no chat ou pela IA, quando combina um retorno com o paciente ("te
+// chamo no começo do mês"). Na hora do envio: texto livre se o paciente falou nas
+// últimas 24h (janela da Meta); senão, o template de reserva. Se o paciente
+// retomar a conversa antes, cancela sozinha — mas só se ele voltar 6h+ depois de
+// programada: um "obrigada" logo depois do combinado não derruba o retorno.
+// ============================================================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_scheduled_msgs (
+    id TEXT PRIMARY KEY,
+    phone TEXT NOT NULL,
+    lead_id TEXT,
+    texto TEXT NOT NULL,
+    template_name TEXT,
+    send_at DATETIME NOT NULL,
+    status TEXT NOT NULL DEFAULT 'agendada',
+    cancelar_se_responder INTEGER NOT NULL DEFAULT 1,
+    origem TEXT NOT NULL DEFAULT 'manual',
+    motivo TEXT,
+    erro TEXT,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sent_at DATETIME
+)`).catch(() => {});
+queryD1('CREATE INDEX IF NOT EXISTS idx_sched_msgs_due ON crm_scheduled_msgs (status, send_at)').catch(() => {});
+
+const SCHED_RETOMADA_MS = 6 * 3600000;
+const SCHED_MAX_DIAS = 90;
+const SCHED_TEMPLATE_IA_PADRAO = 'continuidade';
+
+function schedFmtBr(date) {
+    return date.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+async function schedLeadForPhone(phone) {
+    const v = phoneVariants(phone);
+    const rows = await queryD1(`SELECT id, nome FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, v);
+    return (rows && rows[0]) || null;
+}
+
+async function schedNotify(message, phone) {
+    const id = 'sched-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    try {
+        await queryD1('INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)', [id, message, phone]);
+    } catch (e) {
+        await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)', [id, message]).catch(() => {});
+    }
+}
+
+function schedValidar({ texto, sendAt }) {
+    const t = String(texto || '').trim();
+    if (!t) throw new Error('Escreva a mensagem.');
+    if (t.length > 4000) throw new Error('Mensagem longa demais (máx. 4000 caracteres).');
+    if (!(sendAt instanceof Date) || isNaN(sendAt)) throw new Error('Data/hora inválida.');
+    if (sendAt.getTime() < Date.now() + 60000) throw new Error('Escolha um horário no futuro.');
+    if (sendAt.getTime() > Date.now() + SCHED_MAX_DIAS * 86400000) throw new Error(`No máximo ${SCHED_MAX_DIAS} dias à frente.`);
+    return t;
+}
+
+async function createScheduledMsg({ phone, texto, templateName, sendAt, cancelarSeResponder = true, origem = 'manual', motivo = null, createdBy = null }) {
+    const t = schedValidar({ texto, sendAt });
+    const tel = String(phone || '').replace(/\D/g, '');
+    if (!tel) throw new Error('Telefone não informado.');
+    const lead = await schedLeadForPhone(tel);
+    const id = 'sm_' + crypto.randomBytes(6).toString('hex');
+    await queryD1(
+        `INSERT INTO crm_scheduled_msgs (id, phone, lead_id, texto, template_name, send_at, cancelar_se_responder, origem, motivo, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, tel, lead ? lead.id : null, t, String(templateName || '').trim() || null, followupAtSql(sendAt), cancelarSeResponder ? 1 : 0, origem, motivo, createdBy]
+    );
+    if (lead) logLeadEvent(lead.id, 'mensagem_programada', createdBy || origem, `para ${schedFmtBr(sendAt)}${motivo ? ' — ' + motivo : ''}`);
+    return { id, send_at: followupAtSql(sendAt) };
+}
+
+async function getRetornoTemplateIa() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_retorno_template'");
+        if (rows && rows[0] && rows[0].value != null) return rows[0].value;
+    } catch (e) {}
+    return SCHED_TEMPLATE_IA_PADRAO;
+}
+
+// Chamado pela ferramenta agendar_retorno da IA do WhatsApp. Um retorno da IA por
+// conversa: se ela combinar de novo (paciente pediu outra data), substitui o anterior.
+async function aiAgendarRetorno(phone, args) {
+    const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(args.data || '').trim());
+    if (!d) return { agendado: false, motivo: 'data inválida, use AAAA-MM-DD' };
+    const h = /^(\d{1,2}):(\d{2})$/.exec(String(args.hora || '').trim()) || [null, '9', '30'];
+    // Brasília é UTC-3 o ano todo (sem horário de verão desde 2019).
+    const sendAt = new Date(Date.UTC(+d[1], +d[2] - 1, +d[3], +h[1] + 3, +h[2]));
+    const v = phoneVariants(phone);
+    try {
+        schedValidar({ texto: args.mensagem, sendAt });
+    } catch (e) {
+        return { agendado: false, motivo: e.message };
+    }
+    await queryD1(
+        `UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = 'substituída por novo retorno combinado' WHERE status = 'agendada' AND origem = 'ia' AND phone IN (${v.map(() => '?').join(', ')})`, v);
+    await createScheduledMsg({
+        phone, texto: args.mensagem, templateName: await getRetornoTemplateIa(), sendAt,
+        cancelarSeResponder: true, origem: 'ia', motivo: String(args.motivo || '').slice(0, 300) || null, createdBy: 'ia'
+    });
+    const lead = await schedLeadForPhone(phone);
+    await schedNotify(`🗓️ IA programou retorno para ${(lead && lead.nome) || phone} em ${schedFmtBr(sendAt)}`, phone);
+    return { agendado: true, data_hora: schedFmtBr(sendAt) };
+}
+
+// Roda em todo /api/flow-tick (pinger de 1 em 1 min).
+async function scheduledMsgsTick() {
+    const due = await queryD1("SELECT * FROM crm_scheduled_msgs WHERE status = 'agendada' AND send_at <= ? ORDER BY send_at ASC LIMIT 20", [flowDbTime()]);
+    let enviadas = 0, falhas = 0;
+    for (const m of (due || [])) {
+        // Trava contra dois ticks pegando a mesma mensagem.
+        const lock = await queryD1Meta("UPDATE crm_scheduled_msgs SET status = 'enviando' WHERE id = ? AND status = 'agendada'", [m.id]);
+        if (!lock.meta || !lock.meta.changes) continue;
+        const v = phoneVariants(m.phone);
+        const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${v.map(() => '?').join(', ')}) ORDER BY timestamp DESC LIMIT 1`, v);
+        const lastInDate = followupParseTs(lastIn && lastIn[0] && lastIn[0].timestamp);
+        // Folga de 30 min: a janela da Meta é de 24h exatas.
+        const naJanela = !!lastInDate && (Date.now() - lastInDate.getTime()) < 23.5 * 3600000;
+        const lead = m.lead_id ? { id: m.lead_id } : await schedLeadForPhone(m.phone);
+        try {
+            let via;
+            if (naJanela) {
+                await sendWhatsappTextInternal(m.phone, m.texto, 'programada');
+                via = 'texto';
+            } else if (m.template_name) {
+                const nomeRow = lead ? await queryD1('SELECT nome FROM leads WHERE id = ?', [lead.id]) : null;
+                const nome = String((nomeRow && nomeRow[0] && nomeRow[0].nome) || '').trim();
+                const primeiro = nome && nome !== 'Lead WhatsApp' ? nome.split(/\s+/)[0] : 'tudo bem';
+                await sendWhatsappTemplateInternal(m.phone, m.template_name, { nome: primeiro, sentBy: 'programada' });
+                via = 'template ' + m.template_name;
+            } else {
+                throw new Error('Fora da janela de 24h do WhatsApp e sem template de reserva.');
+            }
+            await queryD1("UPDATE crm_scheduled_msgs SET status = 'enviada', sent_at = CURRENT_TIMESTAMP, erro = ? WHERE id = ?", ['enviada como ' + via, m.id]);
+            if (lead) logLeadEvent(lead.id, 'mensagem_programada_enviada', 'sistema', 'como ' + via);
+            enviadas++;
+        } catch (e) {
+            await queryD1("UPDATE crm_scheduled_msgs SET status = 'falhou', erro = ? WHERE id = ?", [String(e.message || e).slice(0, 300), m.id]);
+            await schedNotify(`⚠️ Mensagem programada não saiu para ${m.phone}: ${String(e.message || e).slice(0, 120)}`, m.phone);
+            falhas++;
+        }
+    }
+    return { enviadas, falhas };
+}
+
+app.get('/api/scheduled-msgs', async (req, res) => {
+    try {
+        const tel = String(req.query.phone || '').replace(/\D/g, '');
+        if (!tel) return res.status(400).json({ error: 'Telefone não informado.' });
+        const v = phoneVariants(tel);
+        // Agendadas + as que falharam na última semana (pra equipe ver e refazer).
+        const rows = await queryD1(
+            `SELECT id, phone, texto, template_name, send_at, status, cancelar_se_responder, origem, motivo, erro, created_by, created_at
+             FROM crm_scheduled_msgs
+             WHERE phone IN (${v.map(() => '?').join(', ')}) AND (status = 'agendada' OR (status = 'falhou' AND send_at >= ?))
+             ORDER BY send_at ASC`, [...v, flowDbTime(-7 * 86400000)]);
+        res.json({ mensagens: rows || [] });
+    } catch (e) {
+        console.error('scheduled-msgs list:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar mensagens programadas.' });
+    }
+});
+
+app.post('/api/scheduled-msgs', async (req, res) => {
+    try {
+        const r = await createScheduledMsg({
+            phone: req.body.phone,
+            texto: req.body.texto,
+            templateName: req.body.template_name,
+            sendAt: new Date(req.body.send_at),
+            cancelarSeResponder: req.body.cancelar_se_responder !== false,
+            origem: 'manual',
+            createdBy: req.user.username
+        });
+        res.json(r);
+    } catch (e) {
+        res.status(400).json({ error: e.message || 'Erro ao programar a mensagem.' });
+    }
+});
+
+app.put('/api/scheduled-msgs/:id', async (req, res) => {
+    try {
+        const sendAt = new Date(req.body.send_at);
+        const texto = schedValidar({ texto: req.body.texto, sendAt });
+        const r = await queryD1Meta(
+            `UPDATE crm_scheduled_msgs SET texto = ?, send_at = ?, template_name = ?, cancelar_se_responder = ?, status = 'agendada', erro = NULL
+             WHERE id = ? AND status IN ('agendada', 'falhou')`,
+            [texto, followupAtSql(sendAt), String(req.body.template_name || '').trim() || null, req.body.cancelar_se_responder !== false ? 1 : 0, req.params.id]);
+        if (!r.meta || !r.meta.changes) return res.status(409).json({ error: 'Essa mensagem já saiu ou foi cancelada.' });
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message || 'Erro ao salvar.' });
+    }
+});
+
+app.delete('/api/scheduled-msgs/:id', async (req, res) => {
+    try {
+        await queryD1("UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = ? WHERE id = ? AND status IN ('agendada', 'falhou')",
+            ['cancelada por ' + req.user.username, req.params.id]);
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('scheduled-msgs delete:', e.message);
+        res.status(500).json({ error: 'Erro ao cancelar.' });
+    }
+});
 
 async function followupApplyFinal(cfg, lead) {
     try {
