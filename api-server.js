@@ -1884,7 +1884,8 @@ app.post('/api/ai-agenda-test', async (req, res) => {
 
         const hoje = new Date().toISOString().slice(0, 10);
         const context = await getWhatsappAiContext();
-        const systemPrompt = context + `\n\n[TESTE] Hoje é ${hoje}. Isto é um teste isolado, sem histórico de conversa real.` + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const brainRule = whatsappBrainRule(await getBrainContext(pergunta, 'whatsapp'));
+        const systemPrompt = context + `\n\n[TESTE] Hoje é ${hoje}. Isto é um teste isolado, sem histórico de conversa real.` + brainRule + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
         const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
 
         const result = await callGeminiWithAgendaTool(systemPrompt, contents, unidade_id);
@@ -2036,7 +2037,8 @@ app.post('/api/ai-media-test', async (req, res) => {
         if (!pergunta || !pergunta.trim()) return res.status(400).json({ error: 'Manda uma pergunta pra testar.' });
 
         const context = await getWhatsappAiContext();
-        const systemPrompt = context + '\n\n[TESTE] Isto é um teste isolado, sem histórico de conversa real.' + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const brainRule = whatsappBrainRule(await getBrainContext(pergunta, 'whatsapp'));
+        const systemPrompt = context + '\n\n[TESTE] Isto é um teste isolado, sem histórico de conversa real.' + brainRule + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
         const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
 
         const result = await callGeminiWithMediaTool(systemPrompt, contents);
@@ -2126,7 +2128,9 @@ async function callGeminiForWhatsappReply(phone) {
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
     const mediaEnabled = await getWhatsappAiMediaEnabled();
     const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
-    const systemPrompt = context + nowContext + adContext + behaviorRule + mediaRule + WHATSAPP_AI_FORMAT_RULE;
+    // O texto do anúncio entra na busca: "quero saber mais" sozinho não acha nada.
+    const brainRule = whatsappBrainRule(await getBrainContext(brainConsultaDoHistorico(history, adContext), 'whatsapp'));
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + WHATSAPP_AI_FORMAT_RULE;
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -2193,6 +2197,266 @@ function normalizeAiReply(raw) {
         } catch (e) { /* não era JSON de verdade, segue com o texto cru */ }
     }
     return s;
+}
+
+// ============================================================================
+// SEGUNDO CÉREBRO — notas da clínica (antes eram .md soltos na pasta
+// segundo-cerebro-natuclinic; agora moram e são editadas aqui). O prefixo PARA
+// do nome decide quem enxerga cada nota:
+//   R_ (recursos: procedimentos, protocolos, provas sociais) → IA do WhatsApp,
+//      Copiloto e Ask AI;
+//   A_ (áreas: processo de vendas, Meta Ads) → Copiloto e Ask AI;
+//   P_, X_ e sem prefixo → só o Ask AI (planos internos não vão pro paciente).
+// Nunca vai nota inteira pro prompt: só as seções (por título) que casam com a
+// conversa, até um teto de caracteres — custo de token previsível.
+// ============================================================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_notes (
+    id TEXT PRIMARY KEY,
+    nome TEXT NOT NULL UNIQUE,
+    conteudo TEXT NOT NULL DEFAULT '',
+    updated_by TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+const BRAIN_NOTE_MAX_CHARS = 200000;
+const BRAIN_CACHE_MS = 60 * 1000;
+const BRAIN_USOS = {
+    whatsapp: { prefixos: ['R'], maxChars: 5000, paciente: true },
+    copiloto: { prefixos: ['R', 'A'], maxChars: 5000, paciente: true },
+    ask: { prefixos: null, maxChars: 10000, paciente: false },
+};
+let brainCache = { at: 0, notes: null };
+
+function brainPrefixo(nome) {
+    const m = /^([PARX])_/i.exec(String(nome || ''));
+    return m ? m[1].toUpperCase() : '';
+}
+
+// "R_procedimentos.md" -> "R_procedimentos"; sem quebra de linha nem barra.
+function brainNomeLimpo(nome) {
+    return String(nome || '').replace(/\.(md|txt|markdown)$/i, '').replace(/[\r\n\/\\]+/g, ' ').trim().slice(0, 120);
+}
+
+async function getBrainNotes() {
+    if (brainCache.notes && Date.now() - brainCache.at < BRAIN_CACHE_MS) return brainCache.notes;
+    const rows = await queryD1('SELECT nome, conteudo FROM crm_brain_notes');
+    brainCache = { at: Date.now(), notes: rows || [] };
+    return brainCache.notes;
+}
+
+function brainNorm(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+const BRAIN_STOPWORDS = new Set(('para pela pelo pelos pelas como mais menos muito muita quero queria gostaria ' +
+    'sobre esse essa isso este esta isto aqui voce voces vcs tenho temos fazer faz feito pode posso seria ' +
+    'qual quais quanto quando onde porque entao ainda tambem obrigado obrigada tudo bom boa noite tarde ' +
+    'olha sim nao ter tem estou esta minha meu meus minhas dele dela eles elas uma umas uns depois antes ' +
+    'saber informacao informacoes mensagem favor certo valeu oi ola').split(' '));
+
+// Radical de 6 letras pra casar flexão ("manchas" ~ "mancha", "depilação" ~ "depilar").
+function brainTermos(texto) {
+    const palavras = brainNorm(texto).match(/[a-z0-9]{4,}/g) || [];
+    return [...new Set(palavras.filter(w => !BRAIN_STOPWORDS.has(w)).map(w => w.slice(0, 6)))];
+}
+
+// Quebra cada nota nas seções de título (#, ##, ###). Nota sem título = 1 seção.
+function brainSecoes(notes) {
+    const out = [];
+    for (const n of notes) {
+        let cur = { nome: n.nome, titulo: '', linhas: [] };
+        const fecha = () => {
+            const corpo = cur.linhas.filter(l => !/^#{1,3}\s/.test(l)).join('\n').trim();
+            if (corpo.length >= 30) out.push({ nome: cur.nome, titulo: cur.titulo, texto: cur.linhas.join('\n').trim() });
+        };
+        for (const l of String(n.conteudo || '').split('\n')) {
+            const h = /^#{1,3}\s+(.+)/.exec(l);
+            if (h) { fecha(); cur = { nome: n.nome, titulo: h[1].trim(), linhas: [l] }; }
+            else cur.linhas.push(l);
+        }
+        fecha();
+    }
+    return out;
+}
+
+// Trechos das notas que têm a ver com `consulta`, já formatados pro prompt.
+// paciente=true tira as linhas marcadas [CONFIRMAR…] / "validar com" — o que a
+// clínica ainda não confirmou não pode chegar ao paciente nem por rascunho.
+async function getBrainContext(consulta, uso) {
+    const cfg = BRAIN_USOS[uso] || BRAIN_USOS.ask;
+    let notes;
+    try { notes = await getBrainNotes(); } catch (e) { return ''; }
+    if (cfg.prefixos) notes = notes.filter(n => cfg.prefixos.includes(brainPrefixo(n.nome)));
+    const termos = brainTermos(consulta);
+    if (!notes.length || !termos.length) return '';
+
+    const secoes = brainSecoes(notes).map(s => ({
+        ...s,
+        norm: brainNorm(s.texto),
+        normTitulo: brainNorm(s.titulo + ' ' + s.nome.replace(/[_-]+/g, ' ')),
+    }));
+    // Peso por raridade: "pele" aparece em tudo e quase não conta; "melasma" decide.
+    const idf = {};
+    for (const t of termos) {
+        const df = secoes.filter(s => s.norm.includes(t) || s.normTitulo.includes(t)).length;
+        idf[t] = df ? Math.log(1 + secoes.length / df) : 0;
+    }
+    const pontuadas = secoes.map(s => {
+        let score = 0;
+        for (const t of termos) {
+            if (!idf[t]) continue;
+            if (s.normTitulo.includes(t)) score += 2 * idf[t];
+            else if (s.norm.includes(t)) score += idf[t];
+        }
+        return { s, score };
+    }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+    if (!pontuadas.length) return '';
+
+    const corte = pontuadas[0].score * 0.35;
+    const blocos = [];
+    let total = 0;
+    for (const { s, score } of pontuadas) {
+        if (score < corte || blocos.length >= 6) break;
+        let texto = s.texto;
+        if (cfg.paciente) texto = texto.split('\n').filter(l => !/\[CONFIRMAR|validar com/i.test(l.replace(/\\/g, ''))).join('\n').trim();
+        texto = texto.slice(0, 2500);
+        const bloco = `[${s.nome}${s.titulo ? ' › ' + s.titulo.replace(/^#+\s*/, '') : ''}]\n${texto}`;
+        if (total + bloco.length > cfg.maxChars && blocos.length) break;
+        blocos.push(bloco.slice(0, cfg.maxChars));
+        total += bloco.length;
+    }
+    return blocos.join('\n\n');
+}
+
+function brainIsAdmin(req) {
+    return !!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'));
+}
+
+app.get('/api/brain', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT id, nome, conteudo, updated_by, updated_at, created_at FROM crm_brain_notes ORDER BY nome COLLATE NOCASE');
+        res.json({ notas: rows || [] });
+    } catch (e) {
+        console.error('brain list:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar o Segundo Cérebro.' });
+    }
+});
+
+app.post('/api/brain', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const nome = brainNomeLimpo(req.body.nome);
+        const conteudo = String(req.body.conteudo || '');
+        if (!nome) return res.status(400).json({ error: 'Dê um nome para a nota.' });
+        if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Nota grande demais (máx. 200 mil caracteres).' });
+        const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+        if (existe && existe[0]) return res.status(409).json({ error: 'Já existe uma nota com esse nome.' });
+        const id = 'br_' + crypto.randomBytes(6).toString('hex');
+        await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)', [id, nome, conteudo, req.user.username]);
+        brainCache.at = 0;
+        res.json({ id, nome });
+    } catch (e) {
+        console.error('brain create:', e.message);
+        res.status(500).json({ error: 'Erro ao criar a nota.' });
+    }
+});
+
+// Importa vários .md de uma vez (upsert pelo nome) — botão "Importar .md".
+app.post('/api/brain/import', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const notas = Array.isArray(req.body.notas) ? req.body.notas.slice(0, 100) : [];
+        let criadas = 0, atualizadas = 0;
+        for (const n of notas) {
+            const nome = brainNomeLimpo(n && n.nome);
+            const conteudo = String((n && n.conteudo) || '');
+            if (!nome || conteudo.length > BRAIN_NOTE_MAX_CHARS) continue;
+            const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+            if (existe && existe[0]) {
+                await queryD1('UPDATE crm_brain_notes SET conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [conteudo, req.user.username, existe[0].id]);
+                atualizadas++;
+            } else {
+                await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)',
+                    ['br_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+                criadas++;
+            }
+        }
+        brainCache.at = 0;
+        res.json({ criadas, atualizadas });
+    } catch (e) {
+        console.error('brain import:', e.message);
+        res.status(500).json({ error: 'Erro ao importar as notas.' });
+    }
+});
+
+// Mostra os trechos que cada IA receberia pra uma mensagem — pra conferir antes
+// de confiar. Não chama o Gemini.
+app.post('/api/brain/preview', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin.' });
+    try {
+        const uso = BRAIN_USOS[req.body.uso] ? req.body.uso : 'whatsapp';
+        const contexto = await getBrainContext(String(req.body.texto || '').slice(0, 2000), uso);
+        res.json({ uso, contexto });
+    } catch (e) {
+        console.error('brain preview:', e.message);
+        res.status(500).json({ error: 'Erro ao testar a busca.' });
+    }
+});
+
+app.put('/api/brain/:id', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const nome = brainNomeLimpo(req.body.nome);
+        const conteudo = String(req.body.conteudo || '');
+        if (!nome) return res.status(400).json({ error: 'Dê um nome para a nota.' });
+        if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Nota grande demais (máx. 200 mil caracteres).' });
+        const outra = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE AND id != ?', [nome, req.params.id]);
+        if (outra && outra[0]) return res.status(409).json({ error: 'Já existe outra nota com esse nome.' });
+        await queryD1('UPDATE crm_brain_notes SET nome = ?, conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nome, conteudo, req.user.username, req.params.id]);
+        brainCache.at = 0;
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain update:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a nota.' });
+    }
+});
+
+app.delete('/api/brain/:id', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        await queryD1('DELETE FROM crm_brain_notes WHERE id = ?', [req.params.id]);
+        brainCache.at = 0;
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain delete:', e.message);
+        res.status(500).json({ error: 'Erro ao excluir a nota.' });
+    }
+});
+
+// Regra que acompanha os trechos no prompt da IA do WhatsApp.
+function whatsappBrainRule(trechos) {
+    if (!trechos) return '';
+    return `
+
+BASE DE CONHECIMENTO DA CLÍNICA (trechos do Segundo Cérebro ligados a esta conversa):
+${trechos}
+
+Como usar esses trechos:
+- Use para explicar procedimentos e protocolos com precisão, com suas palavras e no formato curto de WhatsApp. Nunca cole o trecho nem fale em "nota" ou "base de conhecimento".
+- Se o trecho não tiver a informação (campo vazio), não complete com suposição: diga que a especialista explica isso na avaliação.
+- Preço e valores: só os das instruções principais acima, nunca dos trechos.
+- Não prometa resultado em números nem compare com concorrentes, mesmo que o trecho faça isso.
+- Se algo aqui contradisser as instruções principais acima, valem as instruções principais.`;
+}
+
+// Texto que o paciente mandou por último (contents do Gemini), pra buscar trechos.
+function brainConsultaDoHistorico(history, extra = '') {
+    const falas = history.filter(c => c.role === 'user')
+        .map(c => (c.parts || []).map(p => p.text || '').join(' '))
+        .slice(-4);
+    return falas.join('\n') + '\n' + extra;
 }
 
 // ============================================================================
@@ -2288,9 +2552,14 @@ app.post('/api/copilot/draft-reply', async (req, res) => {
         if (!copilotThrottle(req, res)) return;
         const transcript = await copilotTranscript(phone, 16);
         const contexto = await getWhatsappAiContext();
+        const falasPaciente = transcript.split('\n').filter(l => l.startsWith('Paciente:')).slice(-3).join('\n');
+        const trechos = await getBrainContext(instruction + '\n' + falasPaciente, 'copiloto');
         const sys = `${contexto}
 
-Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano de uma clínica enviar ao paciente. Escreva UMA mensagem pronta, em português, tom acolhedor e profissional, curta e natural (como no WhatsApp). NÃO invente preço, horário ou informação que não esteja no pedido do atendente ou no histórico. Não repita saudação se a conversa já está em andamento. Responda só com o texto da mensagem, nada mais.`;
+Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano de uma clínica enviar ao paciente. Escreva UMA mensagem pronta, em português, tom acolhedor e profissional, curta e natural (como no WhatsApp). NÃO invente preço, horário ou informação que não esteja no pedido do atendente, no histórico ou na base de conhecimento abaixo. Não repita saudação se a conversa já está em andamento. Responda só com o texto da mensagem, nada mais.${trechos ? `
+
+BASE DE CONHECIMENTO DA CLÍNICA (trechos do Segundo Cérebro; use só como referência para a mensagem ficar correta, sem citar a fonte):
+${trechos}` : ''}`;
         const text = await callGeminiCopilot(
             sys,
             `Conversa até aqui:\n${transcript || '(sem histórico)'}\n\nO atendente quer dizer: "${instruction}"\n\nEscreva a mensagem:`
@@ -12238,6 +12507,8 @@ app.post('/api/ai-agent/ask', async (req, res) => {
             : 'Ainda não há análise qualitativa gerada (roda automaticamente a cada poucas horas).';
 
         const contexto = await getWhatsappAiContext();
+        const perguntasAnteriores = historico.filter(h => h.role === 'user').map(h => String(h.text || '')).slice(-2).join('\n');
+        const trechos = await getBrainContext(pergunta + '\n' + perguntasAnteriores, 'ask');
         const sys = `${contexto}
 
 Você é o assistente interno de gestão do CRM de uma clínica — fala com o ATENDENTE/GESTOR, nunca com o paciente. Responda a pergunta dele usando SOMENTE os dados abaixo (não invente números nem fatos que não estão aqui). Seja direto, use bullets quando ajudar a leitura, português do Brasil, sem saudação nem despedida.
@@ -12246,6 +12517,8 @@ DADOS DISPONÍVEIS:
 - Funil de leads (contagem por coluna): ${funilTexto}
 - Última análise qualitativa das conversas (${(lastRunRows && lastRunRows[0]) ? lastRunRows[0].value : 'ainda não rodou'}):
 ${digestTexto}
+- Segundo Cérebro (notas internas da clínica: procedimentos, protocolos, campanhas, processo de vendas), trechos ligados à pergunta. Quando usar, diga de qual nota veio (o nome entre colchetes):
+${trechos || 'nenhum trecho das notas tem a ver com esta pergunta.'}
 
 Se a pergunta pedir algo que não está nos dados acima, diga isso claramente em vez de inventar.`;
 
