@@ -428,11 +428,13 @@ async function enableWebPush() {
                 applicationServerKey: urlBase64ToUint8Array(publicKey)
             });
         }
-        await fetch('/api/push/subscribe', {
+        const subRes = await fetch('/api/push/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ subscription: sub })
         });
+        // Antes não conferia: o aparelho "ativava" mesmo com o servidor recusando a inscrição.
+        if (!subRes.ok) { console.warn('Push: servidor recusou a inscrição', subRes.status); return false; }
         localStorage.setItem('crm_push_enabled', '1');
         return true;
     } catch (e) {
@@ -474,9 +476,27 @@ async function openPushDeviceSettings() {
         return;
     }
     const ok = await enableWebPush();
-    await customAlert(ok
-        ? 'Pronto! Este aparelho vai avisar quando um lead mandar mensagem — mesmo com o CRM minimizado. Leads com responsável avisam só o responsável.'
-        : 'Não foi possível ativar os avisos agora. Tente de novo em instantes.', 'Avisos neste aparelho');
+    if (!ok) {
+        let semChave = false;
+        try { semChave = !(await (await fetch('/api/push/vapid-public-key')).json()).publicKey; } catch (e) {}
+        await customAlert(semChave
+            ? 'O servidor está sem as chaves de aviso (<b>VAPID_PUBLIC_KEY</b> e <b>VAPID_PRIVATE_KEY</b> na Vercel). Sem elas nenhum aparelho recebe aviso.'
+            : (Notification.permission !== 'granted'
+                ? 'Para ativar, permita as notificações quando o navegador perguntar.'
+                : 'Não foi possível registrar este aparelho agora. Tente de novo em instantes.'), 'Avisos neste aparelho');
+        return;
+    }
+
+    // Manda um aviso de teste na hora e mostra o resultado real.
+    let teste = null;
+    try { teste = await (await fetch('/api/push/test', { method: 'POST' })).json(); } catch (e) {}
+    const motivo = teste && teste.motivo;
+    await customAlert(teste && teste.ok
+        ? 'Pronto! Enviamos um <b>aviso de teste</b> agora. Se ele não aparecer em alguns segundos, confira:<br>• Windows: <b>Configurações → Sistema → Notificações</b>, com o Chrome/Edge permitido e o <b>Não incomodar</b> desligado.<br>• O navegador precisa estar aberto (pode ficar minimizado).<br><br>Daqui pra frente avisa quando um lead mandar mensagem. Leads com responsável avisam só o responsável; conversas que a IA está atendendo não avisam.'
+        : motivo === 'sem_vapid'
+            ? 'O servidor está sem as chaves de aviso (<b>VAPID_PUBLIC_KEY</b> e <b>VAPID_PRIVATE_KEY</b> na Vercel). Sem elas nenhum aparelho recebe aviso.'
+            : `O aparelho foi registrado, mas o teste não saiu${teste && teste.falhas && teste.falhas.length ? ` (${escapeHtml(teste.falhas[0])})` : ''}. Tente desativar e ativar as notificações do site de novo.`,
+        'Avisos neste aparelho');
 }
 
 // Chuva de confete comemorando um agendamento novo. Canvas próprio, sem
@@ -10358,6 +10378,7 @@ const LPP_EVENT_META = {
     mudanca_coluna:         { icon: 'fa-arrow-right-arrow-left', texto: 'moveu de etapa' },
     recontato:              { icon: 'fa-rotate-left',            texto: 'recontatou o lead' },
     follow_up_automatico:   { icon: 'fa-robot',                  texto: 'follow-up automático enviado' },
+    follow_up_cancelado:    { icon: 'fa-hand',                   texto: 'follow-up cancelado: conversa já resolvida' },
     lead_qualificado_ia:    { icon: 'fa-sparkles',               texto: 'a IA qualificou o lead' },
     lead_descartado:        { icon: 'fa-ban',                    texto: 'descartou o lead' },
     devolvido_para_ia:      { icon: 'fa-robot',                  texto: 'devolveu a conversa pra IA' },

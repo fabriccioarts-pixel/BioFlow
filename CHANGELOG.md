@@ -1,5 +1,16 @@
 # Changelog - CRM Natuclinic
 
+## 2026-10-29 — Briefing do Gestor e checklist de tráfego automática
+
+### Adicionado
+* **Briefing do Gestor** (`GET /api/gestor/briefing`). Reúne o que a checklist diária do gestor de tráfego manda conferir: leads da noite por origem, agenda do Amigo, follow-ups, conversas esperando resposta, orçamentos em aberto, gasto/CPL/CPC/CPM/CTR/frequência/alcance/impressões contra a média dos 7 dias anteriores, semana e mês, ROAS, campanhas (CPL pelo maior número entre leads no CRM e resultados na Meta), melhor criativo e criativos com fadiga. Gera alertas (campanha ativa sem entrega, campanha com resultados na Meta que não chegam ao CRM, CPL ou gasto fora da curva, ritmo do orçamento, sync da Meta falhando ou parado) e uma lista de prioridades com sugestões de escalar, reduzir ou pausar. Não altera nada nas campanhas.
+  * De manhã olha o dia de ontem (fechado). No fim do dia, olha o dia de hoje e a agenda de amanhã. `?momento=manha|tarde` força o momento e `?formato=texto` devolve só o texto.
+  * Se os dados da Meta não chegam até o dia de referência, os números de anúncio saem do briefing e os itens de tráfego ficam desmarcados, em vez de mostrar R$ 0,00.
+  * Autenticação: sessão do CRM ou `GESTOR_BRIEFING_KEY` (`Authorization: Bearer` ou `?key=`).
+* **Push às 8h e às 18h** (de segunda a sábado) pelo `/api/flow-tick`, para os usuários em `GESTOR_BRIEFING_USUARIOS`. Uma trava por data em `crm_settings` impede envio em dobro com ticks simultâneos. Se nenhum desses usuários tem aparelho inscrito, não manda (o `sendPushToAll` mandaria para todo mundo). O último briefing fica em `crm_settings.gestor_briefing_ultimo`.
+* **`scripts/checklist-gestor.gs`**: Apps Script para a planilha da checklist. Às 8h e às 18h, ou pelo menu "Checklist automática", busca o briefing, marca TRUE na coluna do dia só nos itens que os dados confirmaram (com o número na nota da célula), grava as abas "Indicadores" e "Briefing" e manda o texto por e-mail. Nunca desmarca nada. O menu também tem "Começar semana nova".
+* Variáveis novas: `GESTOR_BRIEFING_KEY`, `GESTOR_BRIEFING_USUARIOS`, `GESTOR_BRIEFING_HORA_MANHA` (padrão 8), `GESTOR_BRIEFING_HORA_TARDE` (padrão 18), `GESTOR_ORCAMENTO_MENSAL` (opcional, para o ritmo do orçamento) e `GESTOR_SITE_URLS` (opcional, URLs separadas por vírgula, para checar status, título e meta description de manhã).
+
 ## 2026-10-22 — Origem do anúncio no lead, disparo por campanha e automações do Kanban
 
 ### Adicionado

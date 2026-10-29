@@ -231,7 +231,7 @@ async function migrateChatPhone(oldTo, newTo) {
 // Montado via app.use('/api', requireAuth) — dentro do middleware, req.path já vem
 // SEM o prefixo /api (o Express remove o trecho do mount point), por isso a lista
 // abaixo usa os caminhos relativos ao mount.
-const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick', '/webhooks/psp']);
+const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick', '/webhooks/psp', '/gestor/briefing']);
 
 function requireAuth(req, res, next) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
@@ -500,7 +500,7 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                             'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                             [`lead-${newLeadId}`, notifMsg]
                         );
-                        sendPushToAll(`🌱 Novo lead: ${leadName}`, pushPreviewText(msg_body), { phone: from }).catch(() => {});
+                        await sendPushToAll(`🌱 Novo lead: ${leadName}`, pushPreviewText(msg_body), { phone: from }).catch(() => {});
                     } catch (e) {
                         console.error('Falha ao registrar notificação de novo lead:', e.message);
                     }
@@ -2672,7 +2672,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
                     [notifId, notifMsg]
                 ).catch(() => {});
             }
-            sendPushToAll('Lead quente 🔥', notifMsg, { phone: telLead }).catch(() => {});
+            await sendPushToAll('Lead quente 🔥', notifMsg, { phone: telLead }).catch(() => {});
             return;
         }
 
@@ -3783,6 +3783,36 @@ async function sendPushToAll(title, body, extra = {}, usernames = null) {
     }
 }
 
+// Teste de aviso pros aparelhos de quem está logado (botão "Avisos neste
+// aparelho"). Diferente do sendPushToAll, devolve o diagnóstico: servidor sem
+// chaves VAPID, nenhum aparelho inscrito, ou o erro que o serviço de push deu.
+app.post('/api/push/test', async (req, res) => {
+    if (!pushEnabled) return res.json({ ok: false, motivo: 'sem_vapid' });
+    try {
+        const username = (req.user && req.user.username) || null;
+        const subs = await queryD1('SELECT id, endpoint, p256dh, auth FROM crm_push_subscriptions WHERE username = ?', [username]);
+        if (!subs || !subs.length) return res.json({ ok: false, motivo: 'sem_aparelho' });
+        const payload = JSON.stringify({ title: '🔔 Teste de aviso', body: 'Se você está vendo isto, os avisos deste aparelho funcionam.' });
+        let enviados = 0;
+        const falhas = [];
+        await Promise.all(subs.map(async (s) => {
+            try {
+                await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+                enviados++;
+            } catch (e) {
+                if (e.statusCode === 404 || e.statusCode === 410) {
+                    await queryD1('DELETE FROM crm_push_subscriptions WHERE id = ?', [s.id]).catch(() => {});
+                }
+                falhas.push(`${e.statusCode || '?'} ${String(e.body || e.message || '').slice(0, 120)}`);
+            }
+        }));
+        res.json({ ok: enviados > 0, enviados, aparelhos: subs.length, falhas });
+    } catch (e) {
+        console.error('push/test:', e.message);
+        res.status(500).json({ ok: false, motivo: 'erro', erro: e.message });
+    }
+});
+
 // Texto da mensagem do lead pra notificação: mídia vira "📷 Foto", "🎧 Áudio"
 // etc. (com a legenda, se tiver) em vez do caminho interno do arquivo.
 function pushPreviewText(texto) {
@@ -3805,7 +3835,12 @@ app.post('/api/push/subscribe', async (req, res) => {
     try {
         const sub = req.body?.subscription;
         if (!sub || !sub.endpoint || !sub.keys) return res.status(400).json({ error: 'Inscrição inválida.' });
-        const id = 'push-' + Buffer.from(sub.endpoint).toString('base64').slice(0, 40);
+        // Hash do endpoint inteiro. Antes eram os 40 primeiros caracteres em
+        // base64 — todo endpoint do Chrome começa com o mesmo
+        // "https://fcm.googleapis.com/fcm/send/", então todo aparelho Chrome
+        // ganhava o MESMO id, só o primeiro se inscrevia e os outros davam 500
+        // (chave duplicada) sem ninguém perceber.
+        const id = 'push-' + crypto.createHash('sha256').update(sub.endpoint).digest('hex').slice(0, 32);
         await queryD1(
             `INSERT INTO crm_push_subscriptions (id, username, endpoint, p256dh, auth) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(endpoint) DO UPDATE SET username = excluded.username, p256dh = excluded.p256dh, auth = excluded.auth`,
@@ -6029,7 +6064,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                     'INSERT INTO crm_notifications (id, message, created_at, avatar_url, actor_username) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)',
                     [`login-${dbUser.username}-${Date.now()}`, loginMessage, dbUser.avatar_url || null, dbUser.username]
                 );
-                sendPushToAll('CRM', loginMessage).catch(() => {});
+                await sendPushToAll('CRM', loginMessage).catch(() => {});
             }
         } catch (e) {
             console.error('Erro ao registrar notificação de login:', e);
@@ -6335,7 +6370,7 @@ async function notifyLeadReply(leadId, phone, texto) {
 
     // Aviso nativo no Windows/celular com a mensagem do lead. Lead com
     // responsável avisa só os aparelhos dele; sem responsável, todo mundo.
-    sendPushToAll(`💬 ${nome}`, pushPreviewText(texto) + (responsavel ? '' : ' · sem responsável'),
+    await sendPushToAll(`💬 ${nome}`, pushPreviewText(texto) + (responsavel ? '' : ' · sem responsável'),
         { phone }, lead.owner_id ? [lead.owner_id] : null).catch(() => {});
 }
 
@@ -10213,7 +10248,7 @@ if (!process.env.VERCEL) {
                         'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, ?)',
                         [Date.now().toString() + Math.random(), msg, att.start_date || new Date().toISOString()]
                     );
-                    sendPushToAll('Atendimento finalizado', msg).catch(() => {});
+                    await sendPushToAll('Atendimento finalizado', msg).catch(() => {});
                 }
             }
         } catch (e) {
@@ -10350,7 +10385,7 @@ async function flowExecNode(node, run, ctx, opts) {
                 try {
                     await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
                         [`flow-${run.id}-${Date.now()}`, handoffMsg]);
-                    sendPushToAll('Fluxo pediu atendimento humano', handoffMsg, { phone: run.phone }).catch(() => {});
+                    await sendPushToAll('Fluxo pediu atendimento humano', handoffMsg, { phone: run.phone }).catch(() => {});
                 } catch (e) {}
             }
             return { end: true };
@@ -10667,7 +10702,11 @@ app.all('/api/flow-tick', async (req, res) => {
         let waChats = { skipped: 'erro' };
         try { waChats = await waChatsCacheTick(); } catch (e) { console.error('Erro ao renovar cache de conversas:', e); }
 
-        res.json({ processed, followup, lembretes, opps, insights, marketing, kanbanRegras, waChats, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Briefing do gestor de tráfego — manhã e fim do dia, trava própria por data.
+        let gestor = { skipped: 'erro' };
+        try { gestor = await gestorBriefingTick(); } catch (e) { console.error('Erro no briefing do gestor:', e); }
+
+        res.json({ processed, followup, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -10694,7 +10733,66 @@ const FOLLOWUP_DEFAULT = {
     acao_final: 'nada',            // 'nada' | 'mover:col-perdido' | 'tag:sem-resposta'
     aplicar_com_humano: true,
     max_por_tick: 25,
+    // Antes de cada envio, cancela o follow-up se o lead tem agendamento futuro
+    // no CRM ou se a IA lê no fim da conversa que ela já foi concluída
+    // (horário confirmado, despedida, desistência...). Ver followupConversaEncerrada.
+    checar_encerramento: true,
 };
+
+// Agendamento futuro registrado pelo CRM pra esse lead (agendamentos_financeiro).
+// Cobre o caso de o card não ter sido movido pra "Agendado" no Kanban.
+async function followupTemAgendamentoFuturo(leadId) {
+    try {
+        const rows = await queryD1(
+            `SELECT data_agendamento FROM agendamentos_financeiro
+             WHERE lead_id = ? AND data_agendamento IS NOT NULL AND data_agendamento != ''
+               AND substr(replace(data_agendamento, 'T', ' '), 1, 10) >= ?
+             LIMIT 1`,
+            [String(leadId), new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })]
+        );
+        return rows && rows[0] ? rows[0].data_agendamento : null;
+    } catch (e) { return null; }
+}
+
+// A IA lê o fim da conversa e diz se um "ainda tem interesse?" seria fora de
+// hora. Falha aberta (devolve null e o follow-up segue): melhor um follow-up a
+// mais do que a sequência inteira travada por um erro da API.
+async function followupConversaEncerrada(phones) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || !phones.length) return null;
+    try {
+        const ph = phones.map(() => '?').join(', ');
+        const rows = await queryD1(
+            `SELECT direction, message FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 12`, phones);
+        if (!rows || !rows.length) return null;
+        const conversa = rows.reverse().map(r => {
+            const quem = r.direction === 'in' ? 'PACIENTE' : 'EQUIPE';
+            const txt = String(r.message || '').startsWith('[FILE:') ? '[mídia]' : String(r.message || '').replace(/\s+/g, ' ').slice(0, 300);
+            return `${quem}: ${txt}`;
+        }).join('\n');
+        const prompt = `Você analisa o fim de uma conversa de WhatsApp entre uma clínica (EQUIPE) e um paciente (PACIENTE).
+A clínica está prestes a mandar uma mensagem automática de follow-up do tipo "você viu minha mensagem? ainda tem interesse?", porque a última mensagem foi da equipe e o paciente não respondeu.
+Decida se esse follow-up seria INADEQUADO porque a conversa já foi concluída. Conta como concluída: agendamento confirmado (dia/horário combinado), paciente já atendido ou já é paciente da clínica, paciente disse claramente que NÃO quer, atendimento encerrado com despedida/agradecimento sem nada pendente, ou a equipe disse que vai retornar depois.
+Continua ABERTA: a equipe fez uma pergunta ou proposta e ficou esperando resposta, ou o paciente disse que vai pensar / ver depois / falar com alguém (o follow-up serve justamente pra esse caso).
+Responda numa única linha, exatamente "ENCERRADA: <motivo em até 8 palavras>" ou "ABERTA".
+
+CONVERSA:
+${conversa}`;
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ? j.error.message : 'Gemini');
+        const out = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+        const m = out.match(/^ENCERRADA\s*:?\s*(.*)$/im);
+        return m ? (m[1].trim() || 'conversa concluída').slice(0, 120) : null;
+    } catch (e) {
+        console.error('follow-up: checagem de encerramento falhou:', e.message);
+        return null;
+    }
+}
 
 async function followupGetConfig() {
     try {
@@ -10896,6 +10994,21 @@ async function followupTick() {
                 const nv = followupNextAllowed(cfg, new Date());
                 await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [followupAtSql(nv), run.id]);
                 continue;
+            }
+
+            // Conversa já resolvida (agendou, se despediu, desistiu) mesmo com o
+            // card fora de "Agendado"/"Ganho": cancela em vez de mandar "ainda tem interesse?".
+            if (cfg.checar_encerramento !== false) {
+                const agendadoPara = await followupTemAgendamentoFuturo(lead.id);
+                const motivoFim = agendadoPara
+                    ? `agendamento marcado para ${String(agendadoPara).replace('T', ' ').slice(0, 16)}`
+                    : await followupConversaEncerrada(vph);
+                if (motivoFim) {
+                    await queryD1("UPDATE crm_followup_runs SET status = 'encerrado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]);
+                    logLeadEvent(lead.id, 'follow_up_cancelado', 'sistema', motivoFim);
+                    processed++;
+                    continue;
+                }
             }
 
             const lastInRow = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) ORDER BY timestamp DESC LIMIT 1`, vph);
@@ -11909,7 +12022,7 @@ Seja RIGOROSO: se a conversa já foi bem encaminhada, se o lead só agradeceu/de
                 "INSERT OR IGNORE INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)",
                 [nid, msg, p.lead.telefone || null]
             );
-            sendPushToAll('Oportunidade detectada 💰', msg, { phone: p.lead.telefone || null }).catch(() => {});
+            await sendPushToAll('Oportunidade detectada 💰', msg, { phone: p.lead.telefone || null }).catch(() => {});
             await tagLeadAsOpportunity(p.lead.id);
             dbg.sinalizados++;
         } catch (e) { console.error('opps: gravar sinal falhou:', e.message); }
@@ -12239,6 +12352,521 @@ app.post('/api/leads/:id/followup/start', async (req, res) => {
             [runId, lead.id, lead.telefone || '', 'manual:' + ((req.user && req.user.username) || '?'), 'agendado', anchor, (lastIn && lastIn[0] && lastIn[0].timestamp) || null, flowDbTime()]);
         res.json({ success: true, id: runId });
     } catch (e) { console.error(e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ==========================================
+// BRIEFING DO GESTOR (checklist diária de tráfego)
+// ==========================================
+// Junta num lugar só o que a checklist do gestor de tráfego manda conferir todo
+// dia: leads da noite, agenda, follow-ups, conversas esperando resposta, gasto,
+// CPL/CPC/CPM/CTR por campanha e por criativo, fadiga, funil e ROAS.
+// Sai em dois momentos (manhã e fim do dia) como push pra quem está em
+// GESTOR_BRIEFING_USUARIOS, e fica em /api/gestor/briefing — que o Apps Script
+// da planilha de checklist (scripts/checklist-gestor.gs) consome pra marcar
+// sozinho os itens que os dados confirmam.
+// Nada aqui pausa, escala ou mexe em campanha: só aponta. A decisão é do gestor.
+
+function gestorDiaSP(offsetDias = 0) {
+    return new Date(Date.now() + offsetDias * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+}
+function gestorSomaDias(dia, n) {
+    const d = new Date(`${dia}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// Brasília fica em UTC-3 o ano todo (sem horário de verão desde 2019) e o D1
+// grava em UTC — então "dia X às H:00 em SP" é H+3 em UTC.
+function gestorUtcDe(diaSP, hora = 0) {
+    const d = new Date(`${diaSP}T00:00:00Z`);
+    d.setUTCHours(hora + 3);
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+function gestorDiaSPDe(ts) {
+    const d = followupParseTs(ts);
+    return d ? d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }) : null;
+}
+function gestorHoraSP() {
+    return Number(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hourCycle: 'h23' }));
+}
+
+function gestorAgrega(linhas) {
+    const t = linhas.reduce((s, r) => {
+        s.gasto += _num(r.spend);
+        s.impressoes += _num(r.impressions);
+        s.cliques += _num(r.clicks);
+        s.alcance += _num(r.reach);
+        s.resultados += _num(r.msg_started) + _num(r.leads_form);
+        return s;
+    }, { gasto: 0, impressoes: 0, cliques: 0, alcance: 0, resultados: 0 });
+    const r2 = n => Math.round(n * 100) / 100;
+    return {
+        gasto: r2(t.gasto), impressoes: t.impressoes, cliques: t.cliques, alcance: t.alcance, resultados: t.resultados,
+        cpc: t.cliques ? r2(t.gasto / t.cliques) : null,
+        cpm: t.impressoes ? r2(t.gasto / t.impressoes * 1000) : null,
+        ctr: t.impressoes ? r2(t.cliques / t.impressoes * 100) : null,
+        // Alcance da Meta vem por dia; somado, dá a frequência média diária — não a da janela.
+        frequencia: t.alcance ? r2(t.impressoes / t.alcance) : null,
+        custo_resultado: t.resultados ? r2(t.gasto / t.resultados) : null
+    };
+}
+
+const gestorBRL = v => v == null ? '—' : 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+const gestorPct = v => v == null ? '—' : `${Number(v).toFixed(1).replace('.', ',')}%`;
+function gestorVar(atual, base) {
+    if (atual == null || !base) return null;
+    return Math.round((atual - base) / base * 1000) / 10;
+}
+const gestorSeta = v => v == null ? '' : ` (${v > 0 ? '+' : ''}${String(v).replace('.', ',')}%)`;
+
+async function gestorBriefing({ momento } = {}) {
+    if (momento !== 'manha' && momento !== 'tarde') momento = gestorHoraSP() < 13 ? 'manha' : 'tarde';
+    await ensureAdTables();
+
+    const hoje = gestorDiaSP();
+    const ontem = gestorSomaDias(hoje, -1);
+    // Dia de referência: de manhã, ontem (dia fechado); no fim do dia, hoje.
+    const ref = momento === 'manha' ? ontem : hoje;
+    const mesIni = hoje.slice(0, 8) + '01';
+    const mesAntIni = gestorSomaDias(mesIni, -1).slice(0, 8) + '01';
+    const diasNoMes = Number(gestorSomaDias(gestorSomaDias(mesIni, 32).slice(0, 8) + '01', -1).slice(8, 10));
+    // Mesmo trecho do mês anterior (dia 1 até o dia de hoje), pra comparar mês a mês sem distorcer.
+    const mesAntAte = [gestorSomaDias(mesAntIni, Number(hoje.slice(8, 10)) - 1), gestorSomaDias(mesIni, -1)].sort()[0];
+    const desde = [mesAntIni, gestorSomaDias(ref, -14)].sort()[0];
+
+    const alertas = [];
+    const sugestoes = [];
+    const checklist = {};
+    const marca = (chaves, nota = '') => { for (const k of [].concat(chaves)) checklist[k] = { ok: true, nota }; };
+
+    // ---- 1) Garante números da Meta recentes (o sync normal roda a cada 6h) ----
+    const cfg = metaAdsConfig();
+    let ultimoSync = null;
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'marketing_sync_last_run'");
+        ultimoSync = r && r[0] ? JSON.parse(r[0].value || 'null') : null;
+    } catch (e) {}
+    const syncIdadeMs = ultimoSync && ultimoSync.at ? Date.now() - new Date(ultimoSync.at).getTime() : Infinity;
+    if (cfg.ok && !_mktSyncRunning && syncIdadeMs > 2 * 3600000) {
+        _mktSyncRunning = true;
+        try {
+            const s = await syncMetaMarketing({ days: 3 });
+            ultimoSync = { at: new Date().toISOString(), ...s };
+        } catch (e) {
+            alertas.push(`Sync com a Meta falhou (${e.message}) — números de anúncio podem estar desatualizados.`);
+        } finally {
+            _mktSyncRunning = false;
+        }
+    } else if (ultimoSync && ultimoSync.erro) {
+        // marketingSyncTick grava o erro no lugar do resultado — sem isso o briefing
+        // mostraria R$ 0,00 como se as campanhas tivessem parado de gastar.
+        alertas.push(/ads_read|ads_management/.test(ultimoSync.erro)
+            ? 'Sync com a Meta falhando: o token não tem permissão ads_read na conta de anúncios — gerar um token novo com essa permissão.'
+            : `Sync com a Meta falhando: ${ultimoSync.erro}`);
+    }
+
+    // ---- 2) Tudo que vem do D1 de uma vez ----
+    const fimDeHojeUtc = gestorUtcDe(gestorSomaDias(hoje, 1));
+    const [insights, anuncios, campanhasMeta, leads, fuRows, aguardRows, orcadoRows] = await Promise.all([
+        queryD1('SELECT date, ad_id, campaign_id, spend, impressions, clicks, reach, msg_started, leads_form FROM ad_insights_daily WHERE date >= ?', [desde]),
+        queryD1('SELECT id, campaign_id, name, status FROM ad_ads', []),
+        queryD1('SELECT id, name, status FROM ad_campaigns', []),
+        queryD1(
+            `SELECT id, nome, origem, column_id, created_at, ad_referral, qualificado_em, valor_recebido, orcamento
+             FROM leads WHERE created_at >= ?`, [gestorUtcDe(desde)]),
+        queryD1(
+            `SELECT COUNT(*) AS total, SUM(CASE WHEN next_send_at < ? THEN 1 ELSE 0 END) AS hoje
+             FROM crm_followup_runs WHERE status IN ('agendado','enviando')`, [fimDeHojeUtc]),
+        queryD1(
+            `SELECT nome, last_msg_at FROM leads
+             WHERE last_msg_direction = 'in' AND column_id NOT IN ('col-perdido','col-ganho') AND last_msg_at >= ?
+             ORDER BY last_msg_at ASC`, [gestorUtcDe(gestorSomaDias(hoje, -7))]),
+        queryD1("SELECT COUNT(*) AS n FROM leads WHERE column_id = 'col-orcado'", [])
+    ]);
+
+    const janela = (de, ate) => insights.filter(r => r.date >= de && r.date <= ate);
+    const nomeCampanha = new Map(campanhasMeta.map(c => [String(c.id), c.name || `(campanha ${c.id})`]));
+    const anuncioPorId = new Map(anuncios.map(a => [String(a.id), a]));
+
+    // ---- 3) Leads do CRM, com atribuição à campanha pelo referral do anúncio ----
+    const doAnuncio = l => !!l.ad_referral || /^Meta Ads/i.test(l.origem || '');
+    const campanhaDoLead = l => {
+        try {
+            const refj = l.ad_referral ? JSON.parse(l.ad_referral) : null;
+            const ad = refj && refj.source_id ? anuncioPorId.get(String(refj.source_id)) : null;
+            return ad && ad.campaign_id ? String(ad.campaign_id) : '';
+        } catch (e) { return ''; }
+    };
+    for (const l of leads) { l._dia = gestorDiaSPDe(l.created_at); l._camp = campanhaDoLead(l); }
+    const leadsEntre = (de, ate, soAnuncio = true) => leads.filter(l => l._dia && l._dia >= de && l._dia <= ate && (!soAnuncio || doAnuncio(l)));
+    const consultou = l => l.column_id === 'col-agendado' || l.column_id === 'col-ganho';
+
+    const corteNoite = momento === 'manha' ? gestorUtcDe(ontem, 18) : gestorUtcDe(hoje, 0);
+    const leadsNoite = leads.filter(l => String(l.created_at) >= corteNoite);
+    const porOrigem = {};
+    for (const l of leadsNoite) { const o = l.origem || 'Sem origem'; porOrigem[o] = (porOrigem[o] || 0) + 1; }
+    marca('leads_noite', `${leadsNoite.length} lead(s)`);
+
+    // ---- 4) Números da Meta: dia de referência x média dos 7 dias anteriores ----
+    const dRef = gestorAgrega(janela(ref, ref));
+    const d7 = gestorAgrega(janela(gestorSomaDias(ref, -7), gestorSomaDias(ref, -1)));
+    const sem = gestorAgrega(janela(gestorSomaDias(ref, -6), ref));
+    const semAnt = gestorAgrega(janela(gestorSomaDias(ref, -13), gestorSomaDias(ref, -7)));
+    const mes = gestorAgrega(janela(mesIni, hoje));
+    const mesAnt = gestorAgrega(janela(mesAntIni, mesAntAte));
+
+    const leadsRef = leadsEntre(ref, ref);
+    const leads7 = leadsEntre(gestorSomaDias(ref, -7), gestorSomaDias(ref, -1));
+    const leadsSem = leadsEntre(gestorSomaDias(ref, -6), ref);
+    const leadsSemAnt = leadsEntre(gestorSomaDias(ref, -13), gestorSomaDias(ref, -7));
+    const leadsMes = leadsEntre(mesIni, hoje);
+    const r2 = n => Math.round(n * 100) / 100;
+    const cplRef = leadsRef.length ? r2(dRef.gasto / leadsRef.length) : null;
+    const cpl7 = leads7.length ? r2(d7.gasto / leads7.length) : null;
+    const cplSem = leadsSem.length ? r2(sem.gasto / leadsSem.length) : null;
+    const cplSemAnt = leadsSemAnt.length ? r2(semAnt.gasto / leadsSemAnt.length) : null;
+    const convSem = leadsSem.length ? r2(leadsSem.filter(consultou).length / leadsSem.length * 100) : null;
+    const receitaMes = leadsMes.filter(l => l.column_id === 'col-ganho').reduce((s, l) => s + (leadPurchaseValueBRL(l) || 0), 0);
+    const roasMes = mes.gasto ? r2(receitaMes / mes.gasto) : null;
+    // Só confia nos números de anúncio se o sync trouxe dados até o dia que
+    // interessa; senão os itens de tráfego ficam desmarcados na planilha.
+    const ultimaDataMeta = insights.reduce((m, r) => r.date > m ? r.date : m, '');
+    const temDadosMeta = !!ultimaDataMeta && ultimaDataMeta >= (momento === 'manha' ? ref : ontem);
+    if (!temDadosMeta) {
+        alertas.push(ultimaDataMeta
+            ? `Dados da Meta parados em ${ultimaDataMeta.split('-').reverse().join('/')} — métricas de anúncio não conferidas.`
+            : 'Nenhum dado da Meta no banco — métricas de anúncio não conferidas.');
+    }
+
+    // ---- 5) Campanhas (últimos 7 dias até o dia de referência) ----
+    const semDe = gestorSomaDias(ref, -6);
+    const porCampanha = new Map();
+    const bucket = id => {
+        if (!porCampanha.has(id)) porCampanha.set(id, { id, nome: nomeCampanha.get(id) || `(campanha ${id})`, linhas: [], leads: 0, consultas: 0, receita: 0 });
+        return porCampanha.get(id);
+    };
+    for (const r of janela(semDe, ref)) bucket(String(r.campaign_id || '')).linhas.push(r);
+    for (const l of leadsSem) {
+        if (!l._camp) continue;
+        const b = bucket(l._camp);
+        b.leads++;
+        if (consultou(l)) b.consultas++;
+        if (l.column_id === 'col-ganho') b.receita += leadPurchaseValueBRL(l) || 0;
+    }
+    const statusCampanha = new Map(campanhasMeta.map(c => [String(c.id), c.status]));
+    const campanhas = [...porCampanha.values()].map(b => {
+        const a = gestorAgrega(b.linhas);
+        // Nem todo resultado da Meta vira lead no CRM (formulário instantâneo,
+        // Direct do Instagram, outro número de WhatsApp) e nem todo lead do CRM
+        // a Meta conta — o maior dos dois é o que dá pra comparar entre campanhas.
+        const leadsTotal = Math.max(b.leads, a.resultados);
+        return {
+            id: b.id, nome: b.nome, status: statusCampanha.get(b.id) || '', gasto: a.gasto, resultados_meta: a.resultados, ctr: a.ctr,
+            leads: b.leads, leads_total: leadsTotal, consultas: b.consultas, receita: r2(b.receita),
+            cpl: leadsTotal ? r2(a.gasto / leadsTotal) : null,
+            custo_consulta: b.consultas ? r2(a.gasto / b.consultas) : null
+        };
+    }).filter(c => c.gasto > 0 || c.leads > 0).sort((a, b) => b.gasto - a.gasto);
+
+    const somaLeadsCamp = campanhas.reduce((s, c) => s + c.leads_total, 0);
+    const cplMedioSem = somaLeadsCamp ? r2(campanhas.reduce((s, c) => s + c.gasto, 0) / somaLeadsCamp) : null;
+    // Escalar/reduzir/pausar só faz sentido pra campanha que está rodando.
+    const comCpl = campanhas.filter(c => c.cpl != null && c.leads_total >= 3 && c.status === 'ACTIVE');
+
+    for (const c of campanhas) {
+        if (c.resultados_meta >= 5 && c.leads < c.resultados_meta * 0.3) {
+            alertas.push(`"${c.nome}" teve ${c.resultados_meta} resultado(s) na Meta na semana, mas só ${c.leads} lead(s) chegaram ao CRM — conferir pra onde o anúncio manda (formulário, Instagram, outro número).`);
+        }
+    }
+    const melhorCampanha = comCpl.slice().sort((a, b) => a.cpl - b.cpl)[0] || null;
+    const piorCampanha = comCpl.length > 1 ? comCpl.slice().sort((a, b) => b.cpl - a.cpl)[0] : null;
+    const maiorRetorno = campanhas.filter(c => c.consultas > 0).sort((a, b) => b.consultas - a.consultas || b.receita - a.receita)[0] || null;
+
+    if (cplMedioSem) {
+        for (const c of comCpl) {
+            if (c.cpl <= cplMedioSem * 0.8) sugestoes.push(`Escalar "${c.nome}": CPL ${gestorBRL(c.cpl)} contra média de ${gestorBRL(cplMedioSem)} na semana.`);
+        }
+        for (const c of campanhas) {
+            if (c.status !== 'ACTIVE') continue;
+            if (c.gasto >= cplMedioSem * 2 && !c.leads_total) {
+                sugestoes.push(`Pausar ou revisar "${c.nome}": ${gestorBRL(c.gasto)} gastos na semana sem nenhum lead.`);
+            } else if (c.cpl != null && c.cpl >= cplMedioSem * 1.5 && c.leads_total >= 3) {
+                sugestoes.push(`Reduzir verba de "${c.nome}": CPL ${gestorBRL(c.cpl)}, ${Math.round((c.cpl / cplMedioSem - 1) * 100)}% acima da média.`);
+            }
+        }
+    }
+
+    // Ativa na Meta mas sem gastar no dia de referência = algo travou (pagamento, reprovação, verba).
+    const gastoPorCampanhaRef = new Map();
+    for (const r of janela(ref, ref)) gastoPorCampanhaRef.set(String(r.campaign_id), (gastoPorCampanhaRef.get(String(r.campaign_id)) || 0) + _num(r.spend));
+    const ativas = campanhasMeta.filter(c => c.status === 'ACTIVE');
+    const semEntrega = (momento === 'tarde' && gestorHoraSP() < 15) ? [] : ativas.filter(c => !gastoPorCampanhaRef.get(String(c.id)));
+    if (temDadosMeta) {
+        for (const c of semEntrega) alertas.push(`Campanha "${c.name}" está ativa mas não gastou nada ${momento === 'manha' ? 'ontem' : 'hoje'}.`);
+        const chave = momento === 'manha' ? 'campanhas_ativas' : 'campanhas_ativas_fim';
+        marca(chave, `${ativas.length} ativa(s)${semEntrega.length ? `, ${semEntrega.length} sem entrega` : ''}`);
+    }
+
+    // ---- 6) Criativos: CTR, custo por resultado e fadiga ----
+    const porAnuncio = new Map();
+    for (const r of janela(semDe, ref)) {
+        const k = String(r.ad_id);
+        if (!porAnuncio.has(k)) porAnuncio.set(k, []);
+        porAnuncio.get(k).push(r);
+    }
+    const ultimos3De = gestorSomaDias(ref, -2);
+    const criativos = [...porAnuncio.entries()].map(([id, linhas]) => {
+        const a = gestorAgrega(linhas);
+        const recente = gestorAgrega(linhas.filter(r => r.date >= ultimos3De));
+        const antes = gestorAgrega(linhas.filter(r => r.date < ultimos3De));
+        const ad = anuncioPorId.get(id);
+        return {
+            id, nome: (ad && ad.name) || `(anúncio ${id})`, campanha: nomeCampanha.get(String((ad && ad.campaign_id) || '')) || '',
+            gasto: a.gasto, impressoes: a.impressoes, ctr: a.ctr, resultados: a.resultados, custo_resultado: a.custo_resultado,
+            frequencia_recente: recente.frequencia,
+            ctr_recente: recente.impressoes >= 500 ? recente.ctr : null,
+            ctr_antes: antes.impressoes >= 500 ? antes.ctr : null
+        };
+    }).filter(c => c.impressoes >= 500);
+
+    const melhorCriativo = criativos.filter(c => c.resultados >= 3).sort((a, b) => a.custo_resultado - b.custo_resultado)[0]
+        || criativos.slice().sort((a, b) => (b.ctr || 0) - (a.ctr || 0))[0] || null;
+    const fadiga = criativos.filter(c =>
+        (c.frequencia_recente != null && c.frequencia_recente >= 3) ||
+        (c.ctr_recente != null && c.ctr_antes && c.ctr_recente <= c.ctr_antes * 0.7));
+    for (const c of fadiga) {
+        const motivo = c.frequencia_recente >= 3 ? `frequência ${String(c.frequencia_recente).replace('.', ',')}` : `CTR caiu de ${gestorPct(c.ctr_antes)} pra ${gestorPct(c.ctr_recente)}`;
+        sugestoes.push(`Trocar criativo "${c.nome}" (${motivo}) — sinal de fadiga.`);
+    }
+    if (temDadosMeta && criativos.length) {
+        marca(['criativo_top', 'ctr_criativos', 'conversao_criativos'], melhorCriativo ? `${melhorCriativo.nome}: CTR ${gestorPct(melhorCriativo.ctr)}, ${gestorBRL(melhorCriativo.custo_resultado)}/resultado` : '');
+        marca('fadiga', fadiga.length ? `${fadiga.length} com fadiga` : 'nenhum com fadiga');
+    }
+
+    // ---- 7) Orçamento ----
+    const orcMensal = Number(process.env.GESTOR_ORCAMENTO_MENSAL) || null;
+    const diasCorridos = Math.max(1, Number(ref.slice(8, 10)) || 1);
+    const gastoMesAteRef = gestorAgrega(janela(mesIni, ref)).gasto;
+    const projecao = ref >= mesIni ? r2(gastoMesAteRef / diasCorridos * diasNoMes) : null;
+    if (orcMensal && projecao != null) {
+        if (projecao > orcMensal * 1.1) alertas.push(`No ritmo atual o mês fecha em ${gestorBRL(projecao)} — ${Math.round((projecao / orcMensal - 1) * 100)}% acima do orçamento de ${gestorBRL(orcMensal)}.`);
+        else if (projecao < orcMensal * 0.8) alertas.push(`No ritmo atual o mês fecha em ${gestorBRL(projecao)} — abaixo do orçamento de ${gestorBRL(orcMensal)} (sobra verba).`);
+    }
+    if (dRef.gasto && d7.gasto) {
+        const varGasto = gestorVar(dRef.gasto, d7.gasto / 7);
+        if (momento === 'manha' && varGasto != null && Math.abs(varGasto) >= 40) alertas.push(`Gasto de ontem ${gestorBRL(dRef.gasto)} ficou ${varGasto > 0 ? 'acima' : 'abaixo'} da média diária (${gestorBRL(r2(d7.gasto / 7))}) em ${Math.abs(varGasto)}%.`);
+    }
+    if (cplRef && cpl7 && momento === 'manha' && cplRef >= cpl7 * 1.4) alertas.push(`CPL de ontem ${gestorBRL(cplRef)} subiu ${Math.round((cplRef / cpl7 - 1) * 100)}% em relação à média da semana (${gestorBRL(cpl7)}).`);
+    if (temDadosMeta) {
+        const notaOrc = `${gestorBRL(dRef.gasto)} no dia · ${gestorBRL(mes.gasto)} no mês${orcMensal ? ` de ${gestorBRL(orcMensal)}` : ''}`;
+        marca(momento === 'manha' ? 'orcamento' : 'orcamento_consumido', notaOrc);
+        marca('invest_dia', gestorBRL(dRef.gasto));
+        marca('invest_acum', `${gestorBRL(mes.gasto)} no mês`);
+        marca(['leads_gerados', 'leads_qtd'], `${leadsRef.length} no CRM · ${dRef.resultados} na Meta`);
+        marca(['cpl', 'cpl_medio'], `${gestorBRL(cplRef)} (semana ${gestorBRL(cplSem)})`);
+        marca('cpc', gestorBRL(dRef.cpc));
+        marca('cpm', gestorBRL(dRef.cpm));
+        marca('ctr', gestorPct(dRef.ctr));
+        marca('frequencia', dRef.frequencia == null ? '—' : String(dRef.frequencia).replace('.', ','));
+        marca('alcance', String(dRef.alcance));
+        marca('impressoes', String(dRef.impressoes));
+        marca('taxa_conversao', `${gestorPct(convSem)} dos leads da semana viraram consulta`);
+        marca('roas', roasMes == null ? '—' : `${String(roasMes).replace('.', ',')}x no mês${receitaMes ? '' : ' (sem receita lançada no Kanban)'}`);
+        marca('comp_dias', `gasto ${gestorSeta(gestorVar(dRef.gasto, d7.gasto / 7)).trim() || '—'} vs média 7d`);
+        marca('comp_semana', `CPL ${gestorBRL(cplSem)} vs ${gestorBRL(cplSemAnt)}`);
+        marca('comp_mes', `gasto ${gestorBRL(mes.gasto)} vs ${gestorBRL(mesAnt.gasto)} no mesmo trecho do mês passado`);
+        marca(['campanhas_conversao', 'campanhas_retorno', 'funil'], maiorRetorno ? `${maiorRetorno.nome}: ${maiorRetorno.consultas} consulta(s)` : 'sem consultas atribuídas na semana');
+    }
+
+    // ---- 8) Atendimento: follow-ups, conversas esperando, orçados ----
+    const fu = (fuRows && fuRows[0]) || {};
+    marca('followups', `${_num(fu.hoje)} pra hoje · ${_num(fu.total)} ativos`);
+    const agora = Date.now();
+    const aguardando = (aguardRows || []).filter(r => {
+        const d = followupParseTs(r.last_msg_at);
+        return d && agora - d.getTime() > 10 * 60000;
+    });
+    const orcados = _num(orcadoRows && orcadoRows[0] && orcadoRows[0].n);
+    marca('oportunidades', `${orcados} orçamento(s) em aberto`);
+
+    // ---- 9) Agenda (Amigo): de manhã a de hoje, no fim do dia a de amanhã ----
+    const diaAgenda = momento === 'manha' ? hoje : gestorSomaDias(hoje, 1);
+    let agenda = null;
+    try {
+        const tok = await getAmigoToken();
+        if (tok) {
+            const r = await fetch(`https://amigobot-api.amigoapp.com.br/attendances?start_date=${diaAgenda}&end_date=${diaAgenda}&status=ALL`, {
+                headers: { 'Authorization': `Bearer ${tok}` }, signal: AbortSignal.timeout(15000)
+            });
+            const j = await r.json();
+            const lista = Array.isArray(j.data) ? j.data : (Array.isArray(j) ? j : []);
+            if (r.ok) {
+                agenda = { dia: diaAgenda, total: lista.length, por_status: {} };
+                for (const a of lista) { const s = a.status || '?'; agenda.por_status[s] = (agenda.por_status[s] || 0) + 1; }
+                if (momento === 'manha') marca('agenda', `${lista.length} atendimento(s)`);
+            }
+        }
+    } catch (e) { console.error('[gestor] agenda:', e.message); }
+
+    // ---- 10) Site: só de manhã, pra não martelar o site ----
+    let site = null;
+    const siteUrls = (process.env.GESTOR_SITE_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (momento === 'manha' && siteUrls.length) {
+        site = await Promise.all(siteUrls.map(async url => {
+            try {
+                const r = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
+                const html = r.ok ? await r.text() : '';
+                const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+                const desc = (html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i) || [])[1] || '';
+                return { url, status: r.status, ok: r.ok, title: title.trim(), descricao: desc.trim() };
+            } catch (e) { return { url, status: 0, ok: false, erro: e.message }; }
+        }));
+        const fora = site.filter(s => !s.ok);
+        for (const s of fora) alertas.push(`Site fora do ar ou com erro: ${s.url} (${s.status || s.erro}).`);
+        if (!fora.length) marca('site_links', `${site.length} página(s) respondendo`);
+        const semTitulo = site.filter(s => s.ok && !s.title).length;
+        const semDesc = site.filter(s => s.ok && !s.descricao).length;
+        marca('site_titulos', semTitulo ? `${semTitulo} sem título` : 'todas com título');
+        marca('site_descricoes', semDesc ? `${semDesc} sem meta description` : 'todas com meta description');
+        if (semDesc) sugestoes.push(`${semDesc} página(s) do site sem meta description.`);
+    }
+
+    // ---- 11) Lista de prioridades do dia ----
+    const prioridades = [];
+    if (aguardando.length) {
+        const maisAntiga = followupParseTs(aguardando[0].last_msg_at);
+        const horas = maisAntiga ? Math.round((agora - maisAntiga.getTime()) / 3600000) : 0;
+        prioridades.push(`Responder ${aguardando.length} conversa(s) esperando resposta — a mais antiga (${aguardando[0].nome || 'sem nome'}) há ${horas}h.`);
+    }
+    for (const c of semEntrega.slice(0, 3)) if (temDadosMeta) prioridades.push(`Ver por que "${c.name}" não está entregando.`);
+    if (_num(fu.hoje)) prioridades.push(`${_num(fu.hoje)} follow-up(s) saem hoje — conferir se algum lead precisa de contato humano.`);
+    for (const s of sugestoes.slice(0, 4)) prioridades.push(s);
+    if (orcados) prioridades.push(`Retomar ${orcados} orçamento(s) em aberto no Kanban.`);
+    marca('prioridades', `${prioridades.length} item(ns)`);
+
+    // ---- 12) Texto pronto (push, e-mail, aba da planilha) ----
+    const L = [];
+    const titulo = momento === 'manha' ? `☀️ Briefing da manhã — ${hoje.split('-').reverse().join('/')}` : `🌙 Fechamento do dia — ${hoje.split('-').reverse().join('/')}`;
+    L.push(titulo, '');
+    L.push(`LEADS ${momento === 'manha' ? 'DESDE ONTEM 18H' : 'DE HOJE'}: ${leadsNoite.length}`);
+    for (const [o, n] of Object.entries(porOrigem).sort((a, b) => b[1] - a[1])) L.push(`  · ${o}: ${n}`);
+    if (agenda) L.push(`AGENDA ${momento === 'manha' ? 'DE HOJE' : 'DE AMANHÃ'}: ${agenda.total} atendimento(s)`);
+    L.push(`CONVERSAS ESPERANDO RESPOSTA: ${aguardando.length}`);
+    L.push(`FOLLOW-UPS: ${_num(fu.hoje)} hoje · ${_num(fu.total)} ativos`);
+    L.push('');
+    if (temDadosMeta) {
+        L.push(`ANÚNCIOS — ${momento === 'manha' ? 'ONTEM' : 'HOJE ATÉ AGORA'} (vs média dos 7 dias anteriores)`);
+        L.push(`  Gasto: ${gestorBRL(dRef.gasto)}${gestorSeta(gestorVar(dRef.gasto, d7.gasto / 7))}`);
+        L.push(`  Leads no CRM: ${leadsRef.length} · resultados na Meta: ${dRef.resultados}`);
+        L.push(`  CPL (lead no CRM): ${gestorBRL(cplRef)}${gestorSeta(gestorVar(cplRef, cpl7))} · custo por resultado na Meta: ${gestorBRL(dRef.custo_resultado)}`);
+        L.push(`  CPC: ${gestorBRL(dRef.cpc)}${gestorSeta(gestorVar(dRef.cpc, d7.cpc))} · CPM: ${gestorBRL(dRef.cpm)}${gestorSeta(gestorVar(dRef.cpm, d7.cpm))}`);
+        L.push(`  CTR: ${gestorPct(dRef.ctr)}${gestorSeta(gestorVar(dRef.ctr, d7.ctr))} · Frequência: ${dRef.frequencia == null ? '—' : String(dRef.frequencia).replace('.', ',')}`);
+        L.push(`  Alcance: ${dRef.alcance} · Impressões: ${dRef.impressoes}`);
+        L.push('');
+        L.push(`SEMANA: ${gestorBRL(sem.gasto)} · ${leadsSem.length} leads · CPL ${gestorBRL(cplSem)}${gestorSeta(gestorVar(cplSem, cplSemAnt))} · ${gestorPct(convSem)} viraram consulta`);
+        L.push(`MÊS: ${gestorBRL(mes.gasto)}${gestorSeta(gestorVar(mes.gasto, mesAnt.gasto))} · ROAS ${roasMes == null ? '—' : String(roasMes).replace('.', ',') + 'x'}${orcMensal ? ` · projeção ${gestorBRL(projecao)} de ${gestorBRL(orcMensal)}` : ''}`);
+        L.push('');
+        if (campanhas.length) {
+            L.push('CAMPANHAS (7 dias)');
+            for (const c of campanhas.slice(0, 8)) L.push(`  · ${c.nome}${c.status && c.status !== 'ACTIVE' ? ' (pausada)' : ''}: ${gestorBRL(c.gasto)} · ${c.leads} no CRM / ${c.resultados_meta} na Meta · CPL ${gestorBRL(c.cpl)} · ${c.consultas} consulta(s)`);
+            L.push('');
+        }
+        if (melhorCriativo) L.push(`MELHOR CRIATIVO: ${melhorCriativo.nome} — CTR ${gestorPct(melhorCriativo.ctr)}, ${gestorBRL(melhorCriativo.custo_resultado)}/resultado`, '');
+    } else {
+        L.push(`ANÚNCIOS: sem dados da Meta ${ultimaDataMeta ? `desde ${ultimaDataMeta.split('-').reverse().join('/')}` : 'no banco'} (ver alertas).`);
+        L.push(`LEADS DE ANÚNCIO NO CRM: ${leadsRef.length} ${momento === 'manha' ? 'ontem' : 'hoje'} · ${leadsSem.length} na semana`, '');
+    }
+    if (alertas.length) { L.push('⚠️ ALERTAS'); for (const a of alertas) L.push(`  · ${a}`); L.push(''); }
+    if (prioridades.length) { L.push('✅ PRIORIDADES'); prioridades.forEach((p, i) => L.push(`  ${i + 1}. ${p}`)); }
+
+    const resumo = [
+        temDadosMeta ? `${gestorBRL(dRef.gasto)} gastos` : null,
+        `${leadsNoite.length} lead(s)`,
+        cplRef ? `CPL ${gestorBRL(cplRef)}` : null,
+        aguardando.length ? `${aguardando.length} conversa(s) esperando` : null,
+        alertas.length ? `${alertas.length} alerta(s)` : null
+    ].filter(Boolean).join(' · ');
+
+    return {
+        momento, gerado_em: new Date().toISOString(), dia: hoje, dia_referencia: ref,
+        titulo, resumo, texto: L.join('\n'),
+        alertas, sugestoes, prioridades, checklist,
+        numeros: {
+            leads_crm: leadsRef.length, conversao_semana_pct: convSem, receita_mes: r2(receitaMes),
+            ...(temDadosMeta ? {
+                gasto: dRef.gasto, resultados_meta: dRef.resultados,
+                cpl: cplRef, cpc: dRef.cpc, cpm: dRef.cpm, ctr: dRef.ctr, frequencia: dRef.frequencia,
+                alcance: dRef.alcance, impressoes: dRef.impressoes,
+                gasto_semana: sem.gasto, cpl_semana: cplSem, gasto_mes: mes.gasto, roas_mes: roasMes,
+                melhor_campanha: melhorCampanha && melhorCampanha.nome, pior_campanha: piorCampanha && piorCampanha.nome,
+                melhor_criativo: melhorCriativo && melhorCriativo.nome
+            } : {})
+        },
+        meta_atualizada: temDadosMeta, ultima_data_meta: ultimaDataMeta || null,
+        leads_noite: { total: leadsNoite.length, por_origem: porOrigem },
+        agenda, site, campanhas, criativos_fadiga: fadiga.map(c => c.nome),
+        conversas_esperando: aguardando.length, followups: { hoje: _num(fu.hoje), ativos: _num(fu.total) },
+        ultimo_sync_meta: ultimoSync && ultimoSync.at
+    };
+}
+
+// Chamado em todo /api/flow-tick. Manda o briefing uma vez de manhã e uma no fim
+// do dia (seg a sáb, como a planilha). A trava é um upsert condicional: só um
+// tick consegue "trocar" a data gravada, então dois ticks simultâneos não
+// mandam o push em dobro.
+async function gestorBriefingTick() {
+    const usuarios = (process.env.GESTOR_BRIEFING_USUARIOS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!usuarios.length) return { skipped: 'sem GESTOR_BRIEFING_USUARIOS' };
+    const hoje = gestorDiaSP();
+    if (new Date(`${hoje}T12:00:00Z`).getUTCDay() === 0) return { skipped: 'domingo' };
+    const hora = gestorHoraSP();
+    const hManha = Number(process.env.GESTOR_BRIEFING_HORA_MANHA) || 8;
+    const hTarde = Number(process.env.GESTOR_BRIEFING_HORA_TARDE) || 18;
+    const momento = hora >= hTarde ? 'tarde' : hora >= hManha ? 'manha' : null;
+    if (!momento) return { skipped: 'fora do horário' };
+
+    const trava = await queryD1Meta(
+        `INSERT INTO crm_settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE crm_settings.value != excluded.value`,
+        [`gestor_briefing_enviado_${momento}`, hoje]
+    );
+    if (!trava || !trava.meta || !trava.meta.changes) return { skipped: 'já enviado', momento };
+
+    const b = await gestorBriefing({ momento });
+    await queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('gestor_briefing_ultimo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [JSON.stringify(b)]
+    );
+    // sendPushToAll cai pra "todo mundo" se nenhum dos usuários tiver aparelho
+    // inscrito — aqui isso viraria briefing de tráfego no celular da recepção.
+    const ph = usuarios.map(() => '?').join(', ');
+    const inscritos = await queryD1(`SELECT COUNT(*) AS n FROM crm_push_subscriptions WHERE username IN (${ph})`, usuarios);
+    if (!_num(inscritos && inscritos[0] && inscritos[0].n)) return { momento, push: 'nenhum aparelho inscrito' };
+    await sendPushToAll(b.titulo, b.resumo || 'Briefing pronto.', {}, usuarios);
+    return { momento, push: 'enviado' };
+}
+
+// Briefing sob demanda. Logado no CRM, ou com GESTOR_BRIEFING_KEY (é como o
+// Apps Script da planilha chama — Authorization: Bearer <chave> ou ?key=).
+// ?momento=manha|tarde (padrão: pela hora) · ?formato=texto devolve só o texto.
+app.get('/api/gestor/briefing', async (req, res) => {
+    const autorizado = (() => {
+        try {
+            if (req.cookies && req.cookies.crm_token) { jwt.verify(req.cookies.crm_token, process.env.JWT_SECRET); return true; }
+        } catch (e) {}
+        const chave = process.env.GESTOR_BRIEFING_KEY;
+        if (!chave) return false;
+        const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+        return bearer === chave || req.query.key === chave;
+    })();
+    if (!autorizado) return res.status(401).json({ error: 'Não autorizado.' });
+    try {
+        const b = await gestorBriefing({ momento: req.query.momento });
+        if (req.query.formato === 'texto') return res.type('text/plain; charset=utf-8').send(b.texto);
+        res.json(b);
+    } catch (e) {
+        console.error('[gestor] briefing:', e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Iniciar Servidor (Sempre roda localmente, exceto na Vercel)
