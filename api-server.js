@@ -6956,7 +6956,15 @@ app.get('/api/leads', async (req, res) => {
         } else {
             rows = await queryD1('SELECT * FROM leads ORDER BY created_at ASC');
         }
-        res.json(rows || []);
+        // A lista inteira passa de 3 MB e o front pede de novo a cada 90s. Se o front
+        // manda o ETag da última e nada mudou, responde 304 sem corpo. A comparação é
+        // feita aqui porque o fetch do navegador manda "Cache-Control: no-cache" junto,
+        // e aí o Express ignora o If-None-Match.
+        const corpo = JSON.stringify(rows || []);
+        const etag = '"' + crypto.createHash('sha1').update(corpo).digest('base64url') + '"';
+        res.set('ETag', etag);
+        if (req.headers['if-none-match'] === etag) return res.status(304).end();
+        res.type('json').send(corpo);
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -9008,7 +9016,16 @@ app.delete('/api/audiences/:id', async (req, res) => {
 });
 
 // Nova Rota Local para buscar Opções Dinâmicas (Serviços, Médicos, Locais)
+// /api/options consulta 5 endpoints do Amigo (inclusive 180 dias de agendamentos)
+// e levava ~7s a cada carregamento de página. Locais, procedimentos e profissionais
+// mudam pouco: guarda 10 min por unidade (por instância da função).
+const OPTIONS_CACHE_MS = 10 * 60 * 1000;
+const optionsCache = new Map(); // unidade_id -> { at, body }
+
 app.get('/api/options', async (req, res) => {
+    const cacheKey = String(req.query.unidade_id || '');
+    const emCache = optionsCache.get(cacheKey);
+    if (emCache && Date.now() - emCache.at < OPTIONS_CACHE_MS) return res.status(200).json(emCache.body);
     const AMIGO_API_TOKEN = await getAmigoToken(req.query.unidade_id);
     if (!AMIGO_API_TOKEN) return res.status(500).json({ error: 'Token ausente' });
     
@@ -9084,11 +9101,13 @@ app.get('/api/options', async (req, res) => {
             }
         });
         
-        res.status(200).json({
+        const body = {
             places: places.data || [],
             events: Array.from(eventsMap.values()),
             doctors: Array.from(doctorsMap.values())
-        });
+        };
+        optionsCache.set(cacheKey, { at: Date.now(), body });
+        res.status(200).json(body);
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Erro interno' });
