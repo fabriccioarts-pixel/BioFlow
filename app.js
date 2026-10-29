@@ -4747,6 +4747,17 @@ function applyAudienceToContatos(audienceId) {
     filterContatos();
 }
 
+// Mesma ideia do Kanban: a tabela tinha uma linha por contato (2 mil+, ~40 mil
+// elementos que ficavam na página mesmo depois de sair da aba). Mostra em lotes;
+// o total e os filtros continuam valendo para todos.
+const CONTATOS_POR_VEZ = 100;
+let contatosLimite = CONTATOS_POR_VEZ;
+
+function contatosMostrarMais() {
+    contatosLimite += CONTATOS_POR_VEZ;
+    renderContatos();
+}
+
 function renderContatos() {
     const tbody = document.getElementById('list-contatos');
     const countEl = document.getElementById('count-contatos');
@@ -4760,7 +4771,8 @@ function renderContatos() {
         return;
     }
 
-    tbody.innerHTML = rows.map(r => {
+    const faltam = rows.length - contatosLimite;
+    tbody.innerHTML = rows.slice(0, contatosLimite).map(r => {
         const col = kanbanStageInfo(r.column, r.pipeline_id);
         const etapa = col
             ? `<span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:${col.color};"><i class="${col.icon}" style="font-size:0.7rem;"></i> ${escapeHtml(col.label)}</span>`
@@ -4796,10 +4808,13 @@ function renderContatos() {
                 </button>
             </td>
         </tr>`;
-    }).join('');
+    }).join('') + (faltam > 0
+        ? `<tr><td colspan="8" style="padding:0.75rem;"><button type="button" class="kanban-mais" onclick="contatosMostrarMais()">Mostrar mais ${Math.min(faltam, CONTATOS_POR_VEZ)} · faltam ${faltam}</button></td></tr>`
+        : '');
 }
 
 function filterContatos() {
+    contatosLimite = CONTATOS_POR_VEZ;
     renderContatos();
 }
 
