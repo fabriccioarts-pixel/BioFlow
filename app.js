@@ -338,6 +338,8 @@ function initApp() {
             if (btnGestao) {
                 btnGestao.style.display = 'flex';
             }
+            const btnPersonalizacao = document.getElementById('flyout-personalizacao');
+            if (btnPersonalizacao) btnPersonalizacao.style.display = 'flex';
             const btnAiAgent = document.getElementById('sb-tool-ai-agent');
             if (btnAiAgent) {
                 btnAiAgent.style.display = 'flex';
@@ -4296,6 +4298,7 @@ function switchTab(tabId) {
         contatos: 'Contatos',
         fluxos: 'Fluxos',
         midias: 'Mídias',
+        cerebro: 'Segundo Cérebro',
         historico: 'Financeiro',
     };
     if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
@@ -4351,6 +4354,8 @@ function switchTab(tabId) {
     if(fluxosView) fluxosView.style.display = 'none';
     const midiasView = document.getElementById('view-midias');
     if(midiasView) midiasView.style.display = 'none';
+    const cerebroView = document.getElementById('view-cerebro');
+    if(cerebroView) cerebroView.style.display = 'none';
 
     // Para polling do chat ao sair da aba
     if (tabId !== 'chat' && window.chatPollingInterval) {
@@ -4469,6 +4474,12 @@ function switchTab(tabId) {
         if (view) {
             view.style.display = 'flex';
             if (typeof loadMidias === 'function') loadMidias(null);
+        }
+    } else if (tabId === 'cerebro') {
+        const view = document.getElementById('view-cerebro');
+        if (view) {
+            view.style.display = 'flex';
+            brnSetMode(brnModo);
         }
     } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes', 'procedimento'].includes(tabId)) {
         const view = document.getElementById(`view-${tabId}`);
@@ -9127,8 +9138,8 @@ function readHorarioAtendimento() {
 
 // Select do template de retomada: lista os templates da Meta com o status ao
 // lado, e mantém o salvo na lista mesmo se a Meta não devolver (ex.: excluído).
-async function renderRetomadaTemplateSelect(selected) {
-    const sel = document.getElementById('retomada-template');
+async function renderRetomadaTemplateSelect(selected, selectId = 'retomada-template') {
+    const sel = document.getElementById(selectId);
     if (!sel) return;
     sel.innerHTML = `<option value="${escapeHtml(selected || '')}">${escapeHtml(selected || 'Carregando templates…')}</option>`;
     try {
@@ -9173,6 +9184,7 @@ async function openWhatsappAiSettingsModal() {
         if (visionEl) visionEl.checked = toggleJson.vision !== false;
         if (audioEl) audioEl.checked = toggleJson.audio !== false;
         if (mediaEl) mediaEl.checked = !!toggleJson.media;            // desliga por padrão
+        renderRetomadaTemplateSelect(toggleJson.retornoTemplate || '', 'whatsapp-ai-retorno-template');
 
         try {
             const oppsJson = await oppsRes.json();
@@ -9208,6 +9220,7 @@ async function saveWhatsappAiSettings() {
     const vision = !!(document.getElementById('whatsapp-ai-vision') || {}).checked;
     const audio = !!(document.getElementById('whatsapp-ai-audio') || {}).checked;
     const media = !!(document.getElementById('whatsapp-ai-media') || {}).checked;
+    const retornoTemplate = (document.getElementById('whatsapp-ai-retorno-template') || {}).value || '';
     const oppsAtivo = !!(document.getElementById('opps-ativo') || {}).checked;
     const oppsIntervalo = parseInt((document.getElementById('opps-intervalo') || {}).value, 10) || 8;
     const oppsPalavras = (document.getElementById('opps-palavras') || {}).value || '';
@@ -9222,7 +9235,7 @@ async function saveWhatsappAiSettings() {
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio, media })
+                body: JSON.stringify({ enabled, delaySeconds, mode, human, typing, vision, audio, media, retornoTemplate })
             }),
             fetch('/api/settings/whatsapp-ai-context', {
                 method: 'PUT',
@@ -11771,4 +11784,300 @@ async function marketingSyncNow() {
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = btn._label || '<i class="fa-solid fa-cloud-arrow-down"></i> Sincronizar'; }
     }
+}
+
+// ============================================================================
+// SEGUNDO CÉREBRO — notas da clínica (crm_brain_notes). Todo mundo lê; só admin
+// cria/edita, porque as notas R_ mudam o que a IA do WhatsApp fala com paciente.
+// ============================================================================
+let brnNotas = [];
+let brnSelId = null;
+let brnEditando = false;
+let brnModo = 'painel';
+let brnPainelSujo = true; // recarrega o painel quando as notas mudam pela aba Notas
+
+// Painel = o app que vivia na pasta segundo-cerebro-natuclinic (cerebro.html), lendo
+// as notas do banco. Notas = gerenciador simples (lista, editor, importar, testar).
+function brnSetMode(modo) {
+    brnModo = modo;
+    document.querySelectorAll('.brn-mode').forEach(b => {
+        const on = b.dataset.mode === modo;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-selected', on);
+    });
+    const painel = document.getElementById('brn-painel');
+    document.getElementById('brn-notas').style.display = modo === 'notas' ? 'flex' : 'none';
+    painel.style.display = modo === 'painel' ? 'block' : 'none';
+    if (modo === 'painel' && brnPainelSujo) {
+        brnPainelSujo = false;
+        if (painel.getAttribute('src')) painel.contentWindow.location.reload();
+        else painel.src = 'cerebro.html';
+    }
+    if (modo === 'notas') loadBrain();
+}
+
+const BRN_GRUPOS = [
+    { p: 'R', titulo: 'Recursos', uso: 'IA do WhatsApp, Copiloto e Ask AI' },
+    { p: 'A', titulo: 'Áreas', uso: 'Copiloto e Ask AI' },
+    { p: 'P', titulo: 'Projetos', uso: 'Só Ask AI' },
+    { p: 'X', titulo: 'Arquivo', uso: 'Só Ask AI' },
+    { p: '', titulo: 'Outras', uso: 'Só Ask AI' },
+];
+
+function brnPrefixo(nome) {
+    const m = /^([PARX])_/i.exec(String(nome || ''));
+    return m ? m[1].toUpperCase() : '';
+}
+
+async function loadBrain() {
+    const acts = document.getElementById('brn-admin-actions');
+    if (acts) acts.style.display = krlIsAdmin() ? 'flex' : 'none';
+    try {
+        const res = await fetch('/api/brain');
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        brnNotas = json.notas || [];
+    } catch (e) {
+        showToast(e.message || 'Erro ao carregar o Segundo Cérebro.', 'danger');
+        brnNotas = [];
+    }
+    if (brnSelId && !brnNotas.some(n => n.id === brnSelId)) brnSelId = null;
+    brnRenderList();
+    brnRenderMain();
+}
+
+function brnRenderList() {
+    const list = document.getElementById('brn-list');
+    if (!list) return;
+    const q = (document.getElementById('brn-search')?.value || '').trim().toLowerCase();
+    const filtradas = q
+        ? brnNotas.filter(n => n.nome.toLowerCase().includes(q) || String(n.conteudo || '').toLowerCase().includes(q))
+        : brnNotas;
+    if (!filtradas.length) {
+        list.innerHTML = '<p class="brn-list-empty">' + (q ? 'Nenhuma nota com esse termo.' : 'Nenhuma nota ainda.') + '</p>';
+        return;
+    }
+    list.innerHTML = BRN_GRUPOS.map(g => {
+        const notas = filtradas.filter(n => brnPrefixo(n.nome) === g.p);
+        if (!notas.length) return '';
+        return '<div class="brn-group">' +
+            '<div class="brn-group-title">' + g.titulo + '<span>' + escapeHtml(g.uso) + '</span></div>' +
+            notas.map(n => '<button class="brn-item' + (n.id === brnSelId ? ' is-active' : '') + '" onclick="brnSelect(\'' + n.id + '\')">' +
+                '<i class="fa-regular fa-file-lines"></i><span>' + escapeHtml(n.nome) + '</span></button>').join('') +
+            '</div>';
+    }).join('');
+}
+
+async function brnSelect(id) {
+    if (brnEditando && !await customConfirm('Descartar as alterações desta nota?', 'Descartar')) return;
+    brnSelId = id;
+    brnEditando = false;
+    brnRenderList();
+    brnRenderMain();
+}
+
+function brnRenderMain() {
+    const main = document.getElementById('brn-main');
+    if (!main) return;
+    const n = brnNotas.find(x => x.id === brnSelId);
+    if (!n && !brnEditando) {
+        main.innerHTML = '<div class="brn-empty"><i class="fa-solid fa-brain"></i><p>' +
+            (brnNotas.length ? 'Escolha uma nota na lista.' : 'Nenhuma nota ainda. Importe os .md do segundo cérebro ou crie uma nota.') +
+            '</p></div>';
+        return;
+    }
+    if (brnEditando) {
+        main.innerHTML =
+            '<div class="brn-note-head">' +
+            '<input id="brn-edit-nome" class="brn-input brn-input--title" placeholder="R_nome-da-nota" value="' + escapeHtml(n ? n.nome : '') + '">' +
+            '<div class="brn-note-actions">' +
+            '<button class="btn-cancel" onclick="brnCancelEdit()">Cancelar</button>' +
+            '<button class="btn-save" id="brn-save-btn" onclick="brnSave()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>' +
+            '</div></div>' +
+            '<p class="brn-hint">O prefixo do nome decide quem usa a nota: R_ chega à IA do WhatsApp, A_ ao Copiloto, P_ e X_ só ao Ask AI. Linhas com [CONFIRMAR] nunca chegam ao paciente.</p>' +
+            '<textarea id="brn-edit-conteudo" class="brn-input brn-editor" spellcheck="true">' + escapeHtml(n ? n.conteudo : '') + '</textarea>';
+        return;
+    }
+    const grupo = BRN_GRUPOS.find(g => g.p === brnPrefixo(n.nome));
+    const quem = n.updated_by ? ' por ' + escapeHtml(n.updated_by) : '';
+    main.innerHTML =
+        '<div class="brn-note-head">' +
+        '<div><h3 class="brn-note-title">' + escapeHtml(n.nome) + '</h3>' +
+        '<div class="brn-note-meta"><span class="brn-chip brn-chip--' + (grupo.p || 'O') + '">' + escapeHtml(grupo.uso) + '</span>' +
+        '<span>Atualizada em ' + escapeHtml(brnData(n.updated_at)) + quem + '</span></div></div>' +
+        (krlIsAdmin()
+            ? '<div class="brn-note-actions">' +
+              '<button class="btn-secondary" onclick="brnDelete()"><i class="fa-regular fa-trash-can"></i> Excluir</button>' +
+              '<button class="btn-save" onclick="brnEdit()"><i class="fa-solid fa-pen"></i> Editar</button></div>'
+            : '') +
+        '</div>' +
+        '<article class="brn-md">' + brnMarkdown(n.conteudo) + '</article>';
+}
+
+function brnData(sql) {
+    const d = typeof parseSqlDate === 'function' ? parseSqlDate(sql) : null;
+    return d ? d.toLocaleDateString('pt-BR') : '';
+}
+
+function brnEdit() { brnEditando = true; brnRenderMain(); }
+
+async function brnNew() {
+    if (brnEditando && !await customConfirm('Descartar as alterações desta nota?', 'Descartar')) return;
+    brnSelId = null;
+    brnEditando = true;
+    brnRenderList();
+    brnRenderMain();
+    document.getElementById('brn-edit-nome')?.focus();
+}
+
+function brnCancelEdit() { brnEditando = false; brnRenderMain(); }
+
+async function brnSave() {
+    const nome = document.getElementById('brn-edit-nome').value.trim();
+    const conteudo = document.getElementById('brn-edit-conteudo').value;
+    if (!nome) { showToast('Dê um nome para a nota.', 'danger'); return; }
+    const btn = document.getElementById('brn-save-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(brnSelId ? '/api/brain/' + brnSelId : '/api/brain', {
+            method: brnSelId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome, conteudo })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error);
+        if (json.id) brnSelId = json.id;
+        brnEditando = false;
+        brnPainelSujo = true;
+        showToast('Nota salva.');
+        await loadBrain();
+    } catch (e) {
+        showToast(e.message || 'Erro ao salvar a nota.', 'danger');
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function brnDelete() {
+    const n = brnNotas.find(x => x.id === brnSelId);
+    if (!n || !await customConfirm('Excluir a nota "' + n.nome + '"? A IA deixa de usar o que está nela.', 'Excluir nota')) return;
+    try {
+        const res = await fetch('/api/brain/' + n.id, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error);
+        brnSelId = null;
+        brnPainelSujo = true;
+        showToast('Nota excluída.');
+        loadBrain();
+    } catch (e) { showToast(e.message || 'Erro ao excluir a nota.', 'danger'); }
+}
+
+async function brnImportFiles(files) {
+    const lista = Array.from(files || []).filter(f => /\.(md|txt|markdown)$/i.test(f.name));
+    if (!lista.length) { showToast('Escolha arquivos .md ou .txt.', 'danger'); return; }
+    try {
+        const notas = await Promise.all(lista.map(async f => ({ nome: f.name, conteudo: await f.text() })));
+        const res = await fetch('/api/brain/import', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notas })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error);
+        brnPainelSujo = true;
+        showToast(json.criadas + ' nota(s) nova(s), ' + json.atualizadas + ' atualizada(s).');
+        loadBrain();
+    } catch (e) { showToast(e.message || 'Erro ao importar.', 'danger'); }
+}
+
+function brnOpenTest() {
+    document.getElementById('brn-test-result').innerHTML = '';
+    document.getElementById('modalBrnTest').classList.add('active');
+    document.getElementById('brn-test-texto').focus();
+}
+
+async function brnRunTest() {
+    const texto = document.getElementById('brn-test-texto').value.trim();
+    const uso = document.getElementById('brn-test-uso').value;
+    const out = document.getElementById('brn-test-result');
+    if (!texto) return;
+    const btn = document.getElementById('brn-test-btn');
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/brain/preview', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ texto, uso })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error);
+        out.innerHTML = json.contexto
+            ? '<pre>' + escapeHtml(json.contexto) + '</pre>'
+            : '<p class="brn-list-empty">Nenhum trecho das notas tem a ver com essa mensagem. A IA responde só com as instruções de sempre.</p>';
+    } catch (e) {
+        out.innerHTML = '<p class="brn-list-empty">' + escapeHtml(e.message || 'Erro ao testar.') + '</p>';
+    } finally { btn.disabled = false; }
+}
+
+// Markdown das notas (vieram do Notion/Claude): títulos, listas, tabelas,
+// citações, código, negrito/itálico e links. Escapa ANTES de converter, igual
+// ao renderAiMarkdownLite — senão um "<" do texto vira tag.
+function brnInline(s) {
+    return s
+        .replace(/\\([\\`*_{}\[\]()#+\-.!|>~])/g, (m, c) => '&#' + c.charCodeAt(0) + ';')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
+        .replace(/(^|[^\w&#])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function brnMarkdown(md) {
+    const linhas = escapeHtml(md || '').replace(/\r/g, '').split('\n');
+    const ehTabela = l => /^\s*\|.*\|\s*$/.test(l);
+    const ehLista = l => /^\s*(?:[-*+]|\d+\.)\s+/.test(l);
+    const celulas = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => brnInline(c.trim()));
+    let html = '';
+    let i = 0;
+    while (i < linhas.length) {
+        const l = linhas[i];
+        if (/^```/.test(l)) {
+            const bloco = [];
+            for (i++; i < linhas.length && !/^```/.test(linhas[i]); i++) bloco.push(linhas[i]);
+            html += '<pre><code>' + bloco.join('\n') + '</code></pre>';
+            i++;
+            continue;
+        }
+        const h = /^(#{1,6})\s+(.+)/.exec(l);
+        if (h) {
+            const n = Math.min(h[1].length + 1, 6);
+            html += '<h' + n + '>' + brnInline(h[2]) + '</h' + n + '>';
+            i++;
+            continue;
+        }
+        if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { html += '<hr>'; i++; continue; }
+        if (ehTabela(l) && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(linhas[i + 1] || '')) {
+            html += '<div class="brn-table"><table><thead><tr>' + celulas(l).map(c => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>';
+            for (i += 2; i < linhas.length && ehTabela(linhas[i]); i++) {
+                html += '<tr>' + celulas(linhas[i]).map(c => '<td>' + c + '</td>').join('') + '</tr>';
+            }
+            html += '</tbody></table></div>';
+            continue;
+        }
+        if (/^&gt;\s?/.test(l)) {
+            const bloco = [];
+            for (; i < linhas.length && /^&gt;\s?/.test(linhas[i]); i++) bloco.push(brnInline(linhas[i].replace(/^&gt;\s?/, '')));
+            html += '<blockquote>' + bloco.join('<br>') + '</blockquote>';
+            continue;
+        }
+        if (ehLista(l)) {
+            const ordenada = /^\s*\d+\./.test(l);
+            html += ordenada ? '<ol>' : '<ul>';
+            for (; i < linhas.length && ehLista(linhas[i]) && /^\s*\d+\./.test(linhas[i]) === ordenada; i++) {
+                html += '<li>' + brnInline(linhas[i].replace(/^\s*(?:[-*+]|\d+\.)\s+/, '')) + '</li>';
+            }
+            html += ordenada ? '</ol>' : '</ul>';
+            continue;
+        }
+        if (!l.trim()) { i++; continue; }
+        const par = [];
+        do { par.push(brnInline(linhas[i])); i++; }
+        while (i < linhas.length && linhas[i].trim() && !/^(#{1,6}\s|```|&gt;)/.test(linhas[i]) && !ehLista(linhas[i]) && !ehTabela(linhas[i]));
+        html += '<p>' + par.join('<br>') + '</p>';
+    }
+    return html;
 }

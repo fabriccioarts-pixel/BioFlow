@@ -15,6 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     
     <link rel="stylesheet" href="style.css?v=25">
+    <script src="theme.js?v=3"></script>
     <link rel="icon" type="image/png" href="favicon.png">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
@@ -121,6 +122,9 @@
             </button>
             <button class="tab-btn" onclick="switchTab('midias')" id="tab-midias" title="Biblioteca de mídia para enviar aos leads">
                 <i class="fa-solid fa-photo-film"></i> Mídias
+            </button>
+            <button class="tab-btn" onclick="switchTab('cerebro')" id="tab-cerebro" title="Segundo Cérebro: notas da clínica que a IA consulta">
+                <i class="fa-solid fa-brain"></i> Segundo Cérebro
             </button>
             <div class="dropdown" onmouseenter="openCampanhasFlyout()" onmouseleave="scheduleCloseCampanhasFlyout()">
                 <button class="tab-btn" id="tab-campanhas-main">

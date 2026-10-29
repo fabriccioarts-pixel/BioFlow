@@ -532,6 +532,13 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                         await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND status IN ('agendado','enviando')", [resolvedLeadId]);
                     }
                 } catch (e) { console.error('follow-up: hook de inbound falhou:', e.message); }
+                try {
+                    const vIn = phoneVariants(from);
+                    await queryD1(
+                        `UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = 'paciente retomou a conversa antes'
+                         WHERE status = 'agendada' AND cancelar_se_responder = 1 AND created_at <= ? AND phone IN (${vIn.map(() => '?').join(', ')})`,
+                        [flowDbTime(-SCHED_RETOMADA_MS), ...vIn]);
+                } catch (e) { console.error('mensagens programadas: hook de inbound falhou:', e.message); }
 
                 // Lead que já existia respondeu: notificação agrupada por lead (lead
                 // novo já ganhou a de "Novo lead" lá em cima). ANTES do broadcast: quem
@@ -1884,7 +1891,8 @@ app.post('/api/ai-agenda-test', async (req, res) => {
 
         const hoje = new Date().toISOString().slice(0, 10);
         const context = await getWhatsappAiContext();
-        const systemPrompt = context + `\n\n[TESTE] Hoje é ${hoje}. Isto é um teste isolado, sem histórico de conversa real.` + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const brainRule = whatsappBrainRule(await getBrainContext(pergunta, 'whatsapp'));
+        const systemPrompt = context + `\n\n[TESTE] Hoje é ${hoje}. Isto é um teste isolado, sem histórico de conversa real.` + brainRule + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
         const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
 
         const result = await callGeminiWithAgendaTool(systemPrompt, contents, unidade_id);
@@ -1958,6 +1966,32 @@ async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
     if (!melhor) return null;
     return { id: melhor.id, nome: melhor.nome, mime: melhor.mime, thumb_base64: melhor.thumb_base64 || null };
 }
+
+// Sempre disponível pra IA do WhatsApp (ver aiAgendarRetorno). Sem ela a IA
+// prometia "já deixei anotado pra te chamar no início do mês" e nada acontecia.
+const RETORNO_TOOL_DECLARATION = {
+    name: 'agendar_retorno',
+    description: 'Programa uma mensagem de WhatsApp para o paciente numa data futura. Use quando o paciente concordar em ser chamado depois (ex.: "pode me chamar mês que vem", "me procura depois do dia 10").',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            data: { type: 'STRING', description: 'Data do envio no formato AAAA-MM-DD (horário de Brasília). "Início do mês que vem" = um dia útil entre os dias 1 e 3 do mês seguinte.' },
+            hora: { type: 'STRING', description: 'Hora do envio, HH:MM, dentro do horário de atendimento. Se o paciente não disse, use 09:30.' },
+            mensagem: { type: 'STRING', description: 'Texto que será enviado na data: curto, chamando pelo nome e retomando o combinado. Ex.: "Oi Tay! Tudo bem? Como combinamos, tô passando pra gente ver um horário pra sua limpeza de pele 😊"' },
+            motivo: { type: 'STRING', description: 'Resumo em uma frase do que foi combinado, para a equipe.' }
+        },
+        required: ['data', 'mensagem', 'motivo']
+    }
+};
+
+const WHATSAPP_AI_RETORNO_RULE = `
+
+REGRA DE RETORNO COMBINADO:
+Você tem a ferramenta agendar_retorno, que programa uma mensagem para o paciente numa data futura.
+- Use quando o paciente concordar em ser chamado depois (ele disse que agora não dá e aceitou que você chame numa data).
+- Só diga que vai chamar, que "anotou" ou que "programou" DEPOIS de usar a ferramenta e ela devolver agendado: true. Nunca prometa retorno sem usar a ferramenta.
+- Se ela devolver agendado: false, não prometa data: diga que ele pode chamar por aqui quando quiser.
+- Nunca domingo, nunca fora do horário de atendimento, no máximo 60 dias à frente.`;
 
 const MEDIA_TOOL_DECLARATION = {
     name: 'buscar_imagem_resultado',
@@ -2036,7 +2070,8 @@ app.post('/api/ai-media-test', async (req, res) => {
         if (!pergunta || !pergunta.trim()) return res.status(400).json({ error: 'Manda uma pergunta pra testar.' });
 
         const context = await getWhatsappAiContext();
-        const systemPrompt = context + '\n\n[TESTE] Isto é um teste isolado, sem histórico de conversa real.' + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
+        const brainRule = whatsappBrainRule(await getBrainContext(pergunta, 'whatsapp'));
+        const systemPrompt = context + '\n\n[TESTE] Isto é um teste isolado, sem histórico de conversa real.' + brainRule + WHATSAPP_AI_SALES_RULE + WHATSAPP_AI_FORMAT_RULE;
         const contents = [{ role: 'user', parts: [{ text: pergunta.trim() }] }];
 
         const result = await callGeminiWithMediaTool(systemPrompt, contents);
@@ -2126,13 +2161,16 @@ async function callGeminiForWhatsappReply(phone) {
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
     const mediaEnabled = await getWhatsappAiMediaEnabled();
     const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
-    const systemPrompt = context + nowContext + adContext + behaviorRule + mediaRule + WHATSAPP_AI_FORMAT_RULE;
+    // O texto do anúncio entra na busca: "quero saber mais" sozinho não acha nada.
+    const brainRule = whatsappBrainRule(await getBrainContext(brainConsultaDoHistorico(history, adContext), 'whatsapp'));
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: history
     };
-    if (mediaEnabled) body.tools = [{ functionDeclarations: [MEDIA_TOOL_DECLARATION] }];
+    // agendar_retorno sempre; busca de imagem só com o opt-in.
+    body.tools = [{ functionDeclarations: mediaEnabled ? [RETORNO_TOOL_DECLARATION, MEDIA_TOOL_DECLARATION] : [RETORNO_TOOL_DECLARATION] }];
 
     const call = async (b) => {
         const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
@@ -2147,12 +2185,26 @@ async function callGeminiForWhatsappReply(phone) {
 
     const first = await call(body);
     const parts = first.candidates?.[0]?.content?.parts || [];
-    const fnCallPart = mediaEnabled ? parts.find(p => p.functionCall) : null;
+    const fnCallPart = parts.find(p => p.functionCall);
     const fnCall = fnCallPart?.functionCall;
 
     if (!fnCall) {
         const text = parts.map(p => p.text || '').join('').trim();
         return { text: normalizeAiReply(text), mediaId: null };
+    }
+
+    if (fnCall.name === 'agendar_retorno') {
+        let resultado;
+        try { resultado = await aiAgendarRetorno(phone, fnCall.args || {}); }
+        catch (e) { resultado = { agendado: false, motivo: e.message }; }
+        const comResultado = [
+            ...history,
+            { role: 'model', parts: [fnCallPart] },
+            { role: 'user', parts: [{ functionResponse: { name: 'agendar_retorno', response: resultado } }] }
+        ];
+        const seguinte = await call({ ...body, contents: comResultado });
+        const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+        return { text: normalizeAiReply(texto), mediaId: null };
     }
 
     let midia = null;
@@ -2193,6 +2245,402 @@ function normalizeAiReply(raw) {
         } catch (e) { /* não era JSON de verdade, segue com o texto cru */ }
     }
     return s;
+}
+
+// ============================================================================
+// SEGUNDO CÉREBRO — notas da clínica (antes eram .md soltos na pasta
+// segundo-cerebro-natuclinic; agora moram e são editadas aqui). O prefixo PARA
+// do nome decide quem enxerga cada nota:
+//   R_ (recursos: procedimentos, protocolos, provas sociais) → IA do WhatsApp,
+//      Copiloto e Ask AI;
+//   A_ (áreas: processo de vendas, Meta Ads) → Copiloto e Ask AI;
+//   P_, X_ e sem prefixo → só o Ask AI (planos internos não vão pro paciente).
+// Nunca vai nota inteira pro prompt: só as seções (por título) que casam com a
+// conversa, até um teto de caracteres — custo de token previsível.
+// ============================================================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_notes (
+    id TEXT PRIMARY KEY,
+    nome TEXT NOT NULL UNIQUE,
+    conteudo TEXT NOT NULL DEFAULT '',
+    updated_by TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+const BRAIN_NOTE_MAX_CHARS = 200000;
+const BRAIN_CACHE_MS = 60 * 1000;
+const BRAIN_USOS = {
+    whatsapp: { prefixos: ['R'], maxChars: 5000, paciente: true },
+    copiloto: { prefixos: ['R', 'A'], maxChars: 5000, paciente: true },
+    ask: { prefixos: null, maxChars: 10000, paciente: false },
+};
+let brainCache = { at: 0, notes: null };
+
+function brainPrefixo(nome) {
+    const m = /^([PARX])_/i.exec(String(nome || ''));
+    return m ? m[1].toUpperCase() : '';
+}
+
+// "R_procedimentos.md" -> "R_procedimentos"; sem quebra de linha nem barra.
+function brainNomeLimpo(nome) {
+    return String(nome || '').replace(/\.(md|txt|markdown)$/i, '').replace(/[\r\n\/\\]+/g, ' ').trim().slice(0, 120);
+}
+
+async function getBrainNotes() {
+    if (brainCache.notes && Date.now() - brainCache.at < BRAIN_CACHE_MS) return brainCache.notes;
+    const rows = await queryD1('SELECT nome, conteudo FROM crm_brain_notes');
+    brainCache = { at: Date.now(), notes: rows || [] };
+    return brainCache.notes;
+}
+
+function brainNorm(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+const BRAIN_STOPWORDS = new Set(('para pela pelo pelos pelas como mais menos muito muita quero queria gostaria ' +
+    'sobre esse essa isso este esta isto aqui voce voces vcs tenho temos fazer faz feito pode posso seria ' +
+    'qual quais quanto quando onde porque entao ainda tambem obrigado obrigada tudo bom boa noite tarde ' +
+    'olha sim nao ter tem estou esta minha meu meus minhas dele dela eles elas uma umas uns depois antes ' +
+    'saber informacao informacoes mensagem favor certo valeu oi ola').split(' '));
+
+// Radical de 6 letras pra casar flexão ("manchas" ~ "mancha", "depilação" ~ "depilar").
+function brainTermos(texto) {
+    const palavras = brainNorm(texto).match(/[a-z0-9]{4,}/g) || [];
+    return [...new Set(palavras.filter(w => !BRAIN_STOPWORDS.has(w)).map(w => w.slice(0, 6)))];
+}
+
+// Quebra cada nota nas seções de título (#, ##, ###). Nota sem título = 1 seção.
+function brainSecoes(notes) {
+    const out = [];
+    for (const n of notes) {
+        let cur = { nome: n.nome, titulo: '', linhas: [] };
+        const fecha = () => {
+            const corpo = cur.linhas.filter(l => !/^#{1,3}\s/.test(l)).join('\n').trim();
+            if (corpo.length >= 30) out.push({ nome: cur.nome, titulo: cur.titulo, texto: cur.linhas.join('\n').trim() });
+        };
+        for (const l of String(n.conteudo || '').split('\n')) {
+            const h = /^#{1,3}\s+(.+)/.exec(l);
+            if (h) { fecha(); cur = { nome: n.nome, titulo: h[1].trim(), linhas: [l] }; }
+            else cur.linhas.push(l);
+        }
+        fecha();
+    }
+    return out;
+}
+
+// Trechos das notas que têm a ver com `consulta`, já formatados pro prompt.
+// paciente=true tira as linhas marcadas [CONFIRMAR…] / "validar com" — o que a
+// clínica ainda não confirmou não pode chegar ao paciente nem por rascunho.
+async function getBrainContext(consulta, uso) {
+    const cfg = BRAIN_USOS[uso] || BRAIN_USOS.ask;
+    let notes;
+    try { notes = await getBrainNotes(); } catch (e) { return ''; }
+    if (cfg.prefixos) notes = notes.filter(n => cfg.prefixos.includes(brainPrefixo(n.nome)));
+    const termos = brainTermos(consulta);
+    if (!notes.length || !termos.length) return '';
+
+    const secoes = brainSecoes(notes).map(s => ({
+        ...s,
+        norm: brainNorm(s.texto),
+        normTitulo: brainNorm(s.titulo + ' ' + s.nome.replace(/[_-]+/g, ' ')),
+    }));
+    // Peso por raridade: "pele" aparece em tudo e quase não conta; "melasma" decide.
+    const idf = {};
+    for (const t of termos) {
+        const df = secoes.filter(s => s.norm.includes(t) || s.normTitulo.includes(t)).length;
+        idf[t] = df ? Math.log(1 + secoes.length / df) : 0;
+    }
+    const pontuadas = secoes.map(s => {
+        let score = 0;
+        for (const t of termos) {
+            if (!idf[t]) continue;
+            if (s.normTitulo.includes(t)) score += 2 * idf[t];
+            else if (s.norm.includes(t)) score += idf[t];
+        }
+        return { s, score };
+    }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+    if (!pontuadas.length) return '';
+
+    const corte = pontuadas[0].score * 0.35;
+    const blocos = [];
+    let total = 0;
+    for (const { s, score } of pontuadas) {
+        if (score < corte || blocos.length >= 6) break;
+        let texto = s.texto;
+        if (cfg.paciente) texto = texto.split('\n').filter(l => !/\[CONFIRMAR|validar com/i.test(l.replace(/\\/g, ''))).join('\n').trim();
+        texto = texto.slice(0, 2500);
+        const bloco = `[${s.nome}${s.titulo ? ' › ' + s.titulo.replace(/^#+\s*/, '') : ''}]\n${texto}`;
+        if (total + bloco.length > cfg.maxChars && blocos.length) break;
+        blocos.push(bloco.slice(0, cfg.maxChars));
+        total += bloco.length;
+    }
+    return blocos.join('\n\n');
+}
+
+function brainIsAdmin(req) {
+    return !!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'));
+}
+
+app.get('/api/brain', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT id, nome, conteudo, updated_by, updated_at, created_at FROM crm_brain_notes ORDER BY nome COLLATE NOCASE');
+        res.json({ notas: rows || [] });
+    } catch (e) {
+        console.error('brain list:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar o Segundo Cérebro.' });
+    }
+});
+
+app.post('/api/brain', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const nome = brainNomeLimpo(req.body.nome);
+        const conteudo = String(req.body.conteudo || '');
+        if (!nome) return res.status(400).json({ error: 'Dê um nome para a nota.' });
+        if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Nota grande demais (máx. 200 mil caracteres).' });
+        const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+        if (existe && existe[0]) return res.status(409).json({ error: 'Já existe uma nota com esse nome.' });
+        const id = 'br_' + crypto.randomBytes(6).toString('hex');
+        await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)', [id, nome, conteudo, req.user.username]);
+        brainCache.at = 0;
+        res.json({ id, nome });
+    } catch (e) {
+        console.error('brain create:', e.message);
+        res.status(500).json({ error: 'Erro ao criar a nota.' });
+    }
+});
+
+// Importa vários .md de uma vez (upsert pelo nome) — botão "Importar .md".
+app.post('/api/brain/import', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const notas = Array.isArray(req.body.notas) ? req.body.notas.slice(0, 100) : [];
+        let criadas = 0, atualizadas = 0;
+        for (const n of notas) {
+            const nome = brainNomeLimpo(n && n.nome);
+            const conteudo = String((n && n.conteudo) || '');
+            if (!nome || conteudo.length > BRAIN_NOTE_MAX_CHARS) continue;
+            const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+            if (existe && existe[0]) {
+                await queryD1('UPDATE crm_brain_notes SET conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [conteudo, req.user.username, existe[0].id]);
+                atualizadas++;
+            } else {
+                await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)',
+                    ['br_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+                criadas++;
+            }
+        }
+        brainCache.at = 0;
+        res.json({ criadas, atualizadas });
+    } catch (e) {
+        console.error('brain import:', e.message);
+        res.status(500).json({ error: 'Erro ao importar as notas.' });
+    }
+});
+
+// Mostra os trechos que cada IA receberia pra uma mensagem — pra conferir antes
+// de confiar. Não chama o Gemini.
+app.post('/api/brain/preview', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin.' });
+    try {
+        const uso = BRAIN_USOS[req.body.uso] ? req.body.uso : 'whatsapp';
+        const contexto = await getBrainContext(String(req.body.texto || '').slice(0, 2000), uso);
+        res.json({ uso, contexto });
+    } catch (e) {
+        console.error('brain preview:', e.message);
+        res.status(500).json({ error: 'Erro ao testar a busca.' });
+    }
+});
+
+// ---- Painel do Segundo Cérebro (cerebro.html) ----
+// É o app que vivia na pasta segundo-cerebro-natuclinic. Ele foi feito pra ler e
+// gravar numa pasta do computador; aqui a "pasta" é o banco: a raiz são as notas
+// (crm_brain_notes, nome + ".md") e conteudos/ são os textos gerados e salvos.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_contents (
+    id TEXT PRIMARY KEY,
+    nome TEXT NOT NULL UNIQUE,
+    conteudo TEXT NOT NULL DEFAULT '',
+    updated_by TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+function brainSqlMs(s) {
+    const ms = Date.parse(String(s || '').replace(' ', 'T') + 'Z');
+    return Number.isFinite(ms) ? ms : Date.now();
+}
+
+// Substitui o conhecimento.js que o atualizar-conhecimento.bat gerava.
+app.get('/api/brain/knowledge.js', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT nome, conteudo, updated_at FROM crm_brain_notes ORDER BY nome COLLATE NOCASE');
+        const arquivos = (rows || []).map(r => ({
+            nome: r.nome + '.md',
+            alterado: new Date(brainSqlMs(r.updated_at)).toISOString().slice(0, 10),
+            conteudo: r.conteudo || ''
+        }));
+        res.set('Content-Type', 'text/javascript; charset=utf-8');
+        res.set('Cache-Control', 'no-store');
+        res.send(`window.KNOWLEDGE = ${JSON.stringify(arquivos)};\n`);
+    } catch (e) {
+        console.error('brain knowledge.js:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar as notas.' });
+    }
+});
+
+app.get('/api/brain/fs', async (req, res) => {
+    if (req.query.dir !== 'conteudos') return res.status(400).json({ error: 'Pasta desconhecida.' });
+    try {
+        const rows = await queryD1('SELECT nome, conteudo, updated_at FROM crm_brain_contents ORDER BY updated_at DESC');
+        res.json({ arquivos: (rows || []).map(r => ({ nome: r.nome, conteudo: r.conteudo || '', alterado: brainSqlMs(r.updated_at) })) });
+    } catch (e) {
+        console.error('brain fs list:', e.message);
+        res.status(500).json({ error: 'Erro ao ler os conteúdos.' });
+    }
+});
+
+// Gravar arquivo: raiz = nota (só admin, muda o que a IA sabe); conteudos = qualquer um.
+app.put('/api/brain/fs', async (req, res) => {
+    const dir = req.body.dir;
+    const conteudo = String(req.body.conteudo || '');
+    if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Arquivo grande demais (máx. 200 mil caracteres).' });
+    try {
+        if (dir === 'raiz') {
+            if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita as notas do Segundo Cérebro.' });
+            const nome = brainNomeLimpo(req.body.nome);
+            if (!nome) return res.status(400).json({ error: 'Nome de arquivo inválido.' });
+            const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+            if (existe && existe[0]) {
+                await queryD1('UPDATE crm_brain_notes SET conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [conteudo, req.user.username, existe[0].id]);
+            } else {
+                await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)',
+                    ['br_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+            }
+            brainCache.at = 0;
+        } else if (dir === 'conteudos') {
+            const nome = String(req.body.nome || '').replace(/[\r\n\/\\]+/g, ' ').trim().slice(0, 160);
+            if (!nome) return res.status(400).json({ error: 'Nome de arquivo inválido.' });
+            await queryD1(`INSERT INTO crm_brain_contents (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)
+                ON CONFLICT(nome) DO UPDATE SET conteudo = excluded.conteudo, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`,
+                ['bc_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+        } else {
+            return res.status(400).json({ error: 'Pasta desconhecida.' });
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain fs write:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar no CRM.' });
+    }
+});
+
+// Assistente do painel: recebe system/messages no formato que o app já monta e
+// devolve o texto em streaming (text/plain) pelo Gemini do CRM.
+app.post('/api/brain/assistant', async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY não configurada no servidor.' });
+    const textoDe = c => typeof c === 'string' ? c : (Array.isArray(c) ? c.map(b => (b && b.text) || '').join('\n\n') : '');
+    const system = textoDe(req.body.system);
+    const contents = (Array.isArray(req.body.messages) ? req.body.messages : [])
+        .map(m => ({ role: m && m.role === 'assistant' ? 'model' : 'user', parts: [{ text: textoDe(m && m.content) }] }))
+        .filter(c => c.parts[0].text.trim());
+    if (!contents.length) return res.status(400).json({ error: 'Mensagem vazia.' });
+    const maxOutputTokens = Math.min(Math.max(Number(req.body.maxTokens) || 8000, 1000), 32000);
+    try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${COPILOT_MODEL}:streamGenerateContent?alt=sse`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: system || 'Você é o assistente da clínica.' }] },
+                contents,
+                generationConfig: { temperature: 0.7, maxOutputTokens }
+            })
+        });
+        if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            return res.status(r.status === 429 ? 429 : 502).json({ error: (j.error && j.error.message) || 'Erro na API do Gemini.' });
+        }
+        res.set('Content-Type', 'text/plain; charset=utf-8');
+        res.set('Cache-Control', 'no-store');
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', fim = null;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const linhas = buf.split('\n');
+            buf = linhas.pop();
+            for (const l of linhas) {
+                if (!l.startsWith('data: ')) continue;
+                let ev; try { ev = JSON.parse(l.slice(6)); } catch (e) { continue; }
+                const cand = ev.candidates && ev.candidates[0];
+                const t = ((cand && cand.content && cand.content.parts) || []).filter(p => !p.thought).map(p => p.text || '').join('');
+                if (t) res.write(t);
+                if (cand && cand.finishReason) fim = cand.finishReason;
+            }
+        }
+        if (fim === 'MAX_TOKENS') res.write('\n\n[resposta cortada por limite de tamanho]');
+        res.end();
+    } catch (e) {
+        console.error('brain assistant:', e.message);
+        if (!res.headersSent) res.status(502).json({ error: 'Falha ao falar com a IA.' });
+        else res.end();
+    }
+});
+
+app.put('/api/brain/:id', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        const nome = brainNomeLimpo(req.body.nome);
+        const conteudo = String(req.body.conteudo || '');
+        if (!nome) return res.status(400).json({ error: 'Dê um nome para a nota.' });
+        if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Nota grande demais (máx. 200 mil caracteres).' });
+        const outra = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE AND id != ?', [nome, req.params.id]);
+        if (outra && outra[0]) return res.status(409).json({ error: 'Já existe outra nota com esse nome.' });
+        await queryD1('UPDATE crm_brain_notes SET nome = ?, conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [nome, conteudo, req.user.username, req.params.id]);
+        brainCache.at = 0;
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain update:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a nota.' });
+    }
+});
+
+app.delete('/api/brain/:id', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
+    try {
+        await queryD1('DELETE FROM crm_brain_notes WHERE id = ?', [req.params.id]);
+        brainCache.at = 0;
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain delete:', e.message);
+        res.status(500).json({ error: 'Erro ao excluir a nota.' });
+    }
+});
+
+// Regra que acompanha os trechos no prompt da IA do WhatsApp.
+function whatsappBrainRule(trechos) {
+    if (!trechos) return '';
+    return `
+
+BASE DE CONHECIMENTO DA CLÍNICA (trechos do Segundo Cérebro ligados a esta conversa):
+${trechos}
+
+Como usar esses trechos:
+- Use para explicar procedimentos e protocolos com precisão, com suas palavras e no formato curto de WhatsApp. Nunca cole o trecho nem fale em "nota" ou "base de conhecimento".
+- Se o trecho não tiver a informação (campo vazio), não complete com suposição: diga que a especialista explica isso na avaliação.
+- Preço e valores: só os das instruções principais acima, nunca dos trechos.
+- Não prometa resultado em números nem compare com concorrentes, mesmo que o trecho faça isso.
+- Se algo aqui contradisser as instruções principais acima, valem as instruções principais.`;
+}
+
+// Texto que o paciente mandou por último (contents do Gemini), pra buscar trechos.
+function brainConsultaDoHistorico(history, extra = '') {
+    const falas = history.filter(c => c.role === 'user')
+        .map(c => (c.parts || []).map(p => p.text || '').join(' '))
+        .slice(-4);
+    return falas.join('\n') + '\n' + extra;
 }
 
 // ============================================================================
@@ -2288,9 +2736,14 @@ app.post('/api/copilot/draft-reply', async (req, res) => {
         if (!copilotThrottle(req, res)) return;
         const transcript = await copilotTranscript(phone, 16);
         const contexto = await getWhatsappAiContext();
+        const falasPaciente = transcript.split('\n').filter(l => l.startsWith('Paciente:')).slice(-3).join('\n');
+        const trechos = await getBrainContext(instruction + '\n' + falasPaciente, 'copiloto');
         const sys = `${contexto}
 
-Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano de uma clínica enviar ao paciente. Escreva UMA mensagem pronta, em português, tom acolhedor e profissional, curta e natural (como no WhatsApp). NÃO invente preço, horário ou informação que não esteja no pedido do atendente ou no histórico. Não repita saudação se a conversa já está em andamento. Responda só com o texto da mensagem, nada mais.`;
+Você é um assistente que redige mensagens de WhatsApp para o ATENDENTE humano de uma clínica enviar ao paciente. Escreva UMA mensagem pronta, em português, tom acolhedor e profissional, curta e natural (como no WhatsApp). NÃO invente preço, horário ou informação que não esteja no pedido do atendente, no histórico ou na base de conhecimento abaixo. Não repita saudação se a conversa já está em andamento. Responda só com o texto da mensagem, nada mais.${trechos ? `
+
+BASE DE CONHECIMENTO DA CLÍNICA (trechos do Segundo Cérebro; use só como referência para a mensagem ficar correta, sem citar a fonte):
+${trechos}` : ''}`;
         const text = await callGeminiCopilot(
             sys,
             `Conversa até aqui:\n${transcript || '(sem histórico)'}\n\nO atendente quer dizer: "${instruction}"\n\nEscreva a mensagem:`
@@ -4319,6 +4772,76 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_settings (
 )`).catch(() => {});
 
 // ==========================================
+// PERSONALIZAÇÃO — visual da clínica (theme.js aplica em todas as páginas; o
+// painel fica em app.js). Um JSON em crm_settings 'ui_theme' (cores, fundo, fonte,
+// cantos, um bloco por modo) e a imagem de fundo de cada modo em
+// 'ui_theme_bg_dark' / 'ui_theme_bg_light' (data URL já comprimida no navegador).
+// O JSON é saneado no theme.js antes de virar CSS (cores #rrggbb, números com teto).
+// ==========================================
+const UI_THEME_MAX_CHARS = 20000;
+const UI_THEME_BG_MAX_CHARS = 1800000; // abaixo do teto de ~2 MB por linha do D1
+const UI_THEME_MODOS = ['dark', 'light'];
+const uiThemeIsAdmin = req => !!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'));
+
+app.get('/api/ui-theme', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ui_theme'");
+        let tema = null;
+        if (rows && rows[0] && rows[0].value) { try { tema = JSON.parse(rows[0].value); } catch (e) {} }
+        res.json({ tema });
+    } catch (e) {
+        console.error('ui-theme get:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar a personalização.' });
+    }
+});
+
+app.put('/api/ui-theme', async (req, res) => {
+    if (!uiThemeIsAdmin(req)) return res.status(403).json({ error: 'Só admin muda a personalização.' });
+    try {
+        const tema = req.body && req.body.tema;
+        const json = tema === null ? null : JSON.stringify(tema);
+        if (tema !== null && (typeof tema !== 'object' || Array.isArray(tema))) return res.status(400).json({ error: 'Tema inválido.' });
+        if (json && json.length > UI_THEME_MAX_CHARS) return res.status(413).json({ error: 'Tema grande demais.' });
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('ui_theme', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [json]);
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('ui-theme put:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a personalização.' });
+    }
+});
+
+// A URL leva ?v=<versão>, então dá pra cachear para sempre no navegador.
+app.get('/api/ui-theme/bg/:modo', async (req, res) => {
+    if (!UI_THEME_MODOS.includes(req.params.modo)) return res.status(404).end();
+    try {
+        const rows = await queryD1('SELECT value FROM crm_settings WHERE key = ?', ['ui_theme_bg_' + req.params.modo]);
+        const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/s.exec((rows && rows[0] && rows[0].value) || '');
+        if (!m) return res.status(404).end();
+        res.set('Content-Type', m[1]);
+        res.set('Cache-Control', 'private, max-age=31536000, immutable');
+        res.send(Buffer.from(m[2], 'base64'));
+    } catch (e) {
+        console.error('ui-theme bg get:', e.message);
+        res.status(500).end();
+    }
+});
+
+app.put('/api/ui-theme/bg/:modo', async (req, res) => {
+    if (!uiThemeIsAdmin(req)) return res.status(403).json({ error: 'Só admin muda a personalização.' });
+    if (!UI_THEME_MODOS.includes(req.params.modo)) return res.status(400).json({ error: 'Modo inválido.' });
+    const data = String((req.body && req.body.data) || '');
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(data)) return res.status(400).json({ error: 'Envie uma imagem JPG, PNG ou WebP.' });
+    if (data.length > UI_THEME_BG_MAX_CHARS) return res.status(413).json({ error: 'Imagem grande demais mesmo depois de comprimida.' });
+    try {
+        await queryD1('INSERT INTO crm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', ['ui_theme_bg_' + req.params.modo, data]);
+        res.json({ v: Date.now() });
+    } catch (e) {
+        console.error('ui-theme bg put:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a imagem.' });
+    }
+});
+
+// ==========================================
 // EMPRESAS / EMITENTES — dados que vão no cabeçalho do orçamento impresso
 // (e futuramente recibos/contratos). Substitui a chave única
 // crm_settings.'orcamento_empresa' por um cadastro com várias empresas, uma
@@ -4620,7 +5143,7 @@ app.get('/api/settings/whatsapp-ai', async (req, res) => {
         const delaySeconds = await getWhatsappAiReplyDelay();
         const mode = await getWhatsappAiMode();
         const timing = await getWhatsappAiTiming();
-        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
+        res.json({ enabled, delaySeconds, mode, maxDelaySeconds: WHATSAPP_AI_MAX_DELAY, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled(), retornoTemplate: await getRetornoTemplateIa() });
     } catch (e) {
         console.error('Erro ao buscar configuração da IA do WhatsApp:', e);
         res.status(500).json({ error: 'Erro interno ao buscar configuração.' });
@@ -4662,6 +5185,12 @@ app.put('/api/settings/whatsapp-ai', async (req, res) => {
                     [req.body[k] ? '1' : '0']
                 );
             }
+        }
+        if (req.body?.retornoTemplate !== undefined) {
+            await queryD1(
+                "INSERT INTO crm_settings (key, value) VALUES ('whatsapp_ai_retorno_template', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [String(req.body.retornoTemplate || '').trim()]
+            );
         }
         const timing = await getWhatsappAiTiming();
         res.json({ success: true, enabled: enabled === '1', delaySeconds, mode, human: timing.human, typing: timing.typing, vision: await getWhatsappAiVision(), audio: await getWhatsappAiAudio(), media: await getWhatsappAiMediaEnabled() });
@@ -10691,6 +11220,9 @@ app.all('/api/flow-tick', async (req, res) => {
         let followup = { opened: 0, processed: 0 };
         try { followup = await followupTick(); } catch (e) { console.error('Erro no follow-up tick:', e); }
 
+        let programadas = { skipped: 'erro' };
+        try { programadas = await scheduledMsgsTick(); } catch (e) { console.error('Erro nas mensagens programadas:', e); }
+
         // Lembrete de consulta — busca a agenda do Amigo só a cada APPT_SYNC_MIN;
         // o envio da fila vencida roda em todo tick.
         let lembretes = { skipped: 'erro' };
@@ -10725,7 +11257,7 @@ app.all('/api/flow-tick', async (req, res) => {
         let gestor = { skipped: 'erro' };
         try { gestor = await gestorBriefingTick(); } catch (e) { console.error('Erro no briefing do gestor:', e); }
 
-        res.json({ processed, followup, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -10848,6 +11380,214 @@ function followupNextAllowed(cfg, fromDate) {
     return d;
 }
 function followupAtSql(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
+
+// ============================================================================
+// MENSAGENS PROGRAMADAS — mensagem que sai sozinha na data/hora marcada. Criada
+// pela equipe no chat ou pela IA, quando combina um retorno com o paciente ("te
+// chamo no começo do mês"). Na hora do envio: texto livre se o paciente falou nas
+// últimas 24h (janela da Meta); senão, o template de reserva. Se o paciente
+// retomar a conversa antes, cancela sozinha — mas só se ele voltar 6h+ depois de
+// programada: um "obrigada" logo depois do combinado não derruba o retorno.
+// ============================================================================
+queryD1(`CREATE TABLE IF NOT EXISTS crm_scheduled_msgs (
+    id TEXT PRIMARY KEY,
+    phone TEXT NOT NULL,
+    lead_id TEXT,
+    texto TEXT NOT NULL,
+    template_name TEXT,
+    send_at DATETIME NOT NULL,
+    status TEXT NOT NULL DEFAULT 'agendada',
+    cancelar_se_responder INTEGER NOT NULL DEFAULT 1,
+    origem TEXT NOT NULL DEFAULT 'manual',
+    motivo TEXT,
+    erro TEXT,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sent_at DATETIME
+)`).catch(() => {});
+queryD1('CREATE INDEX IF NOT EXISTS idx_sched_msgs_due ON crm_scheduled_msgs (status, send_at)').catch(() => {});
+
+const SCHED_RETOMADA_MS = 6 * 3600000;
+const SCHED_MAX_DIAS = 90;
+const SCHED_TEMPLATE_IA_PADRAO = 'continuidade';
+
+function schedFmtBr(date) {
+    return date.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+async function schedLeadForPhone(phone) {
+    const v = phoneVariants(phone);
+    const rows = await queryD1(`SELECT id, nome FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, v);
+    return (rows && rows[0]) || null;
+}
+
+async function schedNotify(message, phone) {
+    const id = 'sched-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    try {
+        await queryD1('INSERT INTO crm_notifications (id, message, created_at, action_phone) VALUES (?, ?, CURRENT_TIMESTAMP, ?)', [id, message, phone]);
+    } catch (e) {
+        await queryD1('INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)', [id, message]).catch(() => {});
+    }
+}
+
+function schedValidar({ texto, sendAt }) {
+    const t = String(texto || '').trim();
+    if (!t) throw new Error('Escreva a mensagem.');
+    if (t.length > 4000) throw new Error('Mensagem longa demais (máx. 4000 caracteres).');
+    if (!(sendAt instanceof Date) || isNaN(sendAt)) throw new Error('Data/hora inválida.');
+    if (sendAt.getTime() < Date.now() + 60000) throw new Error('Escolha um horário no futuro.');
+    if (sendAt.getTime() > Date.now() + SCHED_MAX_DIAS * 86400000) throw new Error(`No máximo ${SCHED_MAX_DIAS} dias à frente.`);
+    return t;
+}
+
+async function createScheduledMsg({ phone, texto, templateName, sendAt, cancelarSeResponder = true, origem = 'manual', motivo = null, createdBy = null }) {
+    const t = schedValidar({ texto, sendAt });
+    const tel = String(phone || '').replace(/\D/g, '');
+    if (!tel) throw new Error('Telefone não informado.');
+    const lead = await schedLeadForPhone(tel);
+    const id = 'sm_' + crypto.randomBytes(6).toString('hex');
+    await queryD1(
+        `INSERT INTO crm_scheduled_msgs (id, phone, lead_id, texto, template_name, send_at, cancelar_se_responder, origem, motivo, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, tel, lead ? lead.id : null, t, String(templateName || '').trim() || null, followupAtSql(sendAt), cancelarSeResponder ? 1 : 0, origem, motivo, createdBy]
+    );
+    if (lead) logLeadEvent(lead.id, 'mensagem_programada', createdBy || origem, `para ${schedFmtBr(sendAt)}${motivo ? ' — ' + motivo : ''}`);
+    return { id, send_at: followupAtSql(sendAt) };
+}
+
+async function getRetornoTemplateIa() {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_ai_retorno_template'");
+        if (rows && rows[0] && rows[0].value != null) return rows[0].value;
+    } catch (e) {}
+    return SCHED_TEMPLATE_IA_PADRAO;
+}
+
+// Chamado pela ferramenta agendar_retorno da IA do WhatsApp. Um retorno da IA por
+// conversa: se ela combinar de novo (paciente pediu outra data), substitui o anterior.
+async function aiAgendarRetorno(phone, args) {
+    const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(args.data || '').trim());
+    if (!d) return { agendado: false, motivo: 'data inválida, use AAAA-MM-DD' };
+    const h = /^(\d{1,2}):(\d{2})$/.exec(String(args.hora || '').trim()) || [null, '9', '30'];
+    // Brasília é UTC-3 o ano todo (sem horário de verão desde 2019).
+    const sendAt = new Date(Date.UTC(+d[1], +d[2] - 1, +d[3], +h[1] + 3, +h[2]));
+    const v = phoneVariants(phone);
+    try {
+        schedValidar({ texto: args.mensagem, sendAt });
+    } catch (e) {
+        return { agendado: false, motivo: e.message };
+    }
+    await queryD1(
+        `UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = 'substituída por novo retorno combinado' WHERE status = 'agendada' AND origem = 'ia' AND phone IN (${v.map(() => '?').join(', ')})`, v);
+    await createScheduledMsg({
+        phone, texto: args.mensagem, templateName: await getRetornoTemplateIa(), sendAt,
+        cancelarSeResponder: true, origem: 'ia', motivo: String(args.motivo || '').slice(0, 300) || null, createdBy: 'ia'
+    });
+    const lead = await schedLeadForPhone(phone);
+    await schedNotify(`🗓️ IA programou retorno para ${(lead && lead.nome) || phone} em ${schedFmtBr(sendAt)}`, phone);
+    return { agendado: true, data_hora: schedFmtBr(sendAt) };
+}
+
+// Roda em todo /api/flow-tick (pinger de 1 em 1 min).
+async function scheduledMsgsTick() {
+    const due = await queryD1("SELECT * FROM crm_scheduled_msgs WHERE status = 'agendada' AND send_at <= ? ORDER BY send_at ASC LIMIT 20", [flowDbTime()]);
+    let enviadas = 0, falhas = 0;
+    for (const m of (due || [])) {
+        // Trava contra dois ticks pegando a mesma mensagem.
+        const lock = await queryD1Meta("UPDATE crm_scheduled_msgs SET status = 'enviando' WHERE id = ? AND status = 'agendada'", [m.id]);
+        if (!lock.meta || !lock.meta.changes) continue;
+        const v = phoneVariants(m.phone);
+        const lastIn = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${v.map(() => '?').join(', ')}) ORDER BY timestamp DESC LIMIT 1`, v);
+        const lastInDate = followupParseTs(lastIn && lastIn[0] && lastIn[0].timestamp);
+        // Folga de 30 min: a janela da Meta é de 24h exatas.
+        const naJanela = !!lastInDate && (Date.now() - lastInDate.getTime()) < 23.5 * 3600000;
+        const lead = m.lead_id ? { id: m.lead_id } : await schedLeadForPhone(m.phone);
+        try {
+            let via;
+            if (naJanela) {
+                await sendWhatsappTextInternal(m.phone, m.texto, 'programada');
+                via = 'texto';
+            } else if (m.template_name) {
+                const nomeRow = lead ? await queryD1('SELECT nome FROM leads WHERE id = ?', [lead.id]) : null;
+                const nome = String((nomeRow && nomeRow[0] && nomeRow[0].nome) || '').trim();
+                const primeiro = nome && nome !== 'Lead WhatsApp' ? nome.split(/\s+/)[0] : 'tudo bem';
+                await sendWhatsappTemplateInternal(m.phone, m.template_name, { nome: primeiro, sentBy: 'programada' });
+                via = 'template ' + m.template_name;
+            } else {
+                throw new Error('Fora da janela de 24h do WhatsApp e sem template de reserva.');
+            }
+            await queryD1("UPDATE crm_scheduled_msgs SET status = 'enviada', sent_at = CURRENT_TIMESTAMP, erro = ? WHERE id = ?", ['enviada como ' + via, m.id]);
+            if (lead) logLeadEvent(lead.id, 'mensagem_programada_enviada', 'sistema', 'como ' + via);
+            enviadas++;
+        } catch (e) {
+            await queryD1("UPDATE crm_scheduled_msgs SET status = 'falhou', erro = ? WHERE id = ?", [String(e.message || e).slice(0, 300), m.id]);
+            await schedNotify(`⚠️ Mensagem programada não saiu para ${m.phone}: ${String(e.message || e).slice(0, 120)}`, m.phone);
+            falhas++;
+        }
+    }
+    return { enviadas, falhas };
+}
+
+app.get('/api/scheduled-msgs', async (req, res) => {
+    try {
+        const tel = String(req.query.phone || '').replace(/\D/g, '');
+        if (!tel) return res.status(400).json({ error: 'Telefone não informado.' });
+        const v = phoneVariants(tel);
+        // Agendadas + as que falharam na última semana (pra equipe ver e refazer).
+        const rows = await queryD1(
+            `SELECT id, phone, texto, template_name, send_at, status, cancelar_se_responder, origem, motivo, erro, created_by, created_at
+             FROM crm_scheduled_msgs
+             WHERE phone IN (${v.map(() => '?').join(', ')}) AND (status = 'agendada' OR (status = 'falhou' AND send_at >= ?))
+             ORDER BY send_at ASC`, [...v, flowDbTime(-7 * 86400000)]);
+        res.json({ mensagens: rows || [] });
+    } catch (e) {
+        console.error('scheduled-msgs list:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar mensagens programadas.' });
+    }
+});
+
+app.post('/api/scheduled-msgs', async (req, res) => {
+    try {
+        const r = await createScheduledMsg({
+            phone: req.body.phone,
+            texto: req.body.texto,
+            templateName: req.body.template_name,
+            sendAt: new Date(req.body.send_at),
+            cancelarSeResponder: req.body.cancelar_se_responder !== false,
+            origem: 'manual',
+            createdBy: req.user.username
+        });
+        res.json(r);
+    } catch (e) {
+        res.status(400).json({ error: e.message || 'Erro ao programar a mensagem.' });
+    }
+});
+
+app.put('/api/scheduled-msgs/:id', async (req, res) => {
+    try {
+        const sendAt = new Date(req.body.send_at);
+        const texto = schedValidar({ texto: req.body.texto, sendAt });
+        const r = await queryD1Meta(
+            `UPDATE crm_scheduled_msgs SET texto = ?, send_at = ?, template_name = ?, cancelar_se_responder = ?, status = 'agendada', erro = NULL
+             WHERE id = ? AND status IN ('agendada', 'falhou')`,
+            [texto, followupAtSql(sendAt), String(req.body.template_name || '').trim() || null, req.body.cancelar_se_responder !== false ? 1 : 0, req.params.id]);
+        if (!r.meta || !r.meta.changes) return res.status(409).json({ error: 'Essa mensagem já saiu ou foi cancelada.' });
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message || 'Erro ao salvar.' });
+    }
+});
+
+app.delete('/api/scheduled-msgs/:id', async (req, res) => {
+    try {
+        await queryD1("UPDATE crm_scheduled_msgs SET status = 'cancelada', erro = ? WHERE id = ? AND status IN ('agendada', 'falhou')",
+            ['cancelada por ' + req.user.username, req.params.id]);
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('scheduled-msgs delete:', e.message);
+        res.status(500).json({ error: 'Erro ao cancelar.' });
+    }
+});
 
 async function followupApplyFinal(cfg, lead) {
     try {
@@ -12257,6 +12997,8 @@ app.post('/api/ai-agent/ask', async (req, res) => {
             : 'Ainda não há análise qualitativa gerada (roda automaticamente a cada poucas horas).';
 
         const contexto = await getWhatsappAiContext();
+        const perguntasAnteriores = historico.filter(h => h.role === 'user').map(h => String(h.text || '')).slice(-2).join('\n');
+        const trechos = await getBrainContext(pergunta + '\n' + perguntasAnteriores, 'ask');
         const sys = `${contexto}
 
 Você é o assistente interno de gestão do CRM de uma clínica — fala com o ATENDENTE/GESTOR, nunca com o paciente. Responda a pergunta dele usando SOMENTE os dados abaixo (não invente números nem fatos que não estão aqui). Seja direto, use bullets quando ajudar a leitura, português do Brasil, sem saudação nem despedida.
@@ -12265,6 +13007,8 @@ DADOS DISPONÍVEIS:
 - Funil de leads (contagem por coluna): ${funilTexto}
 - Última análise qualitativa das conversas (${(lastRunRows && lastRunRows[0]) ? lastRunRows[0].value : 'ainda não rodou'}):
 ${digestTexto}
+- Segundo Cérebro (notas internas da clínica: procedimentos, protocolos, campanhas, processo de vendas), trechos ligados à pergunta. Quando usar, diga de qual nota veio (o nome entre colchetes):
+${trechos || 'nenhum trecho das notas tem a ver com esta pergunta.'}
 
 Se a pergunta pedir algo que não está nos dados acima, diga isso claramente em vez de inventar.`;
 
