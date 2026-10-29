@@ -247,7 +247,8 @@
                 </section>
                 <section class="prs-sec">
                     <h3>Cores</h3>
-                    ${CORES.map(([k, t, a]) => campoCor(`${modo}.${k}`, t, m[k], a)).join('')}
+                    ${CORES.filter(([k]) => modo === 'dark' || k !== 'menu').map(([k, t, a]) => campoCor(`${modo}.${k}`, t, m[k], a)).join('')}
+                    ${modo === 'light' ? '<p class="prs-help">O menu lateral e a tela de login são sempre escuros: eles seguem as cores do modo escuro.</p>' : ''}
                     <button type="button" class="prs-link" onclick="prsRestaurarModo()"><i class="fa-solid fa-rotate-left"></i> Restaurar o padrão do modo ${modo === 'dark' ? 'escuro' : 'claro'}</button>
                 </section>
                 <section class="prs-sec">

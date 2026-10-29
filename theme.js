@@ -64,8 +64,7 @@
         const n = parseInt(hex.slice(1), 16);
         return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
     }
-    // style.css guarda várias cores como "H S% L%" (formato shadcn) — converte.
-    function hexHsl(hex) {
+    function hexHslNum(hex) {
         let [r, g, b] = hexRgb(hex).map(x => x / 255);
         const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
         let h = 0, s = 0;
@@ -75,15 +74,27 @@
             h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
             h *= 60;
         }
-        return `${h.toFixed(1)} ${(s * 100).toFixed(1)}% ${(l * 100).toFixed(1)}%`;
+        return [h, s * 100, l * 100];
     }
+    const trio = (h, s, l) => `${h.toFixed(1)} ${s.toFixed(1)}% ${Math.min(100, Math.max(0, l)).toFixed(1)}%`;
+    // style.css guarda várias cores como "H S% L%" (formato shadcn) — converte.
+    const hexHsl = hex => trio(...hexHslNum(hex));
     const rgba = (hex, a) => `rgba(${hexRgb(hex).join(', ')}, ${a})`;
 
-    function cssDoModo(sel, m, p, modo, imagemPreview) {
+    // Variáveis do style.css que são calculadas a partir de outras (--bg-card =
+    // hsl(var(--card)) etc.). Uma variável assim é resolvida no elemento onde foi
+    // declarada: mudar só --card no <body> não muda o --bg-card que veio pronto do
+    // :root. Por isso o tema declara de novo as derivadas junto com as de base.
+    const DERIVADAS = {
+        dark: '--bg-card: hsl(var(--card)); --bg-column: hsl(var(--muted)); --text-main: hsl(var(--foreground)); --text-muted: hsl(var(--muted-foreground)); --border-color: hsl(var(--border)); --btn-secondary-bg: hsl(var(--secondary)); --btn-secondary-hover: hsl(var(--muted)); --btn-secondary-text: hsl(var(--secondary-foreground)); --agenda-header-bg: hsl(var(--muted)); --header-text: hsl(var(--foreground)); --header-btn-hover: hsl(var(--accent)); --header-btn-border: hsl(var(--border)); --nav-active-bg: hsl(var(--accent)); --nav-active-border: hsl(var(--border)); --nav-arrow: hsl(var(--muted-foreground)); --sb-danger: hsl(var(--destructive)); --agenda-block-bg: hsl(var(--muted)); --agenda-block-border: hsl(var(--border)); --agenda-block-border-strong: hsl(var(--muted-foreground)); --agenda-block-text: hsl(var(--foreground)); --dash-funnel-sep: var(--bg-dark)',
+        light: '--bg-card: hsl(var(--card)); --bg-column: hsl(var(--muted)); --text-main: hsl(var(--foreground)); --text-muted: hsl(var(--muted-foreground)); --border-color: hsl(var(--border)); --btn-secondary-bg: hsl(var(--secondary)); --btn-secondary-hover: hsl(var(--muted)); --btn-secondary-text: hsl(var(--secondary-foreground)); --agenda-header-bg: hsl(var(--background)); --header-text: hsl(var(--foreground)); --header-btn-hover: hsl(var(--accent)); --header-btn-border: hsl(var(--border)); --nav-active-bg: hsl(var(--accent)); --nav-active-border: hsl(var(--border)); --nav-arrow: hsl(var(--muted-foreground)); --sb-danger: hsl(var(--destructive)); --agenda-block-bg: hsl(var(--muted)); --agenda-block-border: hsl(var(--border)); --agenda-block-border-strong: hsl(var(--muted-foreground)); --agenda-block-text: hsl(var(--foreground)); --dash-funnel-sep: var(--bg-card)'
+    };
+
+    // Declarações de variáveis de um modo (sem seletor). Vazio = igual ao padrão.
+    function varsDoModo(m, p, modo) {
         const v = [];
         const f = m.fundo;
-        const fundoMudou = f.tipo !== 'cor' || f.cor !== p.fundo.cor;
-        if (fundoMudou) {
+        if (f.tipo !== 'cor' || f.cor !== p.fundo.cor) {
             // Com degradê/imagem as telas ficam translúcidas pra deixar o fundo aparecer.
             const base = f.tipo === 'cor' ? f.cor : rgba(f.cor, (100 - f.transparencia) / 100);
             v.push(`--bg-main: ${base}`, `--bg-dark: ${base}`, `--bg-agenda: ${base}`);
@@ -91,30 +102,49 @@
         }
         if (m.destaque !== p.destaque) v.push(`--accent-primary: ${m.destaque}`, `--ring: ${hexHsl(m.destaque)}`);
         if (m.menu !== p.menu) v.push(`--header-bg: ${m.menu}`, `--sb-card-bg: ${m.menu}`);
-        if (m.cartao !== p.cartao) v.push(`--card: ${hexHsl(m.cartao)}`, `--popover: ${hexHsl(m.cartao)}`);
+        if (m.cartao !== p.cartao) {
+            // Superfícies intermediárias (hover, item selecionado, botão secundário,
+            // coluna do kanban) seguem o tom do cartão, no mesmo degrau de luz do padrão.
+            const [h, s, l] = hexHslNum(m.cartao);
+            const passo = modo === 'dark' ? 1 : -1;
+            v.push(`--card: ${hexHsl(m.cartao)}`, `--popover: ${hexHsl(m.cartao)}`,
+                `--muted: ${trio(h, s, l + 4 * passo)}`, `--secondary: ${trio(h, s, l + 4 * passo)}`,
+                `--accent: ${trio(h, s, l + (modo === 'dark' ? 16 : -4))}`,
+                `--bg-hover: hsl(${trio(h, s, l + (modo === 'dark' ? 6 : -11)).replace(/ /g, ', ')})`);
+        }
         if (m.borda !== p.borda) v.push(`--border: ${hexHsl(m.borda)}`, `--input: ${hexHsl(m.borda)}`);
         if (m.texto !== p.texto) v.push(`--foreground: ${hexHsl(m.texto)}`, `--card-foreground: ${hexHsl(m.texto)}`, `--secondary-foreground: ${hexHsl(m.texto)}`);
         if (m.textoSec !== p.textoSec) v.push(`--muted-foreground: ${hexHsl(m.textoSec)}`);
-        let css = v.length ? `${sel} { ${v.join('; ')}; }\n` : '';
-
-        if (f.tipo !== 'cor') {
-            const camada = f.tipo === 'degrade'
-                ? `linear-gradient(${f.angulo}deg, ${f.cor}, ${f.cor2})`
-                : `url("${imagemPreview || `/api/ui-theme/bg/${modo}?v=${f.imagemV}`}") center / cover no-repeat, ${f.cor}`;
-            const borda = f.desfoque ? `-${f.desfoque * 2}px` : '0';
-            const veu = modo === 'dark' ? '0, 0, 0' : '255, 255, 255';
-            css += `${sel}::before { content: ''; position: fixed; inset: ${borda}; z-index: -2; pointer-events: none; background: ${camada}; ${f.desfoque ? `filter: blur(${f.desfoque}px);` : ''} }\n`;
-            css += `${sel}::after { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: rgba(${veu}, ${f.escurecer / 100}); }\n`;
-            css += `${sel} { background-color: ${f.cor}; }\n`;
-        }
-        return css;
+        if (v.length) v.push(DERIVADAS[modo]);
+        return v.join('; ');
     }
+
+    function cssFundo(sel, f, modo, imagemPreview) {
+        if (f.tipo === 'cor') return '';
+        const camada = f.tipo === 'degrade'
+            ? `linear-gradient(${f.angulo}deg, ${f.cor}, ${f.cor2})`
+            : `url("${imagemPreview || `/api/ui-theme/bg/${modo}?v=${f.imagemV}`}") center / cover no-repeat, ${f.cor}`;
+        const borda = f.desfoque ? `-${f.desfoque * 2}px` : '0';
+        const veu = modo === 'dark' ? '0, 0, 0' : '255, 255, 255';
+        return `${sel}::before { content: ''; position: fixed; inset: ${borda}; z-index: -2; pointer-events: none; background: ${camada}; ${f.desfoque ? `filter: blur(${f.desfoque}px);` : ''} }\n`
+            + `${sel}::after { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: rgba(${veu}, ${f.escurecer / 100}); }\n`
+            + `${sel} { background-color: ${f.cor}; }\n`;
+    }
+
+    // O menu lateral, a tela de login e os menus suspensos do menu são sempre
+    // escuros (style.css redeclara as cores escuras neles). Então o visual do modo
+    // escuro vale ali nos dois modos.
+    const SEMPRE_ESCUROS = 'body:not([data-theme="light"]), .sb-flyout, body[data-theme="light"] header, body[data-theme="light"] #login-overlay, body[data-theme="light"] .sb-flyout';
 
     // imagens: { dark?, light? } — URL local (blob:) de uma imagem escolhida no painel
     // e ainda não enviada, só pra pré-visualizar.
     function cssCompleto(t, imagens = {}) {
-        let css = cssDoModo('body:not([data-theme="light"])', t.dark, PADRAO.dark, 'dark', imagens.dark)
-            + cssDoModo('body[data-theme="light"]', t.light, PADRAO.light, 'light', imagens.light);
+        const escuro = varsDoModo(t.dark, PADRAO.dark, 'dark');
+        const claro = varsDoModo(t.light, PADRAO.light, 'light');
+        let css = (escuro ? `${SEMPRE_ESCUROS} { ${escuro}; }\n` : '')
+            + (claro ? `body[data-theme="light"] { ${claro}; }\n` : '')
+            + cssFundo('body:not([data-theme="light"])', t.dark.fundo, 'dark', imagens.dark)
+            + cssFundo('body[data-theme="light"]', t.light.fundo, 'light', imagens.light);
         const fonte = FONTES[t.fonte];
         if (fonte && fonte.css) css += `* { font-family: '${fonte.css}', system-ui, -apple-system, 'Segoe UI', sans-serif; }\n`;
         if (t.tamanho !== 100) css += `html { font-size: ${(13 * t.tamanho / 100).toFixed(2)}px; }\n`;
@@ -188,13 +218,63 @@
         cantosAplicados = fator;
     }
 
+    // Poucas regras do style.css (menu lateral, datepicker, .card) usam o cinza
+    // azulado hsl(230, …) escrito direto, fora das variáveis. Com cartão escuro
+    // personalizado, elas passam a usar o matiz/saturação dele, mantendo a luz.
+    // Os blocos de variáveis (:root, [data-theme], .sb-flyout) o tema já cobre.
+    let tomAplicado = null;
+    function aplicarTom(cartaoEscuro) {
+        const el = tagEstilo('crm-theme-tom');
+        const chave = cartaoEscuro === PADRAO.dark.cartao ? null : cartaoEscuro;
+        if (tomAplicado === chave) return;
+        tomAplicado = chave;
+        if (!chave) { el.textContent = ''; return; }
+        const [h, s] = hexHslNum(chave);
+        const novo = l => `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${l}%)`;
+        // O navegador devolve as cores das regras comuns já como rgb(...); só as
+        // variáveis guardam o texto hsl(230, …). Mapeia o rgb dos tons usados
+        // (saturação 5–15%, luz 1–60%; preto puro fica de fora) usando a própria conversão do navegador.
+        const mapa = new Map();
+        const tmp = document.createElement('div');
+        for (let sat = 5; sat <= 15; sat++) for (let l = 1; l <= 60; l++) {
+            tmp.style.color = `hsl(230, ${sat}%, ${l}%)`;
+            mapa.set(tmp.style.color, l);
+        }
+        const RE_HSL = /hsl\(230,\s*[\d.]+%,\s*([\d.]+)%\)/g;
+        const temTom = v => /hsl\(230,/.test(v) || (v.match(/rgb\([^)]*\)/g) || []).some(c => mapa.has(c));
+        const troca = v => v.replace(RE_HSL, (m, l) => novo(l)).replace(/rgb\([^)]*\)/g, c => mapa.has(c) ? novo(mapa.get(c)) : c);
+        const regras = [];
+        const varrer = (lista, dentro) => {
+            for (const r of lista) {
+                if (r.cssRules && r.media) { varrer(r.cssRules, `@media ${r.media.mediaText}`); continue; }
+                if (!r.style || !r.selectorText || /:root|\[data-theme|\.sb-flyout/.test(r.selectorText)) continue;
+                const decl = [];
+                for (let i = 0; i < r.style.length; i++) {
+                    const prop = r.style[i];
+                    const val = r.style.getPropertyValue(prop);
+                    if (!temTom(val)) continue;
+                    decl.push(`${prop}: ${troca(val)}${r.style.getPropertyPriority(prop) ? ' !important' : ''}`);
+                }
+                if (!decl.length) continue;
+                const regra = `${r.selectorText} { ${decl.join('; ')}; }`;
+                regras.push(dentro ? `${dentro} { ${regra} }` : regra);
+            }
+        };
+        for (const sheet of Array.from(document.styleSheets)) {
+            if (!sheet.href || new URL(sheet.href).origin !== location.origin) continue;
+            try { varrer(sheet.cssRules, null); } catch (e) { /* folha ainda carregando */ }
+        }
+        el.textContent = regras.join('\n');
+    }
+
     let atual = null;
     function aplicar(tema, imagens) {
         atual = completo(tema);
         tagEstilo('crm-theme-css').textContent = cssCompleto(atual, imagens);
         carregarFonte(atual.fonte);
-        if (document.readyState === 'complete') aplicarCantos(atual.cantos);
-        else window.addEventListener('load', () => aplicarCantos(atual.cantos), { once: true });
+        const reescrever = () => { aplicarCantos(atual.cantos); aplicarTom(atual.dark.cartao); };
+        if (document.readyState === 'complete') reescrever();
+        else window.addEventListener('load', reescrever, { once: true });
         return atual;
     }
 
