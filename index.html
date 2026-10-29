@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=33">
+    <link rel="stylesheet" href="style.css?v=34">
     <script src="theme.js?v=5"></script>
     <link rel="icon" type="image/png" href="favicon.png">
 
@@ -1968,9 +1968,19 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                             <input type="date" id="ag-patient-born" class="form-control">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label>E-mail</label>
-                        <input type="email" id="ag-patient-email" class="form-control" placeholder="email@exemplo.com">
+                    <div style="display: flex; gap: 1rem;">
+                        <div class="form-group" style="flex: 1;">
+                            <label>CPF</label>
+                            <input type="text" id="ag-patient-cpf" class="form-control" placeholder="000.000.000-00" inputmode="numeric">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>E-mail</label>
+                            <input type="email" id="ag-patient-email" class="form-control" placeholder="email@exemplo.com">
+                        </div>
+                    </div>
+                    <div class="ag-extrair">
+                        <button type="button" class="btn-secondary" id="ag-extrair-btn" onclick="extrairDadosDaConversa(true)"><i class="fa-solid fa-wand-magic-sparkles"></i> Puxar da conversa</button>
+                        <span id="ag-extrair-status"></span>
                     </div>
                 </div>
 
@@ -5271,7 +5281,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=31"></script>
-    <script src="app.js?v=34"></script>
+    <script src="app.js?v=38"></script>
     <script src="personalizacao.js?v=4"></script>
     <script src="flows.js?v=25"></script>
 

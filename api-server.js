@@ -8719,6 +8719,61 @@ app.post('/api/leads/:id/discard', async (req, res) => {
     }
 });
 
+// A equipe pede ao paciente nome completo, CPF, nascimento e telefone pelo
+// WhatsApp. Esta rota lê a conversa e devolve esses dados pra preencher o
+// formulário de agendamento — a atendente confere antes de enviar ao Amigo.
+// CPF passa pelo validador e nascimento precisa ser uma data real; o que não
+// estiver claro na conversa volta vazio (nunca inventado).
+app.post('/api/agendamento/extrair-dados', async (req, res) => {
+    try {
+        const phone = String(req.body.phone || '').replace(/\D/g, '');
+        if (!phone) return res.status(400).json({ error: 'Telefone não informado.' });
+        const v = phoneVariants(phone);
+        const rows = await queryD1(
+            `SELECT direction, message FROM wa_messages WHERE phone IN (${v.map(() => '?').join(', ')}) ORDER BY timestamp DESC LIMIT 60`, v);
+        const conversa = (rows || []).reverse()
+            .filter(r => typeof r.message === 'string' && !r.message.startsWith('[FILE:'))
+            .map(r => `${r.direction === 'in' ? 'Paciente' : 'Clínica'}: ${r.message}`)
+            .join('\n');
+        if (!conversa) return res.json({ dados: {}, achou: false });
+
+        const sys = `Você extrai dados cadastrais de um paciente a partir de uma conversa de WhatsApp com uma clínica.
+Considere SÓ o que o PACIENTE escreveu sobre ele mesmo (não dados de outra pessoa, não exemplos da clínica).
+Responda APENAS com um JSON, sem texto antes ou depois, neste formato:
+{"nome_completo": "", "cpf": "", "nascimento": "", "email": "", "telefone": ""}
+- nome_completo: nome e sobrenome como o paciente escreveu, com iniciais maiúsculas.
+- cpf: só os 11 dígitos.
+- nascimento: AAAA-MM-DD (converta "15/07/94" para "1994-07-15").
+- telefone: só dígitos, com DDD.
+- Se um dado não aparecer claramente, deixe "". Nunca invente.`;
+        const texto = await callGeminiCopilot(sys, `Conversa:\n${conversa.slice(-12000)}`);
+        const m = String(texto || '').match(/\{[\s\S]*\}/);
+        let bruto = {};
+        try { bruto = m ? JSON.parse(m[0]) : {}; } catch (e) { bruto = {}; }
+
+        const dados = {};
+        const nome = String(bruto.nome_completo || '').trim().replace(/\s+/g, ' ');
+        if (nome.length >= 3 && nome.length <= 120) dados.nome = nome;
+        const cpf = String(bruto.cpf || '').replace(/\D/g, '');
+        if (cpfValido(cpf)) dados.cpf = cpf;
+        const nasc = String(bruto.nascimento || '').trim();
+        const dn = /^(\d{4})-(\d{2})-(\d{2})$/.exec(nasc);
+        if (dn) {
+            const dt = new Date(Date.UTC(+dn[1], +dn[2] - 1, +dn[3]));
+            const ano = dt.getUTCFullYear();
+            if (dt.getUTCMonth() === +dn[2] - 1 && ano >= 1900 && dt <= new Date()) dados.born = nasc;
+        }
+        const email = String(bruto.email || '').trim();
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) dados.email = email.toLowerCase();
+        const tel = String(bruto.telefone || '').replace(/\D/g, '');
+        if (tel.length >= 10 && tel.length <= 13) dados.telefone = tel;
+        res.json({ dados, achou: Object.keys(dados).length > 0 });
+    } catch (e) {
+        console.error('extrair-dados:', e.message);
+        res.status(502).json({ error: 'Não consegui ler a conversa agora.' });
+    }
+});
+
 // Espelho da Rota Serverless da Vercel para uso Local
 app.post('/api/agendar', async (req, res) => {
     // Editar um agendamento já existente é restrito a administradores (mesma regra que a
@@ -8737,7 +8792,7 @@ app.post('/api/agendar', async (req, res) => {
     // Convertendo os dados do CRM para o formato estrito do Amigo App
     const rawPhone = payload.patient_phone || payload.phone || '';
     
-    let nameParts = (payload.patient_name || '').trim().split(' ');
+    let nameParts = (payload.patient_name || '').trim().split(/\s+/).filter(Boolean);
     let firstName = nameParts[0] || 'Desconhecido';
     
     let lastName = '';
@@ -8747,12 +8802,24 @@ app.post('/api/agendar', async (req, res) => {
         lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') + ' [MKT]' : '[MKT]';
     }
 
+    // Quem agendou vai na observação do Amigo (antes era um texto fixo e a agenda
+    // só mostrava a integração/chatbot como autor). Nome de exibição do atendente;
+    // sem ele, o login com a primeira letra maiúscula.
+    let atendente = req.user.username;
+    try {
+        const u = await queryD1('SELECT display_name FROM crm_users WHERE username = ?', [req.user.username]);
+        const nome = u && u[0] && String(u[0].display_name || '').trim();
+        if (nome) atendente = nome;
+        else if (req.user.username === 'admin') atendente = 'Fabrício';
+        else atendente = atendente.charAt(0).toUpperCase() + atendente.slice(1);
+    } catch (e) { /* segue com o login */ }
+
     const amigoPayload = {
         start_date: `${payload.appointment_date} ${payload.appointment_time}`,
         place_id: parseInt(payload.place_id) || 32337,
         event_id: parseInt(payload.event_id) || 176910,
         user_id: parseInt(payload.user_id) || 102962,
-        observation: "Origem: CRM de Vendas/Marketing",
+        observation: `Agendado por ${atendente} pelo CRM${cpfValido(payload.patient_cpf) ? ' · CPF ' + String(payload.patient_cpf).replace(/\D/g, '').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : ''}`,
         patient: {
             name: firstName,
             last_name: lastName,

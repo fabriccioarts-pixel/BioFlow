@@ -10290,3 +10290,7 @@ textarea.sched-input { resize: vertical; min-height: 84px; line-height: 1.45; }
     .brn-side { max-height: 40vh; }
     .brn-main { padding: 1rem; }
 }
+
+/* Agendamento: puxar dados do paciente da conversa (IA) */
+.ag-extrair { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: -0.25rem 0 1rem; }
+.ag-extrair span { font-size: 0.8rem; color: var(--text-muted); }
