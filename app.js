@@ -3874,14 +3874,67 @@ function resetAgendamentoForm() {
     window.currentEditingAttendance = null;
     const idsToClear = [
         'ag-lead-id', 'ag-place', 'ag-user', 'ag-event', 'ag-event-search',
-        'ag-patient-name', 'ag-patient-phone', 'ag-patient-email', 'ag-patient-born'
+        'ag-patient-name', 'ag-patient-phone', 'ag-patient-email', 'ag-patient-born', 'ag-patient-cpf'
     ];
+    const st = document.getElementById('ag-extrair-status');
+    if (st) st.textContent = '';
     idsToClear.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
     const confirmBtn = document.querySelector('#integrationActions .btn-save');
     if (confirmBtn) confirmBtn.innerText = "Enviar para o Amigo App →";
+}
+
+function formatarCpf(v) {
+    const c = String(v || '').replace(/\D/g, '');
+    return c.length === 11 ? c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : c;
+}
+
+// A IA lê a conversa do paciente e preenche nome completo, nascimento, CPF,
+// e-mail e telefone. Automática (manual=false) só completa campo vazio — e troca
+// o nome quando a conversa traz um nome mais completo que o do WhatsApp. O botão
+// (manual=true) sobrescreve com o que a IA achar. A atendente sempre confere.
+async function extrairDadosDaConversa(manual) {
+    const st = document.getElementById('ag-extrair-status');
+    const btn = document.getElementById('ag-extrair-btn');
+    const campo = id => document.getElementById(id);
+    const phone = (campo('ag-patient-phone').value || '').replace(/\D/g, '');
+    if (!phone) { if (manual) st.textContent = 'Preencha o telefone para eu procurar a conversa.'; return; }
+    const leadAberto = campo('ag-lead-id').value;
+    st.textContent = 'Lendo a conversa…';
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/agendamento/extrair-dados', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error);
+        if (campo('ag-lead-id').value !== leadAberto) return; // fechou/trocou de paciente no meio
+        const d = json.dados || {};
+        const preenchidos = [];
+        const pode = el => manual || !el.value.trim();
+        if (d.nome) {
+            const el = campo('ag-patient-name');
+            const maisCompleto = d.nome.split(' ').length > el.value.trim().split(/\s+/).filter(Boolean).length;
+            if (manual || !el.value.trim() || maisCompleto) {
+                el.value = d.nome;
+                preenchidos.push('nome');
+                // 'change' atualiza o resumo do modal sem abrir a busca de pacientes (que é no 'input').
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+        if (d.born && pode(campo('ag-patient-born'))) { campo('ag-patient-born').value = d.born; preenchidos.push('nascimento'); }
+        if (d.cpf && pode(campo('ag-patient-cpf'))) { campo('ag-patient-cpf').value = formatarCpf(d.cpf); preenchidos.push('CPF'); }
+        if (d.email && pode(campo('ag-patient-email'))) { campo('ag-patient-email').value = d.email; preenchidos.push('e-mail'); }
+        st.textContent = preenchidos.length
+            ? 'Preenchido pela conversa: ' + preenchidos.join(', ') + '. Confira antes de enviar.'
+            : (json.achou ? 'Os dados da conversa já estão no formulário.' : 'Não achei os dados do paciente na conversa.');
+    } catch (e) {
+        st.textContent = e.message || 'Não consegui ler a conversa agora.';
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 function openAgendamentoModal(cardId) {
@@ -3894,8 +3947,17 @@ function openAgendamentoModal(cardId) {
     
     document.getElementById('ag-lead-id').value = cardId;
     document.getElementById('ag-data').value = new Date().toISOString().split('T')[0]; // Hoje
-    
-    document.getElementById('directScheduleFields').style.display = 'none';
+
+    // Os dados do paciente aparecem também vindo do Kanban. Antes ficavam escondidos
+    // e o Amigo recebia o nome do WhatsApp (quase sempre só o primeiro nome) e
+    // nascimento fixo em 01/01/1990 — a idade saía errada.
+    document.getElementById('directScheduleFields').style.display = 'block';
+    document.getElementById('ag-patient-name').value = (lead.nome && lead.nome !== 'Lead WhatsApp') ? lead.nome : '';
+    document.getElementById('ag-patient-phone').value = lead.telefone || '';
+    document.getElementById('ag-patient-email').value = lead.email || '';
+    document.getElementById('ag-patient-born').value = lead.born ? String(lead.born).split('T')[0] : '';
+    document.getElementById('ag-patient-cpf').value = lead.cpf ? formatarCpf(lead.cpf) : '';
+    extrairDadosDaConversa(false);
     
     renderDayChips(); // Iniciar sugestões
     
@@ -4061,25 +4123,28 @@ async function confirmAgendamento() {
     
     let fbClickId = '';
     
-    if (draggedLead) {
-        // Veio do Kanban
-        leadName = draggedLead.nome;
-        leadPhone = draggedLead.telefone;
-        leadEmail = draggedLead.email || '';
-        fbClickId = draggedLead.fb_click_id || '';
-        if (draggedLead.born) patientBorn = draggedLead.born;
-        if (draggedLead.nascimento) patientBorn = draggedLead.nascimento;
-    } else {
-        // Veio direto da grade
-        leadName = document.getElementById('ag-patient-name').value;
-        leadPhone = document.getElementById('ag-patient-phone').value;
-        leadEmail = (document.getElementById('ag-patient-email') || {}).value || '';
-        const bornVal = (document.getElementById('ag-patient-born') || {}).value || '';
-        if (bornVal) patientBorn = bornVal;
-        if (!leadName) {
-            await customAlert("Preencha o nome do paciente!");
-            return;
-        }
+    // Kanban ou grade da agenda: os dados vêm sempre do formulário.
+    leadName = document.getElementById('ag-patient-name').value.trim().replace(/\s+/g, ' ');
+    leadPhone = document.getElementById('ag-patient-phone').value;
+    leadEmail = (document.getElementById('ag-patient-email') || {}).value || '';
+    const bornVal = (document.getElementById('ag-patient-born') || {}).value || '';
+    const cpfVal = ((document.getElementById('ag-patient-cpf') || {}).value || '').replace(/\D/g, '');
+    if (draggedLead) fbClickId = draggedLead.fb_click_id || '';
+    if (!leadName) {
+        await customAlert("Preencha o nome do paciente!");
+        return;
+    }
+    // Paciente novo no Amigo: o nascimento vai para o cadastro e define a idade.
+    // Paciente já existente (escolhido na busca) ou edição mantém o que o Amigo tem.
+    const pacienteNovo = !window.selectedPatientId && !window.currentEditingAttendanceId;
+    if (pacienteNovo && !bornVal) {
+        await customAlert("Preencha a data de nascimento do paciente.");
+        return;
+    }
+    if (bornVal) patientBorn = bornVal;
+    if (pacienteNovo && !leadName.includes(' ')
+        && !await customConfirm('Só o primeiro nome foi preenchido. Enviar para o Amigo assim mesmo?', 'Nome incompleto')) {
+        return;
     }
     
     const selPlace = document.getElementById('ag-place');
@@ -4105,6 +4170,7 @@ async function confirmAgendamento() {
         patient_phone: leadPhone,
         patient_email: leadEmail,
         patient_born: patientBorn,
+        patient_cpf: cpfVal,
         fb_click_id: fbClickId,
         valor_primario: valor1,
         valor_secundario: valor2,
@@ -4136,6 +4202,17 @@ async function confirmAgendamento() {
         await customAlert("Agendamento criado com sucesso no Amigo App!");
 
         if (draggedLead) {
+            const mudou = {};
+            if (leadName && leadName !== draggedLead.nome) mudou.nome = leadName;
+            if (bornVal && bornVal !== String(draggedLead.born || '').split('T')[0]) mudou.born = bornVal;
+            if (leadEmail && leadEmail !== (draggedLead.email || '')) mudou.email = leadEmail;
+            if (cpfVal.length === 11 && cpfVal !== String(draggedLead.cpf || '').replace(/\D/g, '')) mudou.cpf = cpfVal;
+            if (Object.keys(mudou).length) {
+                Object.assign(draggedLead, mudou);
+                fetch(`/api/leads/${draggedLead.id}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mudou)
+                }).catch(e => console.error('Erro ao guardar os dados do paciente no lead:', e));
+            }
             draggedLead.column = 'col-agendado';
             renderBoard();
             updateLeadColumnOnServer(draggedLead.id, 'col-agendado');
@@ -10665,8 +10742,14 @@ function toggleSidebar() {}
 '            <input type="date" id="ag-patient-born"></div>',
 '        </div>',
 '        <div class="agx-row" style="margin-top:.85rem;">',
-'          <div class="agx-field full"><label for="ag-patient-email">E-mail</label>',
+'          <div class="agx-field"><label for="ag-patient-cpf">CPF</label>',
+'            <input type="text" id="ag-patient-cpf" placeholder="000.000.000-00" inputmode="numeric"></div>',
+'          <div class="agx-field"><label for="ag-patient-email">E-mail</label>',
 '            <input type="email" id="ag-patient-email" placeholder="email@exemplo.com"></div>',
+'        </div>',
+'        <div class="ag-extrair" style="margin-top:.85rem;">',
+'          <button type="button" class="btn-secondary" id="ag-extrair-btn" onclick="extrairDadosDaConversa(true)"><i class="fa-solid fa-wand-magic-sparkles"></i> Puxar da conversa</button>',
+'          <span id="ag-extrair-status"></span>',
 '        </div>',
 '      </div>',
 '    </section>',
