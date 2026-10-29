@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=28">
+    <link rel="stylesheet" href="style.css?v=30">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -445,6 +445,9 @@
             </button>
             <button class="tab-btn" onclick="switchTab('midias')" id="tab-midias" title="Biblioteca de mídia para enviar aos leads">
                 <i class="fa-solid fa-photo-film"></i> Mídias
+            </button>
+            <button class="tab-btn" onclick="switchTab('cerebro')" id="tab-cerebro" title="Segundo Cérebro: notas da clínica que a IA consulta">
+                <i class="fa-solid fa-brain"></i> Segundo Cérebro
             </button>
             <div class="dropdown" onmouseenter="openCampanhasFlyout()" onmouseleave="scheduleCloseCampanhasFlyout()">
                 <button class="tab-btn" id="tab-campanhas-main">
@@ -2734,6 +2737,62 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 oncontextmenu="midxOnGridCtx(event)"
                 ondragover="event.preventDefault(); this.classList.add('is-drop');"
                 ondragleave="this.classList.remove('is-drop');" ondrop="midxDrop(event)"></div>
+        </div>
+    </div>
+
+    <!-- SEGUNDO CÉREBRO — notas da clínica que a IA consulta -->
+    <div class="view-section" id="view-cerebro" style="display: none;">
+        <div class="brn-modebar" role="tablist" aria-label="Segundo Cérebro">
+            <button class="brn-mode is-active" data-mode="painel" role="tab" onclick="brnSetMode('painel')"><i class="fa-solid fa-brain"></i> Painel</button>
+            <button class="brn-mode" data-mode="notas" role="tab" onclick="brnSetMode('notas')"><i class="fa-regular fa-file-lines"></i> Notas</button>
+        </div>
+        <iframe id="brn-painel" class="brn-painel" title="Painel do Segundo Cérebro"></iframe>
+        <div class="brn-wrap" id="brn-notas" style="display: none;">
+            <div class="brn-head">
+                <div>
+                    <h2><i class="fa-solid fa-brain" style="color: var(--accent-primary);"></i> Segundo Cérebro</h2>
+                    <p class="brn-sub">Notas da clínica. A IA do WhatsApp consulta só as de Recursos (R_), o Copiloto usa também as de Áreas (A_) e o Ask AI usa todas.</p>
+                </div>
+                <div class="brn-head-actions" id="brn-admin-actions" style="display: none;">
+                    <button class="btn-secondary" onclick="brnOpenTest()"><i class="fa-solid fa-flask"></i> Testar o que a IA vê</button>
+                    <button class="btn-secondary" onclick="document.getElementById('brn-file-input').click()"><i
+                            class="fa-solid fa-file-import"></i> Importar .md</button>
+                    <input type="file" id="brn-file-input" multiple accept=".md,.txt,text/markdown,text/plain"
+                        style="display:none" onchange="brnImportFiles(this.files); this.value='';">
+                    <button class="btn-save" onclick="brnNew()"><i class="fa-solid fa-plus"></i> Nova nota</button>
+                </div>
+            </div>
+
+            <div class="brn-body">
+                <aside class="brn-side">
+                    <input type="search" id="brn-search" class="brn-search" placeholder="Buscar nas notas…" oninput="brnRenderList()">
+                    <div class="brn-list" id="brn-list"></div>
+                </aside>
+                <section class="brn-main" id="brn-main"></section>
+            </div>
+        </div>
+    </div>
+
+    <!-- Testar o que a IA vê do Segundo Cérebro -->
+    <div class="modal-overlay" id="modalBrnTest">
+        <div class="modal" style="max-width: 680px;">
+            <h2><i class="fa-solid fa-flask" style="color: var(--accent-primary);"></i> Testar o que a IA vê</h2>
+            <p class="modal-subtitle">Escreva uma mensagem como o paciente escreveria. Aparecem os trechos das notas que a IA recebe junto com a conversa.</p>
+            <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Quem consulta</label>
+            <select id="brn-test-uso" class="brn-input" style="margin:0.3rem 0 0.8rem;">
+                <option value="whatsapp">IA do WhatsApp (só R_)</option>
+                <option value="copiloto">Copiloto (R_ e A_)</option>
+                <option value="ask">Ask AI (todas as notas)</option>
+            </select>
+            <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Mensagem</label>
+            <textarea id="brn-test-texto" class="brn-input" style="min-height:64px; resize:vertical; margin:0.3rem 0 0.8rem;"
+                placeholder="Ex.: tenho melasma, o laser resolve?"></textarea>
+            <div id="brn-test-result" class="brn-test-result"></div>
+            <div class="modal-separator"></div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModals()">Fechar</button>
+                <button class="btn-save" id="brn-test-btn" onclick="brnRunTest()"><i class="fa-solid fa-magnifying-glass"></i> Buscar</button>
+            </div>
         </div>
     </div>
 
@@ -5166,7 +5225,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=27"></script>
-    <script src="app.js?v=29"></script>
+    <script src="app.js?v=31"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
