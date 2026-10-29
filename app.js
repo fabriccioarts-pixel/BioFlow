@@ -338,6 +338,8 @@ function initApp() {
             if (btnGestao) {
                 btnGestao.style.display = 'flex';
             }
+            const btnPersonalizacao = document.getElementById('flyout-personalizacao');
+            if (btnPersonalizacao) btnPersonalizacao.style.display = 'flex';
             const btnAiAgent = document.getElementById('sb-tool-ai-agent');
             if (btnAiAgent) {
                 btnAiAgent.style.display = 'flex';

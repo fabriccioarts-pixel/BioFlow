@@ -4772,6 +4772,76 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_settings (
 )`).catch(() => {});
 
 // ==========================================
+// PERSONALIZAÇÃO — visual da clínica (theme.js aplica em todas as páginas; o
+// painel fica em app.js). Um JSON em crm_settings 'ui_theme' (cores, fundo, fonte,
+// cantos, um bloco por modo) e a imagem de fundo de cada modo em
+// 'ui_theme_bg_dark' / 'ui_theme_bg_light' (data URL já comprimida no navegador).
+// O JSON é saneado no theme.js antes de virar CSS (cores #rrggbb, números com teto).
+// ==========================================
+const UI_THEME_MAX_CHARS = 20000;
+const UI_THEME_BG_MAX_CHARS = 1800000; // abaixo do teto de ~2 MB por linha do D1
+const UI_THEME_MODOS = ['dark', 'light'];
+const uiThemeIsAdmin = req => !!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'));
+
+app.get('/api/ui-theme', async (req, res) => {
+    try {
+        const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'ui_theme'");
+        let tema = null;
+        if (rows && rows[0] && rows[0].value) { try { tema = JSON.parse(rows[0].value); } catch (e) {} }
+        res.json({ tema });
+    } catch (e) {
+        console.error('ui-theme get:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar a personalização.' });
+    }
+});
+
+app.put('/api/ui-theme', async (req, res) => {
+    if (!uiThemeIsAdmin(req)) return res.status(403).json({ error: 'Só admin muda a personalização.' });
+    try {
+        const tema = req.body && req.body.tema;
+        const json = tema === null ? null : JSON.stringify(tema);
+        if (tema !== null && (typeof tema !== 'object' || Array.isArray(tema))) return res.status(400).json({ error: 'Tema inválido.' });
+        if (json && json.length > UI_THEME_MAX_CHARS) return res.status(413).json({ error: 'Tema grande demais.' });
+        await queryD1("INSERT INTO crm_settings (key, value) VALUES ('ui_theme', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [json]);
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('ui-theme put:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a personalização.' });
+    }
+});
+
+// A URL leva ?v=<versão>, então dá pra cachear para sempre no navegador.
+app.get('/api/ui-theme/bg/:modo', async (req, res) => {
+    if (!UI_THEME_MODOS.includes(req.params.modo)) return res.status(404).end();
+    try {
+        const rows = await queryD1('SELECT value FROM crm_settings WHERE key = ?', ['ui_theme_bg_' + req.params.modo]);
+        const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/s.exec((rows && rows[0] && rows[0].value) || '');
+        if (!m) return res.status(404).end();
+        res.set('Content-Type', m[1]);
+        res.set('Cache-Control', 'private, max-age=31536000, immutable');
+        res.send(Buffer.from(m[2], 'base64'));
+    } catch (e) {
+        console.error('ui-theme bg get:', e.message);
+        res.status(500).end();
+    }
+});
+
+app.put('/api/ui-theme/bg/:modo', async (req, res) => {
+    if (!uiThemeIsAdmin(req)) return res.status(403).json({ error: 'Só admin muda a personalização.' });
+    if (!UI_THEME_MODOS.includes(req.params.modo)) return res.status(400).json({ error: 'Modo inválido.' });
+    const data = String((req.body && req.body.data) || '');
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(data)) return res.status(400).json({ error: 'Envie uma imagem JPG, PNG ou WebP.' });
+    if (data.length > UI_THEME_BG_MAX_CHARS) return res.status(413).json({ error: 'Imagem grande demais mesmo depois de comprimida.' });
+    try {
+        await queryD1('INSERT INTO crm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', ['ui_theme_bg_' + req.params.modo, data]);
+        res.json({ v: Date.now() });
+    } catch (e) {
+        console.error('ui-theme bg put:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar a imagem.' });
+    }
+});
+
+// ==========================================
 // EMPRESAS / EMITENTES — dados que vão no cabeçalho do orçamento impresso
 // (e futuramente recibos/contratos). Substitui a chave única
 // crm_settings.'orcamento_empresa' por um cadastro com várias empresas, uma

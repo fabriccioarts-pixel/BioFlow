@@ -13,7 +13,8 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=31">
+    <link rel="stylesheet" href="style.css?v=32">
+    <script src="theme.js?v=4"></script>
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -667,6 +668,9 @@
                 </button>
                 <button id="flyout-gestao-acessos" class="user-flyout-item" onclick="openUsuariosModal(); closeUserMenu();" style="display: none;">
                     <i class="fa-solid fa-lock"></i> Gestão de Acessos
+                </button>
+                <button id="flyout-personalizacao" class="user-flyout-item" onclick="openPersonalizacao()" style="display: none;">
+                    <i class="fa-solid fa-palette"></i> Personalização
                 </button>
                 <div class="user-flyout-divider"></div>
                 <button class="user-flyout-item danger" onclick="logout()">
@@ -5266,8 +5270,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- Scripts da Aplicação -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
-    <script src="wa_chat_logic.js?v=29"></script>
-    <script src="app.js?v=32"></script>
+    <script src="wa_chat_logic.js?v=30"></script>
+    <script src="app.js?v=33"></script>
+    <script src="personalizacao.js?v=3"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
@@ -5809,5 +5814,7 @@ document.addEventListener('DOMContentLoaded', () => {
         catch (e) { console.warn('liquid-gradient indisponível:', e); }
     });
 </script>
+    <!-- Personalização (só admin) — conteúdo montado por personalizacao.js -->
+    <aside id="prs-drawer" class="prs-drawer" aria-label="Personalização"></aside>
 </body>
 </html>
