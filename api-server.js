@@ -12552,20 +12552,31 @@ async function gestorBriefing({ momento } = {}) {
         if (consultou(l)) b.consultas++;
         if (l.column_id === 'col-ganho') b.receita += leadPurchaseValueBRL(l) || 0;
     }
+    const statusCampanha = new Map(campanhasMeta.map(c => [String(c.id), c.status]));
     const campanhas = [...porCampanha.values()].map(b => {
         const a = gestorAgrega(b.linhas);
+        // Nem todo resultado da Meta vira lead no CRM (formulário instantâneo,
+        // Direct do Instagram, outro número de WhatsApp) e nem todo lead do CRM
+        // a Meta conta — o maior dos dois é o que dá pra comparar entre campanhas.
+        const leadsTotal = Math.max(b.leads, a.resultados);
         return {
-            id: b.id, nome: b.nome, gasto: a.gasto, resultados_meta: a.resultados, ctr: a.ctr,
-            leads: b.leads, consultas: b.consultas, receita: r2(b.receita),
-            // CPL sempre pelo lead que chegou no CRM — misturar com "resultado" da
-            // Meta (conversa iniciada) faria campanha sem lead nenhum parecer barata.
-            cpl: b.leads ? r2(a.gasto / b.leads) : null,
+            id: b.id, nome: b.nome, status: statusCampanha.get(b.id) || '', gasto: a.gasto, resultados_meta: a.resultados, ctr: a.ctr,
+            leads: b.leads, leads_total: leadsTotal, consultas: b.consultas, receita: r2(b.receita),
+            cpl: leadsTotal ? r2(a.gasto / leadsTotal) : null,
             custo_consulta: b.consultas ? r2(a.gasto / b.consultas) : null
         };
     }).filter(c => c.gasto > 0 || c.leads > 0).sort((a, b) => b.gasto - a.gasto);
 
-    const cplMedioSem = cplSem;
-    const comCpl = campanhas.filter(c => c.cpl != null && c.leads >= 3);
+    const somaLeadsCamp = campanhas.reduce((s, c) => s + c.leads_total, 0);
+    const cplMedioSem = somaLeadsCamp ? r2(campanhas.reduce((s, c) => s + c.gasto, 0) / somaLeadsCamp) : null;
+    // Escalar/reduzir/pausar só faz sentido pra campanha que está rodando.
+    const comCpl = campanhas.filter(c => c.cpl != null && c.leads_total >= 3 && c.status === 'ACTIVE');
+
+    for (const c of campanhas) {
+        if (c.resultados_meta >= 5 && c.leads < c.resultados_meta * 0.3) {
+            alertas.push(`"${c.nome}" teve ${c.resultados_meta} resultado(s) na Meta na semana, mas só ${c.leads} lead(s) chegaram ao CRM — conferir pra onde o anúncio manda (formulário, Instagram, outro número).`);
+        }
+    }
     const melhorCampanha = comCpl.slice().sort((a, b) => a.cpl - b.cpl)[0] || null;
     const piorCampanha = comCpl.length > 1 ? comCpl.slice().sort((a, b) => b.cpl - a.cpl)[0] : null;
     const maiorRetorno = campanhas.filter(c => c.consultas > 0).sort((a, b) => b.consultas - a.consultas || b.receita - a.receita)[0] || null;
@@ -12575,9 +12586,10 @@ async function gestorBriefing({ momento } = {}) {
             if (c.cpl <= cplMedioSem * 0.8) sugestoes.push(`Escalar "${c.nome}": CPL ${gestorBRL(c.cpl)} contra média de ${gestorBRL(cplMedioSem)} na semana.`);
         }
         for (const c of campanhas) {
-            if (c.gasto >= cplMedioSem * 2 && !c.leads && !c.resultados_meta) {
+            if (c.status !== 'ACTIVE') continue;
+            if (c.gasto >= cplMedioSem * 2 && !c.leads_total) {
                 sugestoes.push(`Pausar ou revisar "${c.nome}": ${gestorBRL(c.gasto)} gastos na semana sem nenhum lead.`);
-            } else if (c.cpl != null && c.cpl >= cplMedioSem * 1.5 && c.leads >= 3) {
+            } else if (c.cpl != null && c.cpl >= cplMedioSem * 1.5 && c.leads_total >= 3) {
                 sugestoes.push(`Reduzir verba de "${c.nome}": CPL ${gestorBRL(c.cpl)}, ${Math.round((c.cpl / cplMedioSem - 1) * 100)}% acima da média.`);
             }
         }
@@ -12745,7 +12757,7 @@ async function gestorBriefing({ momento } = {}) {
         L.push(`ANÚNCIOS — ${momento === 'manha' ? 'ONTEM' : 'HOJE ATÉ AGORA'} (vs média dos 7 dias anteriores)`);
         L.push(`  Gasto: ${gestorBRL(dRef.gasto)}${gestorSeta(gestorVar(dRef.gasto, d7.gasto / 7))}`);
         L.push(`  Leads no CRM: ${leadsRef.length} · resultados na Meta: ${dRef.resultados}`);
-        L.push(`  CPL: ${gestorBRL(cplRef)}${gestorSeta(gestorVar(cplRef, cpl7))}`);
+        L.push(`  CPL (lead no CRM): ${gestorBRL(cplRef)}${gestorSeta(gestorVar(cplRef, cpl7))} · custo por resultado na Meta: ${gestorBRL(dRef.custo_resultado)}`);
         L.push(`  CPC: ${gestorBRL(dRef.cpc)}${gestorSeta(gestorVar(dRef.cpc, d7.cpc))} · CPM: ${gestorBRL(dRef.cpm)}${gestorSeta(gestorVar(dRef.cpm, d7.cpm))}`);
         L.push(`  CTR: ${gestorPct(dRef.ctr)}${gestorSeta(gestorVar(dRef.ctr, d7.ctr))} · Frequência: ${dRef.frequencia == null ? '—' : String(dRef.frequencia).replace('.', ',')}`);
         L.push(`  Alcance: ${dRef.alcance} · Impressões: ${dRef.impressoes}`);
@@ -12755,7 +12767,7 @@ async function gestorBriefing({ momento } = {}) {
         L.push('');
         if (campanhas.length) {
             L.push('CAMPANHAS (7 dias)');
-            for (const c of campanhas.slice(0, 8)) L.push(`  · ${c.nome}: ${gestorBRL(c.gasto)} · ${c.leads} leads · CPL ${gestorBRL(c.cpl)} · ${c.consultas} consulta(s)`);
+            for (const c of campanhas.slice(0, 8)) L.push(`  · ${c.nome}${c.status && c.status !== 'ACTIVE' ? ' (pausada)' : ''}: ${gestorBRL(c.gasto)} · ${c.leads} no CRM / ${c.resultados_meta} na Meta · CPL ${gestorBRL(c.cpl)} · ${c.consultas} consulta(s)`);
             L.push('');
         }
         if (melhorCriativo) L.push(`MELHOR CRIATIVO: ${melhorCriativo.nome} — CTR ${gestorPct(melhorCriativo.ctr)}, ${gestorBRL(melhorCriativo.custo_resultado)}/resultado`, '');
