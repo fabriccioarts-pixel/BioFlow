@@ -652,11 +652,20 @@ function initKanbanSSE() {
 }
 
 // === CONEXÃO COM O BANCO DE DADOS ===
+// ETag da última lista recebida. Na sincronização de fundo (silent) o servidor
+// responde 304 quando nada mudou — evita baixar ~4 MB a cada 90s por aba.
+let leadsEtag = null;
+
 async function fetchLeadsFromServer(silent = false) {
     try {
         // Kanban 100% compartilhado e sincronizado entre todos os atendentes
-        const res = await fetch('/api/leads');
+        const res = await fetch('/api/leads', {
+            cache: 'no-store',
+            headers: silent && leadsEtag ? { 'If-None-Match': leadsEtag } : {}
+        });
+        if (res.status === 304) return;
         const rows = await res.json();
+        leadsEtag = res.headers.get('ETag');
         const newLeads = (rows || []).map(r => {
             const column = r.column_id || 'col-entrada';
             // Mantém a coluna local se esse lead tem um PUT de mudança de coluna ainda em
@@ -1871,6 +1880,25 @@ async function pleDeletePipeline() {
     }
 }
 
+// Desenhar os 2 mil+ cards de uma vez deixava o CRM lento (~50 mil elementos na
+// página, redesenhados inteiros a cada atualização). Cada coluna mostra só os
+// primeiros KANBAN_CARDS_POR_VEZ e "Mostrar mais" abre o próximo lote. Contador e
+// soma da coluna continuam contando todos; busca e filtros agem antes do corte.
+const KANBAN_CARDS_POR_VEZ = 50;
+const kanbanLimitePorColuna = {};
+// Card que acabou de ser arrastado ou aberto por "Ver no Kanban" aparece mesmo
+// além do limite — senão ele "sumia" ao cair no fim de uma coluna cheia.
+const kanbanSempreVisiveis = new Set();
+
+function kanbanMostrarMais(colId) {
+    kanbanLimitePorColuna[colId] = (kanbanLimitePorColuna[colId] || KANBAN_CARDS_POR_VEZ) + KANBAN_CARDS_POR_VEZ;
+    const col = document.getElementById(colId);
+    const rolagem = col ? col.scrollTop : 0;
+    renderBoard();
+    const depois = document.getElementById(colId);
+    if (depois) depois.scrollTop = rolagem;
+}
+
 function renderBoard() {
 updateKanbanEntradaBadge();
 renderKanbanColumns();
@@ -1998,12 +2026,22 @@ const sortKey = localStorage.getItem('kanban-sort') || 'created_desc';
 const sortSel = document.getElementById('kanban-sort');
 if (sortSel && sortSel.value !== sortKey) sortSel.value = sortKey;
 const sortedLeads = sortLeadsForBoard(filteredLeads, sortKey);
+const cardsNaColuna = {};
+const ocultosNaColuna = {};
 
 sortedLeads.forEach(lead => {
 // Coluna que não existe neste funil (ex.: id antigo) cai na Entrada em vez de sumir.
 const col = document.querySelector(`#kanban-board .card-list[id="${CSS.escape(lead.column || '')}"]`)
     || document.getElementById('col-entrada');
 if (col) {
+if (!kanbanSempreVisiveis.has(lead.id)) {
+    const jaTem = cardsNaColuna[col.id] || 0;
+    if (jaTem >= (kanbanLimitePorColuna[col.id] || KANBAN_CARDS_POR_VEZ)) {
+        ocultosNaColuna[col.id] = (ocultosNaColuna[col.id] || 0) + 1;
+        return;
+    }
+    cardsNaColuna[col.id] = jaTem + 1;
+}
 const card = document.createElement('div');
 // Dentro de "Follow Up" (col-perdido), diferencia visualmente quem foi
 // descartado de vez (tag "descartado") de quem ainda está na cadência
@@ -2137,11 +2175,22 @@ col.appendChild(card);
 }
 });
 
+Object.entries(ocultosNaColuna).forEach(([colId, n]) => {
+    const col = document.getElementById(colId);
+    if (!col) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kanban-mais';
+    btn.textContent = `Mostrar mais ${Math.min(n, KANBAN_CARDS_POR_VEZ)} · faltam ${n}`;
+    btn.addEventListener('click', () => kanbanMostrarMais(colId));
+    col.appendChild(btn);
+});
+
 // Coluna sem nenhum lead: mostra a mascote da Gonecta em vez de ficar em branco.
 document.querySelectorAll('#kanban-board .card-list').forEach(col => {
     if (col.children.length === 0) {
         col.innerHTML = `<div class="kanban-column-empty">
-            <img src="vendor/illustrations/gonecta-bird-neutro.png" alt="" class="kanban-column-empty-bird" onerror="this.remove()">
+            <img src="vendor/illustrations/gonecta-bird-neutro.webp" alt="" class="kanban-column-empty-bird" onerror="this.remove()">
             <span>Nenhum lead aqui ainda</span>
         </div>`;
     }
@@ -2307,6 +2356,7 @@ const leadIndex = leads.findIndex(l => l.id === draggedCardId);
 
 // Atualiza estado e banco de dados imediatamente para garantir que o estágio foi alterado
 leads[leadIndex].column = targetColumnId;
+kanbanSempreVisiveis.add(draggedCardId);
 renderBoard();
 updateLeadColumnOnServer(draggedCardId, targetColumnId);
 
@@ -2641,6 +2691,10 @@ function manageLeadFromChat() {
 // ("Ver no Kanban") abria por engano o modal de informações do lead em vez de
 // realmente levar pro board.
 function viewLeadInKanban(leadId) {
+    if (!kanbanSempreVisiveis.has(leadId)) {
+        kanbanSempreVisiveis.add(leadId);
+        renderBoard();
+    }
     switchTab('kanban');
     setTimeout(() => {
         const card = document.getElementById(`card-${leadId}`);
