@@ -4423,7 +4423,7 @@ function switchTab(tabId) {
         const view = document.getElementById('view-cerebro');
         if (view) {
             view.style.display = 'flex';
-            loadBrain();
+            brnSetMode(brnModo);
         }
     } else if (['posvenda', 'faltantes', 'sumidos', 'aniversariantes', 'procedimento'].includes(tabId)) {
         const view = document.getElementById(`view-${tabId}`);
@@ -11720,6 +11720,28 @@ async function marketingSyncNow() {
 let brnNotas = [];
 let brnSelId = null;
 let brnEditando = false;
+let brnModo = 'painel';
+let brnPainelSujo = true; // recarrega o painel quando as notas mudam pela aba Notas
+
+// Painel = o app que vivia na pasta segundo-cerebro-natuclinic (cerebro.html), lendo
+// as notas do banco. Notas = gerenciador simples (lista, editor, importar, testar).
+function brnSetMode(modo) {
+    brnModo = modo;
+    document.querySelectorAll('.brn-mode').forEach(b => {
+        const on = b.dataset.mode === modo;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-selected', on);
+    });
+    const painel = document.getElementById('brn-painel');
+    document.getElementById('brn-notas').style.display = modo === 'notas' ? 'flex' : 'none';
+    painel.style.display = modo === 'painel' ? 'block' : 'none';
+    if (modo === 'painel' && brnPainelSujo) {
+        brnPainelSujo = false;
+        if (painel.getAttribute('src')) painel.contentWindow.location.reload();
+        else painel.src = 'cerebro.html';
+    }
+    if (modo === 'notas') loadBrain();
+}
 
 const BRN_GRUPOS = [
     { p: 'R', titulo: 'Recursos', uso: 'IA do WhatsApp, Copiloto e Ask AI' },
@@ -11853,6 +11875,7 @@ async function brnSave() {
         if (!res.ok) throw new Error(json.error);
         if (json.id) brnSelId = json.id;
         brnEditando = false;
+        brnPainelSujo = true;
         showToast('Nota salva.');
         await loadBrain();
     } catch (e) {
@@ -11868,6 +11891,7 @@ async function brnDelete() {
         const res = await fetch('/api/brain/' + n.id, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error);
         brnSelId = null;
+        brnPainelSujo = true;
         showToast('Nota excluída.');
         loadBrain();
     } catch (e) { showToast(e.message || 'Erro ao excluir a nota.', 'danger'); }
@@ -11883,6 +11907,7 @@ async function brnImportFiles(files) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.error);
+        brnPainelSujo = true;
         showToast(json.criadas + ' nota(s) nova(s), ' + json.atualizadas + ' atualizada(s).');
         loadBrain();
     } catch (e) { showToast(e.message || 'Erro ao importar.', 'danger'); }

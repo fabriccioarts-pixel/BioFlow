@@ -10058,6 +10058,20 @@ h1, h2,
    SEGUNDO CÉREBRO — notas da clínica (#view-cerebro)
    ============================================================================ */
 #view-cerebro { background: var(--bg-main); flex-direction: column; min-height: 0; overflow-y: auto; }
+.brn-modebar {
+    display: flex; gap: 0.25rem; padding: 0.5rem 1rem; flex: none;
+    background: var(--bg-card); border-bottom: 1px solid var(--border-color);
+}
+.brn-mode {
+    display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.85rem;
+    background: none; border: 0; border-radius: 7px; cursor: pointer; font-family: inherit;
+    font-size: 0.85rem; font-weight: 600; color: var(--text-muted);
+}
+.brn-mode:hover { color: var(--text-main); background: var(--bg-main); }
+.brn-mode.is-active { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+/* O painel tem o próprio visual (fundo escuro da marca) e rolagem interna. */
+.brn-painel { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: #0F0A08; }
+#view-cerebro:has(.brn-painel[style*="block"]) { overflow: hidden; }
 .brn-wrap { padding: 1.75rem 2rem; display: flex; flex-direction: column; gap: 1.1rem; max-width: 1200px; width: 100%; margin-inline: auto; flex: 1; min-height: 0; box-sizing: border-box; }
 .brn-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .brn-head h2 { margin: 0; font-size: 1.3rem; color: var(--text-main); display: flex; align-items: center; gap: 0.55rem; }

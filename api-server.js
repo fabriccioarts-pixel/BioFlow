@@ -2404,6 +2404,142 @@ app.post('/api/brain/preview', async (req, res) => {
     }
 });
 
+// ---- Painel do Segundo Cérebro (cerebro.html) ----
+// É o app que vivia na pasta segundo-cerebro-natuclinic. Ele foi feito pra ler e
+// gravar numa pasta do computador; aqui a "pasta" é o banco: a raiz são as notas
+// (crm_brain_notes, nome + ".md") e conteudos/ são os textos gerados e salvos.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_contents (
+    id TEXT PRIMARY KEY,
+    nome TEXT NOT NULL UNIQUE,
+    conteudo TEXT NOT NULL DEFAULT '',
+    updated_by TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+function brainSqlMs(s) {
+    const ms = Date.parse(String(s || '').replace(' ', 'T') + 'Z');
+    return Number.isFinite(ms) ? ms : Date.now();
+}
+
+// Substitui o conhecimento.js que o atualizar-conhecimento.bat gerava.
+app.get('/api/brain/knowledge.js', async (req, res) => {
+    try {
+        const rows = await queryD1('SELECT nome, conteudo, updated_at FROM crm_brain_notes ORDER BY nome COLLATE NOCASE');
+        const arquivos = (rows || []).map(r => ({
+            nome: r.nome + '.md',
+            alterado: new Date(brainSqlMs(r.updated_at)).toISOString().slice(0, 10),
+            conteudo: r.conteudo || ''
+        }));
+        res.set('Content-Type', 'text/javascript; charset=utf-8');
+        res.set('Cache-Control', 'no-store');
+        res.send(`window.KNOWLEDGE = ${JSON.stringify(arquivos)};\n`);
+    } catch (e) {
+        console.error('brain knowledge.js:', e.message);
+        res.status(500).json({ error: 'Erro ao carregar as notas.' });
+    }
+});
+
+app.get('/api/brain/fs', async (req, res) => {
+    if (req.query.dir !== 'conteudos') return res.status(400).json({ error: 'Pasta desconhecida.' });
+    try {
+        const rows = await queryD1('SELECT nome, conteudo, updated_at FROM crm_brain_contents ORDER BY updated_at DESC');
+        res.json({ arquivos: (rows || []).map(r => ({ nome: r.nome, conteudo: r.conteudo || '', alterado: brainSqlMs(r.updated_at) })) });
+    } catch (e) {
+        console.error('brain fs list:', e.message);
+        res.status(500).json({ error: 'Erro ao ler os conteúdos.' });
+    }
+});
+
+// Gravar arquivo: raiz = nota (só admin, muda o que a IA sabe); conteudos = qualquer um.
+app.put('/api/brain/fs', async (req, res) => {
+    const dir = req.body.dir;
+    const conteudo = String(req.body.conteudo || '');
+    if (conteudo.length > BRAIN_NOTE_MAX_CHARS) return res.status(413).json({ error: 'Arquivo grande demais (máx. 200 mil caracteres).' });
+    try {
+        if (dir === 'raiz') {
+            if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita as notas do Segundo Cérebro.' });
+            const nome = brainNomeLimpo(req.body.nome);
+            if (!nome) return res.status(400).json({ error: 'Nome de arquivo inválido.' });
+            const existe = await queryD1('SELECT id FROM crm_brain_notes WHERE nome = ? COLLATE NOCASE', [nome]);
+            if (existe && existe[0]) {
+                await queryD1('UPDATE crm_brain_notes SET conteudo = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [conteudo, req.user.username, existe[0].id]);
+            } else {
+                await queryD1('INSERT INTO crm_brain_notes (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)',
+                    ['br_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+            }
+            brainCache.at = 0;
+        } else if (dir === 'conteudos') {
+            const nome = String(req.body.nome || '').replace(/[\r\n\/\\]+/g, ' ').trim().slice(0, 160);
+            if (!nome) return res.status(400).json({ error: 'Nome de arquivo inválido.' });
+            await queryD1(`INSERT INTO crm_brain_contents (id, nome, conteudo, updated_by) VALUES (?, ?, ?, ?)
+                ON CONFLICT(nome) DO UPDATE SET conteudo = excluded.conteudo, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`,
+                ['bc_' + crypto.randomBytes(6).toString('hex'), nome, conteudo, req.user.username]);
+        } else {
+            return res.status(400).json({ error: 'Pasta desconhecida.' });
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('brain fs write:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar no CRM.' });
+    }
+});
+
+// Assistente do painel: recebe system/messages no formato que o app já monta e
+// devolve o texto em streaming (text/plain) pelo Gemini do CRM.
+app.post('/api/brain/assistant', async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY não configurada no servidor.' });
+    const textoDe = c => typeof c === 'string' ? c : (Array.isArray(c) ? c.map(b => (b && b.text) || '').join('\n\n') : '');
+    const system = textoDe(req.body.system);
+    const contents = (Array.isArray(req.body.messages) ? req.body.messages : [])
+        .map(m => ({ role: m && m.role === 'assistant' ? 'model' : 'user', parts: [{ text: textoDe(m && m.content) }] }))
+        .filter(c => c.parts[0].text.trim());
+    if (!contents.length) return res.status(400).json({ error: 'Mensagem vazia.' });
+    const maxOutputTokens = Math.min(Math.max(Number(req.body.maxTokens) || 8000, 1000), 32000);
+    try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${COPILOT_MODEL}:streamGenerateContent?alt=sse`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: system || 'Você é o assistente da clínica.' }] },
+                contents,
+                generationConfig: { temperature: 0.7, maxOutputTokens }
+            })
+        });
+        if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            return res.status(r.status === 429 ? 429 : 502).json({ error: (j.error && j.error.message) || 'Erro na API do Gemini.' });
+        }
+        res.set('Content-Type', 'text/plain; charset=utf-8');
+        res.set('Cache-Control', 'no-store');
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', fim = null;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const linhas = buf.split('\n');
+            buf = linhas.pop();
+            for (const l of linhas) {
+                if (!l.startsWith('data: ')) continue;
+                let ev; try { ev = JSON.parse(l.slice(6)); } catch (e) { continue; }
+                const cand = ev.candidates && ev.candidates[0];
+                const t = ((cand && cand.content && cand.content.parts) || []).filter(p => !p.thought).map(p => p.text || '').join('');
+                if (t) res.write(t);
+                if (cand && cand.finishReason) fim = cand.finishReason;
+            }
+        }
+        if (fim === 'MAX_TOKENS') res.write('\n\n[resposta cortada por limite de tamanho]');
+        res.end();
+    } catch (e) {
+        console.error('brain assistant:', e.message);
+        if (!res.headersSent) res.status(502).json({ error: 'Falha ao falar com a IA.' });
+        else res.end();
+    }
+});
+
 app.put('/api/brain/:id', async (req, res) => {
     if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
     try {

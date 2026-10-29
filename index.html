@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=29">
+    <link rel="stylesheet" href="style.css?v=30">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
@@ -2742,7 +2742,12 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
     <!-- SEGUNDO CÉREBRO — notas da clínica que a IA consulta -->
     <div class="view-section" id="view-cerebro" style="display: none;">
-        <div class="brn-wrap">
+        <div class="brn-modebar" role="tablist" aria-label="Segundo Cérebro">
+            <button class="brn-mode is-active" data-mode="painel" role="tab" onclick="brnSetMode('painel')"><i class="fa-solid fa-brain"></i> Painel</button>
+            <button class="brn-mode" data-mode="notas" role="tab" onclick="brnSetMode('notas')"><i class="fa-regular fa-file-lines"></i> Notas</button>
+        </div>
+        <iframe id="brn-painel" class="brn-painel" title="Painel do Segundo Cérebro"></iframe>
+        <div class="brn-wrap" id="brn-notas" style="display: none;">
             <div class="brn-head">
                 <div>
                     <h2><i class="fa-solid fa-brain" style="color: var(--accent-primary);"></i> Segundo Cérebro</h2>
@@ -5220,7 +5225,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=27"></script>
-    <script src="app.js?v=30"></script>
+    <script src="app.js?v=31"></script>
     <script src="flows.js?v=25"></script>
 
     <!-- Menu Flutuante Global de Ações da Mensagem -->
