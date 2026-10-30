@@ -99,6 +99,10 @@
             const base = f.tipo === 'cor' ? f.cor : rgba(f.cor, (100 - f.transparencia) / 100);
             v.push(`--bg-main: ${base}`, `--bg-dark: ${base}`, `--bg-agenda: ${base}`);
             if (f.tipo === 'cor') v.push(`--background: ${hexHsl(f.cor)}`);
+            // Campos, filtros e botões secundários usam --header-btn-bg, que é
+            // transparente: com imagem/degradê atrás, o desenho passava por dentro
+            // deles e brigava com o texto. Ficam na cor sólida do cartão.
+            else v.push(`--header-btn-bg: ${m.cartao}`);
         }
         if (m.destaque !== p.destaque) v.push(`--accent-primary: ${m.destaque}`, `--ring: ${hexHsl(m.destaque)}`);
         if (m.menu !== p.menu) v.push(`--header-bg: ${m.menu}`, `--sb-card-bg: ${m.menu}`);
