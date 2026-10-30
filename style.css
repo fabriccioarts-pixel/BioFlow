@@ -3726,7 +3726,9 @@ select.form-control option,
     --adp-font-family: inherit;
     --adp-font-size: 13px;
     --adp-width: 300px;
-    --adp-background-color: var(--bg-dark);
+    /* --bg-popup: cor sólida que o theme.js define quando o fundo é imagem/degradê
+       (aí o --bg-dark fica translúcido e o calendário vazava o modal de trás). */
+    --adp-background-color: var(--bg-popup, var(--bg-dark));
     --adp-background-color-hover: var(--bg-card);
     --adp-background-color-active: var(--bg-card);
     --adp-background-color-in-range: rgba(16, 185, 129, 0.12);
