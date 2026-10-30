@@ -102,7 +102,9 @@
             // Campos, filtros e botões secundários usam --header-btn-bg, que é
             // transparente: com imagem/degradê atrás, o desenho passava por dentro
             // deles e brigava com o texto. Ficam na cor sólida do cartão.
-            else v.push(`--header-btn-bg: ${m.cartao}`);
+            // O calendário (AirDatepicker) usa --bg-dark, que aqui é translúcido:
+            // ganha a mesma cor de fundo, só que sólida, pra não vazar o que está atrás.
+            else v.push(`--header-btn-bg: ${m.cartao}`, `--bg-popup: ${f.cor}`);
         }
         if (m.destaque !== p.destaque) v.push(`--accent-primary: ${m.destaque}`, `--ring: ${hexHsl(m.destaque)}`);
         if (m.menu !== p.menu) v.push(`--header-bg: ${m.menu}`, `--sb-card-bg: ${m.menu}`);
