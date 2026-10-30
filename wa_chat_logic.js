@@ -1924,6 +1924,7 @@ function closeActiveChat() {
     stopLeadLockRenewal();
     applyChatLockUI(false);
     leaveChatPresence();
+    chatOpenSeq++; // descarta respostas ainda em voo da conversa fechada
     window.currentActiveChat = null;
     window.activeChatMessages = null;
     window.chatOldestLoadedTs = null;
@@ -5167,6 +5168,13 @@ function buildChatMessagesHTML() {
     return html;
 }
 
+// Sobe a cada abertura de verdade de conversa (e ao fechar). Toda resposta que
+// chega depois de um await confere se ainda é da mesma abertura — senão é de uma
+// conversa que o atendente já trocou e é descartada. Sem isso, um poll da conversa
+// A ainda em voo (rede lenta no celular) chegava depois de abrir a B e jogava as
+// mensagens da A na tela da B.
+let chatOpenSeq = 0;
+
 // Chamada pelo onscroll de #chat-active-messages — quando o atendente rola
 // perto do topo da conversa, busca a página anterior de mensagens.
 let chatLoadingOlder = false;
@@ -5181,6 +5189,7 @@ async function loadOlderChatMessages() {
     const phone = window.currentActiveChat.phone;
     const before = window.chatOldestLoadedTs;
     if (!before) return;
+    const openSeq = chatOpenSeq;
 
     chatLoadingOlder = true;
     const msgsContainer = document.getElementById('chat-active-messages');
@@ -5193,6 +5202,7 @@ async function loadOlderChatMessages() {
     try {
         const res = await fetch(`/api/whatsapp/chat/${phone}?limit=${WA_CHAT_PAGE_SIZE}&before=${encodeURIComponent(before)}`);
         const json = await res.json();
+        if (openSeq !== chatOpenSeq) return; // trocou de conversa enquanto carregava
         if (json.success && Array.isArray(json.data)) {
             if (json.data.length) {
                 const byId = new Map(window.activeChatMessages.map(m => [m.id, m]));
@@ -5231,6 +5241,13 @@ async function openChat(phone, name, silent = false) {
     }
     phone = normalizedPhone;
 
+    // Atualização silenciosa (poll, SSE, fim de um envio) de uma conversa que já
+    // não é a aberta: ignora. Antes ela redefinia currentActiveChat e "reabria" a
+    // conversa anterior — ex.: enviar na A, trocar pra B antes do envio terminar.
+    if (silent && !(window.currentActiveChat && isSamePhone(window.currentActiveChat.phone, phone))) return;
+    if (!silent) chatOpenSeq++;
+    const openSeq = chatOpenSeq;
+
     window.currentActiveChat = { phone, name };
     // Programadas: na abertura e, durante o polling, no máximo 1x por minuto
     // (a IA pode programar um retorno com a conversa aberta).
@@ -5255,9 +5272,13 @@ async function openChat(phone, name, silent = false) {
     document.getElementById('chat-active-header').style.display = 'flex';
     document.getElementById('chat-active-messages').style.display = 'flex';
     document.getElementById('chat-active-input').style.display = 'flex';
-    // mobile: abre a conversa em tela cheia (esconde a lista)
-    document.getElementById('view-chat')?.classList.add('chat-open');
-    document.getElementById('view-chat')?.classList.remove('lead-open');
+    // mobile: abre a conversa em tela cheia (esconde a lista). Só na abertura de
+    // verdade — o poll de 6s não pode mudar de tela (puxava o atendente de volta
+    // pra conversa depois de ele voltar pra lista, e fechava a ficha do lead).
+    if (!silent) {
+        document.getElementById('view-chat')?.classList.add('chat-open');
+        document.getElementById('view-chat')?.classList.remove('lead-open');
+    }
 
     const leadPanelEl = document.getElementById('chat-lead-panel');
     if (leadPanelEl) leadPanelEl.style.display = 'flex';
@@ -5346,6 +5367,7 @@ async function openChat(phone, name, silent = false) {
             activeColumn = 'col-contatado';
             if (typeof saveLeadToServer === 'function') {
                 await saveLeadToServer(newLead).catch(console.error);
+                if (openSeq !== chatOpenSeq) return; // trocou de conversa enquanto salvava
             }
         }
     }
@@ -5370,6 +5392,8 @@ async function openChat(phone, name, silent = false) {
     try {
         const res = await fetch(`/api/whatsapp/chat/${phone}?limit=${WA_CHAT_PAGE_SIZE}`);
         const json = await res.json();
+        // Resposta de uma conversa que o atendente já trocou (ou fechou): descarta.
+        if (openSeq !== chatOpenSeq) return;
 
         if (json.success && Array.isArray(json.data)) {
             // Compara com o que já está renderizado ANTES de sobrescrever o cache — se nada
