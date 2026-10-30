@@ -6486,6 +6486,42 @@ function schedLocalInput(d) {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// "Enviar em" usa o mesmo calendário (AirDatepicker) do resto do CRM, com hora —
+// o datetime-local nativo abria o seletor do navegador, fora da identidade visual.
+// Sem a lib carregada, o campo continua nativo e o save lê o .value dele.
+let schedWhenPicker = null;
+let schedWhen = null; // Date escolhida no calendário
+function schedSetWhen(d) {
+    schedWhen = d;
+    const el = document.getElementById('sched-when');
+    if (!schedWhenPicker && typeof AirDatepicker !== 'undefined') {
+        el.type = 'text';
+        el.readOnly = true;
+        schedWhenPicker = new AirDatepicker(el, {
+            locale: typeof airDatepickerLocalePt !== 'undefined' ? airDatepickerLocalePt : undefined,
+            dateFormat: 'dd/MM/yyyy',
+            timepicker: true,
+            timeFormat: 'HH:mm',
+            minutesStep: 5,
+            position: 'bottom left',
+            onSelect({ date }) { schedWhen = date || null; }
+        });
+        el._adpInstance = schedWhenPicker; // closeAllAirDatepickers() também fecha este
+    }
+    if (schedWhenPicker) {
+        schedWhenPicker.update({ minDate: new Date() });
+        schedWhenPicker.selectDate(d, { silent: true });
+        schedWhenPicker.setViewDate(d);
+    } else {
+        el.value = schedLocalInput(d);
+    }
+}
+function schedGetWhen() {
+    if (schedWhenPicker) return schedWhen;
+    const v = document.getElementById('sched-when').value;
+    return v ? new Date(v) : null;
+}
+
 async function loadScheduledMsgs(phone) {
     schedLastLoad = { phone, at: Date.now() };
     try {
@@ -6572,7 +6608,7 @@ async function openScheduleMsgModal(id) {
         quando.setDate(quando.getDate() + 1);
         quando.setHours(9, 30, 0, 0);
     }
-    document.getElementById('sched-when').value = schedLocalInput(quando);
+    schedSetWhen(quando);
     document.getElementById('sched-cancelar').checked = m ? !!m.cancelar_se_responder : true;
     document.getElementById('sched-title').textContent = m ? 'Editar mensagem programada' : 'Programar mensagem';
     document.getElementById('sched-para').textContent = window.currentActiveChat.name || window.currentActiveChat.phone;
@@ -6584,7 +6620,7 @@ async function openScheduleMsgModal(id) {
 async function saveScheduledMsg() {
     const chat = window.currentActiveChat;
     const texto = document.getElementById('sched-texto').value.trim();
-    const quando = document.getElementById('sched-when').value;
+    const quando = schedGetWhen();
     if (!chat || !texto || !quando) { showToast('Preencha a mensagem e a data.', 'danger'); return; }
     const btn = document.getElementById('sched-save-btn');
     btn.disabled = true;

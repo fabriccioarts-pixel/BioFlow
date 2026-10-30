@@ -3754,6 +3754,43 @@ select.form-control option,
     z-index: 9999;
 }
 
+/* Hora (timepicker do "Programar mensagem"): sem isto a lib usa o azul e a
+   fonte padrão dela nos controles deslizantes. */
+.air-datepicker {
+    --adp-cell-background-color-selected: var(--accent-success);
+    --adp-cell-background-color-selected-hover: var(--accent-success);
+    --adp-time-track-height: 2px;
+    --adp-time-track-color: var(--border-color);
+    --adp-time-track-color-hover: var(--accent-success);
+    --adp-time-thumb-size: 14px;
+    --adp-time-padding-inner: 12px;
+}
+.air-datepicker--time {
+    padding: 0.6rem 0.4rem;
+}
+.air-datepicker-time--current-hours,
+.air-datepicker-time--current-minutes {
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 1.15rem;
+    color: var(--text-main);
+}
+.air-datepicker-time--current-colon { color: var(--text-muted); }
+.air-datepicker-time--row input[type=range]::-webkit-slider-thumb {
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: var(--accent-success);
+    border-color: var(--accent-success);
+}
+.air-datepicker-time--row input[type=range]::-moz-range-thumb {
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: var(--accent-success);
+    border-color: var(--accent-success);
+}
+
 .air-datepicker--nav-title {
     font-weight: 600;
     border-radius: 8px;
