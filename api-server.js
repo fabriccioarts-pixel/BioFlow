@@ -7668,7 +7668,10 @@ async function ensureAdTables() {
     // a origem completa do lead e filtrar público de disparo por conjunto.
     for (const sql of [
         'ALTER TABLE ad_ads ADD COLUMN adset_id TEXT',
-        'ALTER TABLE ad_ads ADD COLUMN adset_name TEXT'
+        'ALTER TABLE ad_ads ADD COLUMN adset_name TEXT',
+        // Pra onde o clique vai (WHATSAPP, INSTAGRAM_DIRECT, MESSENGER, ON_AD =
+        // formulário instantâneo...) — explica por que um anúncio não gera lead no CRM.
+        'ALTER TABLE ad_ads ADD COLUMN adset_destino TEXT'
     ]) {
         try { await queryD1(sql, []); } catch (e) { /* já existe */ }
     }
@@ -7730,17 +7733,19 @@ async function syncMetaMarketing({ days = 3 } = {}) {
 
     // --- anúncios (com criativo, pra alimentar o contexto de anúncio da IA) ---
     const ads = await metaGraphGetAll(`${acct}/ads`, {
-        fields: 'id,name,status,campaign_id,adset_id,adset{name},creative{body,thumbnail_url}', limit: '200'
+        fields: 'id,name,status,campaign_id,adset_id,adset{name,destination_type},creative{body,thumbnail_url}', limit: '200'
     }, cfg);
-    for (let i = 0; i < ads.length; i += 12) {
-        const ch = ads.slice(i, i + 12);
-        const ph = ch.map(() => '(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
+    // 11 por lote: 9 colunas x 11 = 99, abaixo do limite de 100 parâmetros do D1.
+    for (let i = 0; i < ads.length; i += 11) {
+        const ch = ads.slice(i, i + 11);
+        const ph = ch.map(() => '(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)').join(',');
         const params = ch.flatMap(a => [
             a.id, a.campaign_id || '', a.adset_id || '', (a.adset && a.adset.name) || '',
+            (a.adset && a.adset.destination_type) || '',
             a.name || '', a.status || '',
             (a.creative && a.creative.body) || '', (a.creative && a.creative.thumbnail_url) || ''
         ]);
-        await queryD1(`INSERT OR REPLACE INTO ad_ads (id,campaign_id,adset_id,adset_name,name,status,creative_body,thumbnail_url,updated_at) VALUES ${ph}`, params);
+        await queryD1(`INSERT OR REPLACE INTO ad_ads (id,campaign_id,adset_id,adset_name,adset_destino,name,status,creative_body,thumbnail_url,updated_at) VALUES ${ph}`, params);
     }
 
     // --- insights diários por anúncio ---
@@ -7823,6 +7828,230 @@ async function marketingSyncTick() {
         _mktSyncRunning = false;
     }
 }
+
+// ==========================================
+// FORMULÁRIOS DO META LEAD ADS -> LEAD NO KANBAN
+// ==========================================
+// Anúncio com formulário instantâneo não manda mensagem no WhatsApp: o lead
+// ficava só na Central de Leads da Meta e nunca chegava ao CRM. Aqui o flow-tick
+// busca esses envios a cada META_LEADS_SYNC_MIN (sem webhook pra configurar) e
+// cria o lead no Kanban como qualquer outro, com o anúncio de origem em
+// ad_referral — a atribuição por campanha do briefing e do ROI já enxerga ele.
+// Token: META_LEADS_TOKEN (ou o próprio META_ADS_TOKEN), de um usuário do
+// sistema com a Página atribuída e as permissões leads_retrieval,
+// pages_show_list, pages_read_engagement e pages_manage_ads.
+function metaLeadsConfig() {
+    const token = (process.env.META_LEADS_TOKEN || process.env.META_ADS_TOKEN || '').trim();
+    const paginas = (process.env.META_PAGE_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+    return { token, paginas, ok: !!token };
+}
+
+async function metaGraphGet(path, params, token) {
+    const url = new URL(`https://graph.facebook.com/${META_GRAPH}/${path}`);
+    url.searchParams.set('access_token', token);
+    for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
+    const j = await (await fetch(url)).json();
+    if (j.error) throw new Error(`Graph ${path}: ${j.error.message} (code ${j.error.code}${j.error.error_subcode ? '/' + j.error.error_subcode : ''})`);
+    return j;
+}
+
+// Ler lead exige o token DA PÁGINA. O usuário do sistema pega o dele em
+// /{pagina}?fields=access_token — ou em /me/accounts, que também serve pra
+// descobrir as páginas quando META_PAGE_ID não está configurado.
+async function metaLeadsPaginas(cfg) {
+    if (cfg.paginas.length) {
+        return Promise.all(cfg.paginas.map(async id => {
+            const p = await metaGraphGet(id, { fields: 'id,name,access_token' }, cfg.token);
+            return { id: p.id, nome: p.name, token: p.access_token || cfg.token };
+        }));
+    }
+    const contas = await metaGraphGetAll('me/accounts', { fields: 'id,name,access_token', limit: '100' }, { token: cfg.token });
+    return contas.map(p => ({ id: p.id, nome: p.name, token: p.access_token || cfg.token }));
+}
+
+function metaLeadCampos(fieldData) {
+    const campos = {};
+    for (const f of fieldData || []) campos[f.name] = Array.isArray(f.values) ? f.values.join(', ') : '';
+    const padrao = new Set(['full_name', 'first_name', 'last_name', 'phone_number', 'email']);
+    return {
+        nome: campos.full_name || [campos.first_name, campos.last_name].filter(Boolean).join(' '),
+        telefone: campos.phone_number || '',
+        email: campos.email || '',
+        // Perguntas personalizadas do formulário (procedimento de interesse etc.) vão pras notas.
+        extras: Object.entries(campos).filter(([k]) => !padrao.has(k)).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+    };
+}
+
+let _metaLeadgenTableReady = false;
+async function ensureMetaLeadgenTable() {
+    if (_metaLeadgenTableReady) return;
+    await queryD1(`CREATE TABLE IF NOT EXISTS meta_leadgen (
+        leadgen_id TEXT PRIMARY KEY, form_id TEXT, lead_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    _metaLeadgenTableReady = true;
+}
+
+// Cria (ou completa) o lead de UM envio de formulário. Devolve null se esse
+// envio já foi importado — a trava é o INSERT OR IGNORE em meta_leadgen.
+async function metaLeadImportar(envio, form) {
+    const trava = await queryD1Meta('INSERT OR IGNORE INTO meta_leadgen (leadgen_id, form_id) VALUES (?, ?)', [String(envio.id), String(form.id)]);
+    if (!trava || !trava.meta || !trava.meta.changes) return null;
+    try {
+        const { nome, telefone, email, extras } = metaLeadCampos(envio.field_data);
+        const tel = normalizePhoneBR(telefone);
+        const criado = envio.created_time ? new Date(envio.created_time) : new Date();
+        const adRef = JSON.stringify({
+            source_id: envio.ad_id || null, source_type: 'ad', headline: form.name || null,
+            leadgen_id: String(envio.id), form_id: String(form.id)
+        });
+        const origem = `Meta Ads (formulário): ${form.name || envio.ad_name || 'Lead Ads'}`;
+        const nota = [
+            '[Lead de formulário da Meta]',
+            `Formulário: ${form.name || form.id}`,
+            `Anúncio: ${envio.ad_name || envio.ad_id || '—'}`,
+            `Enviado em: ${criado.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
+            ...(email ? [`E-mail: ${email}`] : []),
+            ...extras
+        ].join('\n') + '\n\n';
+
+        await ensureCapiColumns(); // ad_referral precisa existir
+        let existente = null;
+        if (tel) {
+            const v = phoneVariants(tel);
+            const rows = await queryD1(`SELECT id, notas FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')})`, v);
+            existente = rows && rows[0] ? rows[0] : null;
+        }
+
+        let leadId;
+        if (existente) {
+            // Já conversou pelo WhatsApp antes: não duplica, só junta o que o formulário trouxe.
+            leadId = existente.id;
+            await queryD1(
+                "UPDATE leads SET notas = ?, ad_referral = COALESCE(ad_referral, ?), email = COALESCE(NULLIF(email, ''), ?) WHERE id = ?",
+                [nota + (existente.notas || ''), adRef, email, leadId]
+            );
+        } else {
+            // created_at = hora do envio (não a da importação), pra o lead cair no
+            // dia certo nos relatórios mesmo quando entra pelo backfill.
+            const criadoSql = criado.toISOString().slice(0, 19).replace('T', ' ');
+            const inserir = id => queryD1(
+                'INSERT INTO leads (id, nome, telefone, origem, born, owner_id, column_id, fb_click_id, email, notas, ctwa_clid, ad_referral, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [id, nome || 'Lead formulário', tel, origem, '', '', 'col-entrada', '', email, nota, null, adRef, criadoSql]
+            );
+            leadId = String(criado.getTime() + Math.floor(Math.random() * 999) + 1);
+            try { await inserir(leadId); }
+            catch (e) {
+                if (!/UNIQUE constraint failed/i.test(e.message || '')) throw e;
+                leadId = String(Date.now()) + Math.floor(Math.random() * 90 + 10);
+                await inserir(leadId);
+            }
+        }
+        await queryD1('UPDATE meta_leadgen SET lead_id = ? WHERE leadgen_id = ?', [leadId, String(envio.id)]);
+        return { leadId, nome: nome || 'Lead formulário', tel, origem, novo: !existente, criado };
+    } catch (e) {
+        // Solta a trava pra o próximo sync tentar de novo.
+        await queryD1('DELETE FROM meta_leadgen WHERE leadgen_id = ?', [String(envio.id)]).catch(() => {});
+        throw e;
+    }
+}
+
+// Busca os envios feitos depois de `desdeSeg` (epoch em segundos) em todos os
+// formulários das páginas. `avisar` manda push por lead novo — desligado no
+// backfill, senão 30 dias de formulário viram 30 avisos de uma vez.
+async function metaLeadsSync({ desdeSeg, avisar = true } = {}) {
+    const cfg = metaLeadsConfig();
+    if (!cfg.ok) return { skipped: 'sem token (META_LEADS_TOKEN / META_ADS_TOKEN)' };
+    await ensureMetaLeadgenTable();
+    const out = { paginas: 0, formularios: 0, envios: 0, novos: 0, atualizados: 0, erros: [] };
+    const paginas = await metaLeadsPaginas(cfg);
+    out.paginas = paginas.length;
+    const filtro = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: desdeSeg }]);
+    for (const p of paginas) {
+        const forms = await metaGraphGetAll(`${p.id}/leadgen_forms`, { fields: 'id,name,status', limit: '100' }, { token: p.token });
+        out.formularios += forms.length;
+        for (const f of forms) {
+            const envios = await metaGraphGetAll(`${f.id}/leads`, {
+                fields: 'id,created_time,field_data,ad_id,ad_name', filtering: filtro, limit: '100'
+            }, { token: p.token });
+            out.envios += envios.length;
+            for (const envio of envios) {
+                let r;
+                try { r = await metaLeadImportar(envio, f); }
+                catch (e) { out.erros.push(`${envio.id}: ${e.message}`); continue; }
+                if (!r) continue;
+                if (!r.novo) { out.atualizados++; continue; }
+                out.novos++;
+                await queryD1(
+                    'INSERT INTO crm_notifications (id, message, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                    [`leadform-${r.leadId}`, `📝 Novo lead de formulário: ${r.nome} — ${r.origem}`]
+                ).catch(() => {});
+                if (avisar) {
+                    await sendPushToAll(`📝 Novo lead de formulário: ${r.nome}`,
+                        'Preencheu o formulário do anúncio — ainda não mandou mensagem. Chamar pelo WhatsApp.',
+                        r.tel ? { phone: r.tel } : {}).catch(() => {});
+                }
+            }
+        }
+    }
+    if (out.novos || out.atualizados) console.log(`[lead-ads] ${out.novos} lead(s) novo(s), ${out.atualizados} completado(s) de ${out.envios} envio(s).`);
+    return out;
+}
+
+// Cadência própria dentro do flow-tick. A janela volta 15 min além da última
+// rodada, pra não perder envio que a Meta demorou a disponibilizar (a trava em
+// meta_leadgen impede duplicar o que cair duas vezes).
+let _metaLeadsRunning = false;
+async function metaLeadsTick() {
+    if (_metaLeadsRunning) return { skipped: 'em andamento' };
+    if (!metaLeadsConfig().ok) return { skipped: 'sem config' };
+    const everyMin = Number(process.env.META_LEADS_SYNC_MIN) || 5;
+    let last = null;
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'meta_leads_last_run'");
+        last = r && r[0] ? JSON.parse(r[0].value || '{}') : null;
+    } catch (e) {}
+    const lastAt = last && last.at ? new Date(last.at).getTime() : 0;
+    if (lastAt && Date.now() - lastAt < everyMin * 60000) return { skipped: 'dentro da janela' };
+
+    const ultimoOk = last && last.ok_at ? new Date(last.ok_at).getTime() : 0;
+    const desdeSeg = Math.floor(((ultimoOk || Date.now() - 86400000) - 15 * 60000) / 1000);
+    const grava = v => queryD1(
+        "INSERT INTO crm_settings (key, value) VALUES ('meta_leads_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [JSON.stringify(v)]
+    ).catch(() => {});
+    _metaLeadsRunning = true;
+    try {
+        const out = await metaLeadsSync({ desdeSeg, avisar: true });
+        const agora = new Date().toISOString();
+        await grava({ at: agora, ok_at: agora, ...out });
+        return out;
+    } catch (e) {
+        console.error('[lead-ads] tick falhou:', e.message);
+        // Erro também carimba `at` (pra não martelar a Meta a cada tick), mas
+        // mantém ok_at — a próxima rodada boa busca desde o último sucesso.
+        await grava({ at: new Date().toISOString(), ok_at: last && last.ok_at, erro: e.message });
+        return { erro: e.message };
+    } finally {
+        _metaLeadsRunning = false;
+    }
+}
+
+// Backfill manual (admin): ?dias=30 busca os envios dos últimos N dias (a Meta
+// guarda 90). Não manda push por lead — devolve o resumo.
+app.post('/api/meta-leads/sync', async (req, res) => {
+    if (!(req.user && (req.user.role === 'admin' || req.user.username === 'admin'))) {
+        return res.status(403).json({ error: 'Só admin.' });
+    }
+    try {
+        const dias = Math.min(Math.max(Number(req.query.dias) || 30, 1), 90);
+        const out = await metaLeadsSync({ desdeSeg: Math.floor((Date.now() - dias * 86400000) / 1000), avisar: false });
+        res.json(out);
+    } catch (e) {
+        console.error('[lead-ads] sync manual:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // Status da integração — o que está configurado e quando rodou o último sync.
 app.get('/api/marketing/status', async (req, res) => {
@@ -11311,6 +11540,10 @@ app.all('/api/flow-tick', async (req, res) => {
         let marketing = { skipped: 'erro' };
         try { marketing = await marketingSyncTick(); } catch (e) { console.error('Erro no sync de marketing:', e); }
 
+        // Formulários do Meta Lead Ads viram lead no Kanban — cadência própria (META_LEADS_SYNC_MIN).
+        let leadAds = { skipped: 'erro' };
+        try { leadAds = await metaLeadsTick(); } catch (e) { console.error('Erro no sync de formulários da Meta:', e); }
+
         // Automações do Kanban — cadência própria (kanban_rules_config.intervalo_min).
         let kanbanRegras = { skipped: 'erro' };
         try { kanbanRegras = await kanbanRulesTick(); } catch (e) { console.error('Erro nas regras do Kanban:', e); }
@@ -11324,7 +11557,7 @@ app.all('/api/flow-tick', async (req, res) => {
         let gestor = { skipped: 'erro' };
         try { gestor = await gestorBriefingTick(); } catch (e) { console.error('Erro no briefing do gestor:', e); }
 
-        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, leadAds, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -13293,12 +13526,17 @@ async function gestorBriefing({ momento } = {}) {
             ? 'Sync com a Meta falhando: o token não tem permissão ads_read na conta de anúncios — gerar um token novo com essa permissão.'
             : `Sync com a Meta falhando: ${ultimoSync.erro}`);
     }
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'meta_leads_last_run'");
+        const lf = r && r[0] ? JSON.parse(r[0].value || 'null') : null;
+        if (lf && lf.erro) alertas.push(`Formulários da Meta não estão entrando no CRM: ${lf.erro}`);
+    } catch (e) {}
 
     // ---- 2) Tudo que vem do D1 de uma vez ----
     const fimDeHojeUtc = gestorUtcDe(gestorSomaDias(hoje, 1));
     const [insights, anuncios, campanhasMeta, leads, fuRows, aguardRows, orcadoRows] = await Promise.all([
         queryD1('SELECT date, ad_id, campaign_id, spend, impressions, clicks, reach, msg_started, leads_form FROM ad_insights_daily WHERE date >= ?', [desde]),
-        queryD1('SELECT id, campaign_id, name, status FROM ad_ads', []),
+        queryD1('SELECT id, campaign_id, name, status, adset_destino FROM ad_ads', []),
         queryD1('SELECT id, name, status FROM ad_campaigns', []),
         queryD1(
             `SELECT id, nome, origem, column_id, created_at, ad_referral, qualificado_em, valor_recebido, orcamento
@@ -13402,9 +13640,18 @@ async function gestorBriefing({ momento } = {}) {
     // Escalar/reduzir/pausar só faz sentido pra campanha que está rodando.
     const comCpl = campanhas.filter(c => c.cpl != null && c.leads_total >= 3 && c.status === 'ACTIVE');
 
+    const DESTINOS = {
+        WHATSAPP: 'WhatsApp', INSTAGRAM_DIRECT: 'Direct do Instagram', MESSENGER: 'Messenger',
+        MESSAGING_INSTAGRAM_DIRECT_MESSENGER: 'Direct do Instagram e Messenger',
+        MESSAGING_MESSENGER_WHATSAPP: 'Messenger e WhatsApp',
+        MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP: 'Direct, Messenger e WhatsApp',
+        MESSAGING_INSTAGRAM_DIRECT_WHATSAPP: 'Direct do Instagram e WhatsApp',
+        ON_AD: 'formulário instantâneo', WEBSITE: 'site'
+    };
     for (const c of campanhas) {
         if (c.resultados_meta >= 5 && c.leads < c.resultados_meta * 0.3) {
-            alertas.push(`"${c.nome}" teve ${c.resultados_meta} resultado(s) na Meta na semana, mas só ${c.leads} lead(s) chegaram ao CRM — conferir pra onde o anúncio manda (formulário, Instagram, outro número).`);
+            const destinos = [...new Set(anuncios.filter(a => String(a.campaign_id) === c.id && a.adset_destino).map(a => DESTINOS[a.adset_destino] || a.adset_destino))];
+            alertas.push(`"${c.nome}" teve ${c.resultados_meta} resultado(s) na Meta na semana, mas só ${c.leads} lead(s) chegaram ao CRM — ${destinos.length ? `o anúncio manda pra: ${destinos.join(', ')}` : 'conferir pra onde o anúncio manda (formulário, Instagram, outro número)'}.`);
         }
     }
     const melhorCampanha = comCpl.slice().sort((a, b) => a.cpl - b.cpl)[0] || null;

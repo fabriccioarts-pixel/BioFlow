@@ -1,5 +1,17 @@
 # Changelog - CRM Natuclinic
 
+## 2026-10-30 — Formulários do Meta Lead Ads no Kanban e destino dos anúncios
+
+### Adicionado
+* **Formulários instantâneos da Meta viram lead no Kanban.** Antes, quem preenchia o formulário de um anúncio ficava só na Central de Leads da Meta. Agora o `/api/flow-tick` busca os envios a cada `META_LEADS_SYNC_MIN` (padrão 5 min), sem webhook para configurar, e cria o lead em "Novos". A origem é `Meta Ads (formulário): <nome do formulário>`. O e-mail e as perguntas personalizadas vão para as notas, e o `created_at` é a hora real do envio.
+  * Se o telefone já existe no CRM, o formulário completa o lead existente em vez de duplicar.
+  * O anúncio de origem fica em `ad_referral.source_id`, então o briefing e o ROI por campanha já atribuem esses leads.
+  * Cada envio é importado uma vez só (`meta_leadgen`). Cada lead novo gera notificação e push ("ainda não mandou mensagem, chamar pelo WhatsApp").
+  * Backfill manual (admin): `POST /api/meta-leads/sync?dias=30` (até 90 dias), sem push por lead.
+  * Token: `META_LEADS_TOKEN` ou, se não houver, o `META_ADS_TOKEN`. Ele precisa ter `leads_retrieval`, `pages_show_list`, `pages_read_engagement` e `pages_manage_ads`, com a Página atribuída ao usuário do sistema. `META_PAGE_ID` é opcional: sem ele, usa as páginas do `/me/accounts`. O token da página é obtido sozinho.
+  * Se o sync falha, aparece um alerta no briefing.
+* **O sync do Meta Ads grava para onde cada conjunto de anúncios manda o clique** (`ad_ads.adset_destino`: WhatsApp, Direct do Instagram, Messenger, formulário...). O alerta do briefing "resultados na Meta que não chegam ao CRM" passa a dizer o destino. O lote do INSERT de anúncios caiu para 11 linhas para caber no limite de 100 parâmetros do D1.
+
 ## 2026-10-29 — Briefing do Gestor e checklist de tráfego automática
 
 ### Adicionado
