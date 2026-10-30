@@ -1,5 +1,11 @@
 # Changelog - CRM Natuclinic
 
+## 2026-10-30 — Busca de formulários desligada por padrão e campanhas fora do CRM
+
+### Alterado
+* **A busca de formulários do Meta Lead Ads passa a ser opcional.** Ela só roda com `META_LEADS_TOKEN` ou `META_PAGE_ID` configurado. A clínica capta por landing page e grupo VIP, não por formulário instantâneo. Ligada sem uso, só fazia chamadas à toa na Meta e mantinha um alerta falso no briefing. O alerta de erro dela também só aparece enquanto ela está ligada.
+* **Campanhas que mandam para outro número ou para landing page de propósito** não geram mais o alerta "resultados na Meta que não chegam ao CRM". A lista fica em `crm_settings.gestor_campanhas_fora_crm` (trechos do nome, por exemplo `["dra-debora", "esquenta black"]`). Elas continuam nos números de gasto e CPL do briefing.
+
 ## 2026-10-30 — Formulários do Meta Lead Ads no Kanban e destino dos anúncios
 
 ### Adicionado

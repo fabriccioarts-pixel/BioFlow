@@ -7840,10 +7840,14 @@ async function marketingSyncTick() {
 // Token: META_LEADS_TOKEN (ou o próprio META_ADS_TOKEN), de um usuário do
 // sistema com a Página atribuída e as permissões leads_retrieval,
 // pages_show_list, pages_read_engagement e pages_manage_ads.
+// Desligado por padrão: só roda com META_LEADS_TOKEN ou META_PAGE_ID configurado.
+// A clínica capta por landing page e grupo VIP, não por formulário instantâneo —
+// ligado sem uso, só gastava chamada na Meta e gerava alerta falso no briefing.
 function metaLeadsConfig() {
+    const ativo = !!((process.env.META_LEADS_TOKEN || '').trim() || (process.env.META_PAGE_ID || '').trim());
     const token = (process.env.META_LEADS_TOKEN || process.env.META_ADS_TOKEN || '').trim();
     const paginas = (process.env.META_PAGE_ID || '').split(',').map(s => s.trim()).filter(Boolean);
-    return { token, paginas, ok: !!token };
+    return { token, paginas, ok: ativo && !!token };
 }
 
 async function metaGraphGet(path, params, token) {
@@ -13532,7 +13536,8 @@ async function gestorBriefing({ momento } = {}) {
     try {
         const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'meta_leads_last_run'");
         const lf = r && r[0] ? JSON.parse(r[0].value || 'null') : null;
-        if (lf && lf.erro) alertas.push(`Formulários da Meta não estão entrando no CRM: ${lf.erro}`);
+        // O erro gravado fica lá depois de desligar — só vale enquanto a busca está ligada.
+        if (metaLeadsConfig().ok && lf && lf.erro) alertas.push(`Formulários da Meta não estão entrando no CRM: ${lf.erro}`);
     } catch (e) {}
 
     // ---- 2) Tudo que vem do D1 de uma vez ----
@@ -13651,7 +13656,17 @@ async function gestorBriefing({ momento } = {}) {
         MESSAGING_INSTAGRAM_DIRECT_WHATSAPP: 'Direct do Instagram e WhatsApp',
         ON_AD: 'formulário instantâneo', WEBSITE: 'site'
     };
+    // Campanha que manda pra outro número ou pra landing page de propósito não é
+    // vazamento. crm_settings 'gestor_campanhas_fora_crm' = trechos do nome, ex.:
+    // ["dra-debora", "esquenta black"].
+    let foraCrm = [];
+    try {
+        const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'gestor_campanhas_fora_crm'");
+        const lista = r && r[0] ? JSON.parse(r[0].value || '[]') : [];
+        foraCrm = (Array.isArray(lista) ? lista : []).map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    } catch (e) {}
     for (const c of campanhas) {
+        if (foraCrm.some(t => c.nome.toLowerCase().includes(t))) continue;
         if (c.resultados_meta >= 5 && c.leads < c.resultados_meta * 0.3) {
             const destinos = [...new Set(anuncios.filter(a => String(a.campaign_id) === c.id && a.adset_destino).map(a => DESTINOS[a.adset_destino] || a.adset_destino))];
             alertas.push(`"${c.nome}" teve ${c.resultados_meta} resultado(s) na Meta na semana, mas só ${c.leads} lead(s) chegaram ao CRM — ${destinos.length ? `o anúncio manda pra: ${destinos.join(', ')}` : 'conferir pra onde o anúncio manda (formulário, Instagram, outro número)'}.`);
