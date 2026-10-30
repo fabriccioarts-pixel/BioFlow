@@ -9873,6 +9873,20 @@ h1, h2,
 .copilot-icon-btn.is-loading { opacity: 0.5; pointer-events: none; }
 @media (max-width: 720px) { .copilot-btn-label { display: none; } }
 
+/* O cabeçalho da conversa encolhe com a lista e a ficha abertas, não só com a
+   janela — o @media acima não pega isso e os botões passavam por cima do nome.
+   Aqui os botões reagem à largura do próprio cabeçalho. */
+#chat-active-header { container-type: inline-size; }
+#chat-active-name { max-width: 100%; }
+@container (max-width: 860px) {
+    #chat-active-header .copilot-btn-label { display: none; }
+    #chat-active-header .copilot-btn { padding: 0.45rem 0.6rem; }
+}
+@container (max-width: 520px) {
+    /* Humano / Ligar IA viram só os ícones (o title continua explicando) */
+    #chat-active-header .chat-agent-switch-btn span { display: none; }
+}
+
 
 /* ===== Lembrete de consulta (Fluxos) ===== */
 #fx-editor .ar-preview {
