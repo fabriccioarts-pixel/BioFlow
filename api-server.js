@@ -7966,6 +7966,9 @@ async function metaLeadsSync({ desdeSeg, avisar = true } = {}) {
     const out = { paginas: 0, formularios: 0, envios: 0, novos: 0, atualizados: 0, erros: [] };
     const paginas = await metaLeadsPaginas(cfg);
     out.paginas = paginas.length;
+    // Token sem pages_show_list (ou sem a Página atribuída) devolve lista vazia
+    // em vez de erro — sem isto o sync "dava certo" sem nunca ler formulário.
+    if (!paginas.length) throw new Error('nenhuma Página acessível pelo token — falta pages_show_list ou atribuir a Página ao usuário do sistema');
     const filtro = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: desdeSeg }]);
     for (const p of paginas) {
         const forms = await metaGraphGetAll(`${p.id}/leadgen_forms`, { fields: 'id,name,status', limit: '100' }, { token: p.token });
