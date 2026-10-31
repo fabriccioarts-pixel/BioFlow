@@ -2097,12 +2097,6 @@ th {
     padding: 1rem 0.5rem;
 }
 
-.kanban-column-empty-bird {
-    width: 72px;
-    height: auto;
-    opacity: 0.85;
-}
-
 /* Cards - Metallic Titanium Style */
 .card {
     background: linear-gradient(145deg, hsl(230, 9%, 22%), hsl(230, 13%, 10%)) !important;
@@ -6457,13 +6451,6 @@ body:has(#login-overlay.active) header { display: none; }
     gap: 1.15rem;
 }
 
-.auth-mascot {
-    display: block;
-    width: 110px;
-    height: auto;
-    margin: 0 auto -0.5rem;
-}
-
 /* Marca */
 .auth-brand {
     display: flex;
@@ -9259,11 +9246,6 @@ body:has(#login-overlay.active) header { display: none; }
     box-sizing: border-box;
 }
 
-/* Ilustração do estado vazio do chat — só no desktop */
-.chat-empty-illustration {
-    display: none;
-}
-
 .chat-empty-fallback-icon {
     font-size: 4rem;
     opacity: 0.16;
@@ -9298,23 +9280,6 @@ body:has(#login-overlay.active) header { display: none; }
 
 .chat-empty-footer i {
     color: var(--accent-success);
-}
-
-@media (min-width: 769px) {
-    .chat-empty-illustration {
-        display: block;
-        width: min(280px, 32vw);
-        max-width: 280px;
-        height: auto;
-        margin-bottom: 1.75rem;
-        opacity: 0.92;
-    }
-    /* Com a ilustração presente, o ícone do WhatsApp vira redundante.
-       Se o SVG falhar ao carregar (onerror="this.remove()"), a adjacência
-       quebra e o ícone volta a aparecer. */
-    .chat-empty-illustration + .chat-empty-fallback-icon {
-        display: none;
-    }
 }
 
 /* ≤768px — Atendimento: uma tela por vez (lista OU conversa OU ficha) */

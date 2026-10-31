@@ -2193,11 +2193,10 @@ Object.entries(ocultosNaColuna).forEach(([colId, n]) => {
     col.appendChild(btn);
 });
 
-// Coluna sem nenhum lead: mostra a mascote da Gonecta em vez de ficar em branco.
+// Coluna sem nenhum lead: mostra um aviso em vez de ficar em branco.
 document.querySelectorAll('#kanban-board .card-list').forEach(col => {
     if (col.children.length === 0) {
         col.innerHTML = `<div class="kanban-column-empty">
-            <img src="vendor/illustrations/gonecta-bird-neutro.webp" alt="" class="kanban-column-empty-bird" onerror="this.remove()">
             <span>Nenhum lead aqui ainda</span>
         </div>`;
     }
