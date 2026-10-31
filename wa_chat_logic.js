@@ -115,7 +115,7 @@ window.addEventListener('beforeunload', () => {
 // Só visual. Não mexe na trava de atendimento (owner_id): serve pra ver, na
 // lista de conversas, quem está com aquela conversa aberta agora.
 // ============================================
-const CHAT_PRESENCE_PING_MS = 20 * 1000;   // renova a presença a cada 20s
+const CHAT_PRESENCE_PING_MS = 30 * 1000;   // renova a presença a cada 30s (o servidor expira em 60s)
 let chatPresenceMap = {};                   // { leadId: [{ username, display_name, avatar_url }] }
 let _chatPresenceLeadId = null;
 let _chatPresencePingTimer = null;
@@ -6471,21 +6471,24 @@ if (document.readyState !== 'loading') {
 // Polling global em segundo plano (lista de conversas, presença, conversa aberta).
 // A lista vem de um cache no servidor que é remendado a cada mensagem nova
 // (waChatsCacheTouch) e o poll manda a versão que já tem — quando nada mudou o
-// servidor lê uma linha minúscula e não devolve a lista. Por isso dá pra
-// perguntar a cada ~18s: o SSE (evento wa_message) não chega de forma confiável
-// quando o webhook cai noutra instância da Vercel, e antes a lista só se
-// atualizava ao abrir a conversa. A conversa ABERTA roda a cada tick (6s).
+// servidor lê uma linha minúscula e não devolve a lista. Na Vercel não há SSE
+// (ver /api/kanban/events), então esse poll é o que traz mensagem nova. Cada
+// chamada conta na cota de funções da Vercel, por isso o ritmo depende da tela:
+// com o chat aberto, conversa a cada 10s, presença a cada 20s e lista a cada 30s;
+// fora do chat, só a lista (pro ponto de notificação), a cada 60s.
 function startGlobalChatCheck() {
     if (window.globalChatCheckInterval) return;
     let globalChatTick = 0;
     window.globalChatCheckInterval = setInterval(() => {
         globalChatTick++;
-        if (typeof refreshChatPresence === 'function') refreshChatPresence();
-        if (window.currentActiveChat && document.getElementById('view-chat') && document.getElementById('view-chat').style.display !== 'none') {
-            if (typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
+        const chatView = document.getElementById('view-chat');
+        const chatVisivel = !!chatView && chatView.style.display !== 'none';
+        if (chatVisivel) {
+            if (globalChatTick % 2 === 1 && typeof refreshChatPresence === 'function') refreshChatPresence();
+            if (window.currentActiveChat && typeof openChat === 'function') openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
         }
-        if (globalChatTick % 3 === 1 && typeof loadChats === 'function') loadChats(true);
-    }, 6000);
+        if (globalChatTick % (chatVisivel ? 3 : 6) === 1 && typeof loadChats === 'function') loadChats(true);
+    }, 10000);
 }
 startGlobalChatCheck();
 
