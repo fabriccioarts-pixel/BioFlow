@@ -256,16 +256,25 @@ function whatsappWindowBadgeHTML(lastInboundRaw) {
 
     const msLeft = (d.getTime() + 24 * 3600000) - Date.now();
     if (msLeft <= 0) {
-        return `<span title="Janela de 24h de mensagem livre já fechou — só dá pra mandar template aprovado" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.65rem; font-weight: 600; color: var(--text-muted); background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>Janela fechada</span>`;
+        return `<span class="wa-janela wa-janela--fechada" title="Janela de 24h de mensagem livre já fechou — só dá pra mandar template aprovado"><i class="fa-solid fa-lock"></i>janela fechada</span>`;
     }
     const totalMin = Math.floor(msLeft / 60000);
     const h = Math.floor(totalMin / 60);
     const m = totalMin % 60;
     const label = h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
-    let color = 'var(--accent-success, #34d399)', bg = 'rgba(52, 211, 153, 0.12)', border = 'rgba(52, 211, 153, 0.3)';
-    if (h < 1) { color = 'var(--accent-danger, #f87171)'; bg = 'rgba(248, 113, 113, 0.12)'; border = 'rgba(248, 113, 113, 0.35)'; }
-    else if (h < 4) { color = '#fbbf24'; bg = 'rgba(251, 191, 36, 0.12)'; border = 'rgba(251, 191, 36, 0.35)'; }
-    return `<span title="Faltam ${label} pra fechar a janela de 24h de mensagem livre" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.65rem; font-weight: 600; color: ${color}; background: ${bg}; border: 1px solid ${border}; padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-regular fa-clock" style="font-size: 0.6rem;"></i>${label}</span>`;
+    // Quanto falta pra janela fechar: folga (4h ou mais), atenção (menos de 4h), urgente (menos de 1h).
+    // O rótulo diz "janela" pra não ser lido como tempo de espera do paciente.
+    const nivel = h < 1 ? 'urgente' : (h < 4 ? 'atencao' : 'folga');
+    return `<span class="wa-janela wa-janela--${nivel}" title="Faltam ${label} pra fechar a janela de 24h de mensagem livre"><i class="fa-regular fa-clock"></i>janela ${label}</span>`;
+}
+
+// Há quanto tempo o paciente espera resposta, na mesma escala de três níveis:
+// folga (até 15min), atenção (até 1h), urgente (mais de 1h).
+function esperaRespostaHTML(desdeMs) {
+    const min = Math.max(0, Math.floor((Date.now() - desdeMs) / 60000));
+    const label = min < 60 ? `${min}min` : (min < 1440 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${Math.floor(min / 1440)}d`);
+    const nivel = min > 60 ? 'urgente' : (min > 15 ? 'atencao' : 'folga');
+    return `<span class="chat-badge-state chat-badge-state--waiting is-${nivel}" title="Cliente aguardando resposta humana há ${label}"><i class="fa-regular fa-clock"></i> Aguardando ${label}</span>`;
 }
 
 function formatFullChatDate(rawTs) {
@@ -346,7 +355,7 @@ function renderAvatarHTML(name, imgUrl = null, status = 'online', size = 40) {
 
     // Tom fixo por nome — a mesma pessoa sempre tem a mesma cor, e a lista
     // deixa de ser uma parede de círculos idênticos.
-    const AVATAR_TONES = ['#E03720', '#f59e0b', '#10b981', '#14b8a6', '#6366f1', '#a855f7', '#ec4899', '#0ea5e9'];
+    const AVATAR_TONES = ['#a3655d', '#c08552', '#8c6a5a', '#b5837a', '#7a4a3e', '#9c7b6b', '#c27b8f', '#6e5148'];
     let hash = 0;
     for (const ch of cleanName) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
     const tone = AVATAR_TONES[hash % AVATAR_TONES.length];
@@ -1417,14 +1426,14 @@ function renderChatFilterChipsForInbox(inbox) {
     if (inbox === 'humano') {
         container.innerHTML = `
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
-            <button type="button" class="chat-filter-chip ${activeChatFilter === 'awaiting' ? 'active' : ''}" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half" style="color: #f59e0b;"></i> Aguardando resposta</button>
-            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'awaiting' ? 'active' : ''}" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half"></i> Aguardando resposta</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire"></i> Qualificado pela IA</button>
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'mine' ? 'active' : ''}" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
         `;
     } else if (inbox === 'ia') {
         container.innerHTML = `
-            <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')"><i class="fa-solid fa-robot" style="color: #c084fc;"></i> Em triagem pela IA</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'todos' ? 'active' : ''}" data-filter="todos" onclick="setChatFilter('todos')"><i class="fa-solid fa-robot"></i> Em triagem pela IA</button>
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Novas mensagens</button>
         `;
     } else {
@@ -1433,7 +1442,7 @@ function renderChatFilterChipsForInbox(inbox) {
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'mine' ? 'active' : ''}" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'unread' ? 'active' : ''}" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
             <button type="button" class="chat-filter-chip ${activeChatFilter === 'awaiting' ? 'active' : ''}" data-filter="awaiting" onclick="setChatFilter('awaiting')">Aguardando resposta</button>
-            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+            <button type="button" class="chat-filter-chip ${activeChatFilter === 'quente' ? 'active' : ''}" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire"></i> Qualificado pela IA</button>
         `;
     }
 }
@@ -2101,11 +2110,11 @@ function renderContactsList(chats) {
         // divisor de dia dentro da conversa aberta.
         const dayKey = waDayKey(chat.last_interaction);
         if (dayKey && dayKey !== lastDayKey) {
-            html += `<div style="padding: 0.45rem 1rem; background: rgba(255,255,255,0.045); border-top: 2px solid var(--border-color); border-bottom: 2px solid var(--border-color); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">${formatFullChatDate(chat.last_interaction)}</div>`;
+            html += `<div class="chat-day-divider">${formatFullChatDate(chat.last_interaction)}</div>`;
             lastDayKey = dayKey;
         }
 
-        const isActive = window.currentActiveChat && window.currentActiveChat.phone === chat.phone ? 'background: rgba(16, 185, 129, 0.1); border-left: 4px solid var(--accent-success);' : 'border-bottom: 1px solid var(--border-color);';
+        const isActive = !!(window.currentActiveChat && window.currentActiveChat.phone === chat.phone);
 
         const timeString = formatChatTime(chat.last_interaction);
         // Colapsa qualquer espaço/quebra de linha em um só — sem isso, um nome
@@ -2145,15 +2154,19 @@ function renderContactsList(chats) {
             const lastMsgTs = parseD1TimestampMs(chat.last_timestamp || chat.timestamp || chat.last_interaction);
             const lastMsgDirection = chat.last_direction || chat.direction;
             const isAutoWaiting = lastMsgDirection === 'in' && lastMsgTs && (Date.now() - lastMsgTs) > 5 * 60 * 1000;
-            const displayTagIds = (isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds;
+            const showWaitingBadge = isAutoWaiting && !isIAHandling && !(lead && isLeadQuente(lead));
+            // Com o selo "Aguardando" na linha, a etiqueta de mesmo nome só repetiria a informação.
+            const displayTagIds = showWaitingBadge
+                ? tagIds.filter(t => t !== 'aguardando')
+                : ((isAutoWaiting && !tagIds.includes('aguardando')) ? [...tagIds, 'aguardando'] : tagIds);
 
-            if (isAutoWaiting && !isIAHandling && !(lead && isLeadQuente(lead))) {
-                stateBadgeHTML = `<span class="chat-badge-state chat-badge-state--waiting" title="Cliente aguardando resposta humana"><i class="fa-regular fa-clock"></i> Aguardando</span>`;
+            if (showWaitingBadge) {
+                stateBadgeHTML = esperaRespostaHTML(lastMsgTs);
             }
 
             const isBlockedTag = isBlockedChat(chat.phone);
             const blockedTagBadge = isBlockedTag
-                ? `<span style="background: var(--accent-danger, #ef4444); color: white; padding: 0.15rem 0.5rem; font-size: 0.65rem; border-radius: 999px; font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;"><i class="fa-solid fa-ban"></i> Bloqueado (CRM)</span>`
+                ? `<span class="chat-chip chat-chip--bloqueado"><i class="fa-solid fa-ban"></i> Bloqueado (CRM)</span>`
                 : '';
 
             // Selo de responsável FIXO — diferente do "🔒 em atendimento agora" (que
@@ -2165,14 +2178,14 @@ function renderContactsList(chats) {
                 const isMine = lead.owner_id === currentUser;
                 const ownerName = getLockOwnerDisplayName(lead.owner_id);
                 const ownerAvatarHTML = renderAvatarHTML(ownerName, (typeof avatarMap !== 'undefined' && avatarMap[lead.owner_id]) || null, null, 15);
-                ownerBadgeHTML = `<span title="Responsável: ${escapeHtml(ownerName)}" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: ${isMine ? 'var(--accent-success)' : 'var(--text-muted)'}; background: ${isMine ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)'}; border: 1px solid ${isMine ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-color)'}; padding: 0.05rem 0.5rem 0.05rem 0.2rem; border-radius: 10px; white-space: nowrap;">${ownerAvatarHTML}${escapeHtml(isMine ? 'Você' : ownerName)}</span>`;
+                ownerBadgeHTML = `<span class="chat-owner${isMine ? ' is-mine' : ''}" title="Responsável: ${escapeHtml(ownerName)}">${ownerAvatarHTML}${escapeHtml(isMine ? 'Você' : ownerName)}</span>`;
             } else if (lead) {
-                ownerBadgeHTML = `<span title="Nenhum atendente responsável por esse lead ainda" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: var(--text-muted); border: 1px dashed var(--border-color); padding: 0.05rem 0.5rem; border-radius: 10px; white-space: nowrap;"><i class="fa-regular fa-circle-user" style="font-size: 0.65rem;"></i>Sem responsável</span>`;
+                ownerBadgeHTML = `<span class="chat-owner is-none" title="Nenhum atendente responsável por esse lead ainda"><i class="fa-regular fa-circle-user"></i>Sem responsável</span>`;
             }
 
             const windowBadgeHTML = whatsappWindowBadgeHTML(chat.last_inbound_at);
             if (stateBadgeHTML || displayTagIds.length > 0 || isBlockedTag || ownerBadgeHTML || windowBadgeHTML) {
-                leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">` +
+                leadTagsHTML = `<div class="chat-row__tags">` +
                     stateBadgeHTML +
                     ownerBadgeHTML +
                     blockedTagBadge +
@@ -2186,12 +2199,12 @@ function renderContactsList(chats) {
                 const isStale = !assignedAtMs || (Date.now() - assignedAtMs) > LEAD_LOCK_TIMEOUT_MS;
                 if (isOtherOwner && !isStale) {
                     const ownerName = getLockOwnerDisplayName(lead.owner_id);
-                    lockBadgeHTML = `<span title="Em atendimento por ${escapeHtml(ownerName)} agora" style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 600; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); padding: 0.1rem 0.5rem; border-radius: 10px; margin-left: 6px; white-space: nowrap;"><i class="fa-solid fa-lock" style="font-size: 0.6rem;"></i>ativo agora</span>`;
+                    lockBadgeHTML = `<span class="chat-lock" title="Em atendimento por ${escapeHtml(ownerName)} agora"><i class="fa-solid fa-lock"></i>ativo agora</span>`;
                 }
             }
         }
         if (!leadTagsHTML && stateBadgeHTML) {
-            leadTagsHTML = `<div style="display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem;">${stateBadgeHTML}</div>`;
+            leadTagsHTML = `<div class="chat-row__tags">${stateBadgeHTML}</div>`;
         }
 
         const avatarHTML = renderAvatarHTML(displayName, null, null, 49);
@@ -2199,14 +2212,12 @@ function renderContactsList(chats) {
         const unreadCount = Number(chat.unread_count || 0);
         const markedUnread = isMarkedUnreadChat(chat.phone);
         const hasUnread = unreadCount > 0 || markedUnread;
-        const timeColor = hasUnread ? 'var(--accent-success, #10b981)' : 'var(--text-muted)';
-
         const unreadBadgeHTML = unreadCount > 0
-            ? `<span style="background: #25D366; color: #0a0a0a; font-size: 0.7rem; font-weight: 700; line-height: 1; border-radius: 999px; padding: 3px 6px; min-width: 19px; height: 19px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount > 999 ? '999+' : unreadCount}</span>`
-            : (markedUnread ? `<span title="Marcada como não lida" style="width: 9px; height: 9px; border-radius: 50%; background: #25D366; display: inline-block; flex-shrink: 0;"></span>` : '');
+            ? `<span class="chat-row__unread" title="${unreadCount} mensagem(ns) não lida(s)">${unreadCount > 999 ? '999+' : unreadCount}</span>`
+            : (markedUnread ? `<span class="chat-row__unread-dot" title="Marcada como não lida"></span>` : '');
 
         const pinnedHTML = isPinnedChat(chat.phone)
-            ? `<i class="fa-solid fa-thumbtack" title="Conversa fixada" style="font-size: 0.7rem; color: var(--text-muted); transform: rotate(45deg); flex-shrink: 0;"></i>`
+            ? `<i class="fa-solid fa-thumbtack chat-row__pin" title="Conversa fixada"></i>`
             : '';
 
         const isSelected = chatSelectMode && selectedChatPhones.has(chat.phone);
@@ -2214,7 +2225,7 @@ function renderContactsList(chats) {
             ? `toggleChatSelection('${chat.phone}')`
             : `openChat('${chat.phone}', '${displayName.replace(/'/g, "\\'")}')`;
         const checkboxHTML = chatSelectMode
-            ? `<i class="fa-solid ${isSelected ? 'fa-circle-check' : 'fa-circle'}" style="font-size: 1.2rem; color: ${isSelected ? 'var(--accent-success)' : 'var(--text-muted)'}; flex-shrink: 0;"></i>`
+            ? `<i class="fa-solid ${isSelected ? 'fa-circle-check' : 'fa-circle'}" style="font-size: 1.2rem; color: ${isSelected ? 'var(--accent-primary)' : 'var(--text-muted)'}; flex-shrink: 0;"></i>`
             : '';
 
         const isFav = isFavoriteChat(chat.phone);
@@ -2233,32 +2244,36 @@ function renderContactsList(chats) {
 
         const draftText = getChatDraft(chat.phone);
         const previewLineHTML = draftText
-            ? `<span style="color: var(--accent-danger, #f87171); font-weight: 600;">Rascunho:</span><span>${escapeHtml(draftText)}</span>`
+            ? `<span class="chat-row__draft">Rascunho:</span><span>${escapeHtml(draftText)}</span>`
             : `${statusIcon}<span>${preview}</span>`;
 
-        const archivedOpacity = isArchivedChat(chat.phone) ? 'opacity: 0.65;' : '';
+        const rowClasses = ['chat-row'];
+        if (isActive) rowClasses.push('is-active');
+        if (isSelected) rowClasses.push('is-selected');
+        if (hasUnread) rowClasses.push('has-unread');
+        if (isArchivedChat(chat.phone)) rowClasses.push('is-archived');
 
         html += `
-            <div class="chat-row" title="+${chat.phone}" oncontextmenu="showChatContextMenu(event, '${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" style="display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 1rem; cursor: pointer; transition: 0.2s; ${archivedOpacity} ${isSelected ? 'background: rgba(16, 185, 129, 0.08);' : isActive}" onclick="${rowClickHandler}" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='${isSelected ? 'rgba(16, 185, 129, 0.08)' : (isActive.includes('rgba') ? 'rgba(16, 185, 129, 0.1)' : 'transparent')}'">
+            <div class="${rowClasses.join(' ')}" title="+${chat.phone}" oncontextmenu="showChatContextMenu(event, '${chat.phone}', '${displayName.replace(/'/g, "\\'")}')" onclick="${rowClickHandler}">
                 ${checkboxHTML}
                 ${avatarHTML}
-                <div style="flex: 1; min-width: 0;">
-                    <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 6px;">
-                        <span style="display: flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden;">
+                <div class="chat-row__body">
+                    <div class="chat-row__top">
+                        <span class="chat-row__name">
                             ${pinnedHTML}
                             ${favStarHTML}
-                            <strong style="color: var(--text-main); font-size: 0.95rem; font-weight: ${hasUnread ? 700 : 500}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${displayName}</strong>
+                            <strong>${displayName}</strong>
                             ${aiBadgeHTML}
                             ${lockBadgeHTML}
                             ${presenceBadgeHTML}
                         </span>
-                        <span style="display: flex; align-items: center; flex-shrink: 0;">
-                            <span style="font-size: 0.7rem; color: ${timeColor}; font-weight: ${hasUnread ? 600 : 400};">${timeString}</span>
+                        <span class="chat-row__meta">
+                            <span class="chat-row__time">${timeString}</span>
                             ${menuBtnHTML}
                         </span>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.1rem;">
-                        <div style="flex: 1; min-width: 0; font-size: 0.82rem; color: ${hasUnread ? 'var(--text-main)' : 'var(--text-muted)'}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 0.3rem;">
+                    <div class="chat-row__line">
+                        <div class="chat-row__preview">
                             ${previewLineHTML}
                         </div>
                         ${unreadBadgeHTML}
@@ -5043,20 +5058,20 @@ function buildChatMessagesHTML() {
             lastDateStr = currentDateStr;
             html += `
                 <div style="align-self: center; margin: 0.8rem 0 0.4rem 0; padding: 0.2rem 0.6rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600; user-select: none;">
-                    <i class="fa-regular fa-calendar-days" style="margin-right: 5px; color: var(--accent-success);"></i> ${currentDateStr}
+                    <i class="fa-regular fa-calendar-days" style="margin-right: 5px; color: var(--text-muted);"></i> ${currentDateStr}
                 </div>
             `;
         }
 
         const isOut = msg.direction === 'out';
         const bg = isOut
-            ? 'var(--accent-success)'
+            ? 'var(--nc-bubble-out)'
             : 'var(--bg-card)';
-        const color = isOut ? '#fff' : 'var(--text-main)';
+        const color = isOut ? 'var(--nc-bubble-out-text)' : 'var(--text-main)';
         const align = isOut ? 'flex-end' : 'flex-start';
         const borderRadius = isOut ? '16px 4px 16px 16px' : '4px 16px 16px 16px';
         const border = isOut
-            ? '1px solid rgba(255, 255, 255, 0.18)'
+            ? '1px solid transparent'
             : '1px solid var(--border-color)';
         const boxShadow = 'none';
 
@@ -5825,7 +5840,7 @@ async function sendActiveChatMessage() {
 
     msgsContainer.innerHTML += `
         <div style="display: flex; flex-direction: column; align-items: flex-end; margin-bottom: 0.65rem; opacity: 0.85;">
-            <div style="background: #0f766e; border: 1px solid rgba(255, 255, 255, 0.18); color: #ffffff; padding: 0.65rem 1rem; border-radius: 16px 4px 16px 16px; max-width: 75%; box-shadow: none; font-size: 0.9rem; line-height: 1.5;">
+            <div style="background: var(--nc-bubble-out); border: 1px solid transparent; color: var(--nc-bubble-out-text); padding: 0.65rem 1rem; border-radius: 16px 4px 16px 16px; max-width: 75%; box-shadow: none; font-size: 0.9rem; line-height: 1.5;">
                 ${previewHtml}
             </div>
             <span style="font-size: 0.73rem; color: var(--text-muted); margin-top: 0.25rem;">Enviando...</span>

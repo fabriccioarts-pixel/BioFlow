@@ -11,12 +11,12 @@
     // padrão não gera override (as variáveis derivadas continuam como estão).
     const PADRAO = {
         dark: {
-            fundo: { tipo: 'cor', cor: '#16171d', cor2: '#3b1d4a', angulo: 135, imagemV: 0, escurecer: 40, desfoque: 0, transparencia: 25 },
-            destaque: '#e03720', menu: '#1b1c22', cartao: '#16171d', borda: '#2a2b32', texto: '#eaebf0', textoSec: '#abadba'
+            fundo: { tipo: 'cor', cor: '#1b110d', cor2: '#3a1f19', angulo: 135, imagemV: 0, escurecer: 40, desfoque: 0, transparencia: 25 },
+            destaque: '#a3655d', menu: '#130806', cartao: '#211713', borda: '#33231d', texto: '#f2e8e3', textoSec: '#bba79f'
         },
         light: {
-            fundo: { tipo: 'cor', cor: '#e8edf2', cor2: '#fbe3e0', angulo: 135, imagemV: 0, escurecer: 20, desfoque: 0, transparencia: 25 },
-            destaque: '#e03720', menu: '#f8fafc', cartao: '#ffffff', borda: '#b5c4d9', texto: '#020817', textoSec: '#64748b'
+            fundo: { tipo: 'cor', cor: '#f6efec', cor2: '#f3dcd6', angulo: 135, imagemV: 0, escurecer: 20, desfoque: 0, transparencia: 25 },
+            destaque: '#8a4b40', menu: '#130806', cartao: '#fefcfb', borda: '#e3d3cd', texto: '#2b1610', textoSec: '#7a5f57'
         },
         fonte: 'padrao', tamanho: 100, cantos: 100
     };

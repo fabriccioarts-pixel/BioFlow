@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gonecta</title>
+    <title>Natuclinic CRM</title>
 
     <!-- Fontes: self-hosted via @font-face no style.css (vendor/fonts/) -->
 
@@ -15,15 +15,19 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
     <link rel="stylesheet" href="style.css?v=37">
     <script src="theme.js?v=7"></script>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" href="favicon.png">
 
     <!-- PWA: instalável como app (Android/desktop) + "Adicionar à Tela de Início" no iOS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&display=swap">
     <link rel="manifest" href="manifest.webmanifest">
-    <link rel="apple-touch-icon" href="favicon.png">
-    <meta name="theme-color" content="#E03720">
+    <link rel="apple-touch-icon" href="vendor/illustrations/apple-touch-icon.png">
+    <meta name="theme-color" content="#24140f">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Gonecta">
+    <meta name="apple-mobile-web-app-title" content="Natuclinic">
     <style>
         /* Logo da sidebar: wordmark quando expandida, favicon quando recolhida */
         .sb-logo-full { height: 34px; width: auto; max-width: 178px; object-fit: contain; object-position: left center; display: block; flex-shrink: 0; }
@@ -332,6 +336,14 @@
 </head>
 
 <body>
+<!--
+THESIS: O CRM como o livro de recepção da Natuclinic; recusa o painel SaaS genérico de cinza azulado com acento neon.
+OWN-WORLD: capa espresso (#24140f) no menu, páginas pautadas marrom-escuro com filetes, fita rosé (#a3655d) marcando o ativo, rosa #ffc2c2 no texto ativo, serifa da marca só nos títulos, algarismos tabulares.
+STORY: a atendente bate o olho e sabe quem está esperando, há quanto tempo e o que fazer; responde sem caçar botão.
+FIRST VIEWPORT: Atendimento. Capa à esquerda com a fita na seção atual; lista de conversas pautada com hora tabular e espera em três níveis; conversa à direita com bolhas espresso; o rosé sólido só no botão principal.
+FORM: Livro de Recepção, candidato 5 da lista ordenada; seed e9d8c149.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+-->
     <a href="#main-content" class="skip-to-main">Pular para o conteúdo</a>
 
     <!-- LOGIN OVERLAY -->
@@ -3761,7 +3773,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                                 <i class="fa-solid fa-hourglass-half"></i> Aguardando resposta
                             </div>
                             <div class="chat-filter-menu-item" data-filter="quente" onclick="setChatFilter('quente')">
-                                <i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA
+                                <i class="fa-solid fa-fire"></i> Qualificado pela IA
                             </div>
                             <div class="chat-filter-menu-item" data-filter="favorites" onclick="setChatFilter('favorites')">
                                 <i class="fa-regular fa-star"></i> Favoritos
@@ -3819,8 +3831,8 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 <div id="chat-filter-chips"
                     style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem;">
                     <button type="button" class="chat-filter-chip active" data-filter="todos" onclick="setChatFilter('todos')">Todos</button>
-                    <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half" style="color: #f59e0b;"></i> Aguardando resposta</button>
-                    <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire" style="color: #f97316;"></i> Qualificado pela IA</button>
+                    <button type="button" class="chat-filter-chip" data-filter="awaiting" onclick="setChatFilter('awaiting')"><i class="fa-solid fa-hourglass-half"></i> Aguardando resposta</button>
+                    <button type="button" class="chat-filter-chip" data-filter="quente" onclick="setChatFilter('quente')"><i class="fa-solid fa-fire"></i> Qualificado pela IA</button>
                     <button type="button" class="chat-filter-chip" data-filter="mine" onclick="setChatFilter('mine')">Meus atendimentos</button>
                     <button type="button" class="chat-filter-chip" data-filter="unread" onclick="setChatFilter('unread')">Não lidos</button>
                 </div>
@@ -5814,9 +5826,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <!-- Preenchimento "liquid gradient" (uilayouts) nos avatares .lqa -->
 <script type="module">
-    import { initLiquid, LIQUID_BLUE } from './liquid-gradient.js';
+    import { initLiquid, LIQUID_ROSA } from './liquid-gradient.js';
     document.querySelectorAll('.lqa[data-liquid]').forEach((el) => {
-        try { initLiquid(el, { colors: LIQUID_BLUE }); }
+        try { initLiquid(el, { colors: LIQUID_ROSA }); }
         catch (e) { console.warn('liquid-gradient indisponível:', e); }
     });
 </script>

@@ -31,7 +31,7 @@
     font-display: swap;
     src: url('vendor/fonts/schibsted-grotesk-700.woff2') format('woff2');
 }
-/* Gonecta — fontes da marca GONE (self-hosted, vendor/fonts/). */
+/* Fontes self-hosted (vendor/fonts/): Aspekta é a do corpo; as demais ficaram de versões anteriores. */
 @font-face {
     font-family: 'Aspekta';
     font-style: normal;
@@ -112,28 +112,28 @@
 
 :root {
     color-scheme: dark;
-    --background: 230 12% 10%;
-    --foreground: 230 15% 93%;
-    --card: 230 12% 10%;
-    --card-foreground: 230 15% 93%;
-    --popover: 230 12% 10%;
-    --popover-foreground: 230 10% 65%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 1%;
-    --secondary: 230 10% 14%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 230 10% 14%;
-    --muted-foreground: 230 10% 70%;
-    --accent: 230 9% 26%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 58%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 230 9% 18%;
-    --input: 230 9% 18%;
-    --ring: 230 60% 75%;
+    --background: 17 35% 8%;
+    --foreground: 20 37% 92%;
+    --card: 17 27% 10%;
+    --card-foreground: 20 37% 92%;
+    --popover: 16 26% 11%;
+    --popover-foreground: 17 17% 68%;
+    --primary: 20 37% 95%;
+    --primary-foreground: 14 41% 10%;
+    --secondary: 17 25% 14%;
+    --secondary-foreground: 20 37% 92%;
+    --muted: 17 25% 14%;
+    --muted-foreground: 17 17% 68%;
+    --accent: 16 24% 19%;
+    --accent-foreground: 20 37% 95%;
+    --destructive: 7 75% 64%;
+    --destructive-foreground: 20 37% 97%;
+    --border: 16 28% 16%;
+    --input: 17 27% 18%;
+    --ring: 7 28% 50%;
     --radius: 0.5rem;
 
-    --bg-dark: hsl(230, 12%, 9%);
+    --bg-dark: hsl(16, 35%, 6%);
     --dash-funnel-sep: var(--bg-dark);
     --bg-agenda: hsl(var(--background));
     --agenda-header-bg: hsl(var(--muted));
@@ -141,7 +141,7 @@
     --bg-column: hsl(var(--muted));
     --text-main: hsl(var(--foreground));
     --text-muted: hsl(var(--muted-foreground));
-    --header-bg: hsl(230, 12%, 12%);
+    --header-bg: hsl(14, 45%, 5%);
     --header-text: hsl(var(--foreground));
     --header-btn-bg: transparent;
     --header-btn-hover: hsl(var(--accent));
@@ -149,22 +149,22 @@
     --nav-active-bg: hsl(var(--accent));
     --nav-active-border: hsl(var(--border));
     --nav-arrow: hsl(var(--muted-foreground));
-    --sb-card-bg: hsl(230, 12%, 6%);
+    --sb-card-bg: hsl(14, 45%, 3.5%);
     --sb-danger: hsl(var(--destructive));
 
-    --accent-primary: #E03720;
-    --accent-success: #10b981;
-    --accent-warning: #fbbf24;
-    --accent-danger: #f87171;
-    --accent-info: #38bdf8;
-    --accent-purple: #a78bfa;
-    --accent-success-tint: rgba(16, 185, 129, 0.12);
-    --accent-warning-tint: rgba(251, 191, 36, 0.12);
-    --accent-danger-tint: rgba(248, 113, 113, 0.12);
-    --accent-info-tint: rgba(56, 189, 248, 0.12);
-    --accent-purple-tint: rgba(167, 139, 250, 0.12);
-    --bg-main: hsl(230, 12%, 10%);
-    --bg-hover: hsl(230, 9%, 16%);
+    --accent-primary: #a3655d;
+    --accent-success: #5fb88a;
+    --accent-warning: #e3a857;
+    --accent-danger: #e8705f;
+    --accent-info: #8fb0c8;
+    --accent-purple: #b49fd6;
+    --accent-success-tint: rgba(95, 184, 138, 0.13);
+    --accent-warning-tint: rgba(227, 168, 87, 0.13);
+    --accent-danger-tint: rgba(232, 112, 95, 0.13);
+    --accent-info-tint: rgba(143, 176, 200, 0.13);
+    --accent-purple-tint: rgba(180, 159, 214, 0.13);
+    --bg-main: hsl(17, 35%, 8%);
+    --bg-hover: hsl(16, 26%, 14%);
     --border-color: hsl(var(--border));
     --btn-secondary-bg: hsl(var(--secondary));
     --btn-secondary-hover: hsl(var(--muted));
@@ -208,29 +208,29 @@
 
 [data-theme="light"] {
     color-scheme: light;
-    --background: 210 40% 98%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 78%;
-    --input: 214.3 31.8% 78%;
-    --ring: 222.2 84% 4.9%;
+    --background: 18 36% 95%;
+    --foreground: 13 46% 12%;
+    --card: 20 60% 99%;
+    --card-foreground: 13 46% 12%;
+    --popover: 20 60% 99%;
+    --popover-foreground: 13 46% 12%;
+    --primary: 14 49% 20%;
+    --primary-foreground: 20 60% 98%;
+    --secondary: 17 30% 91%;
+    --secondary-foreground: 14 49% 20%;
+    --muted: 17 30% 91%;
+    --muted-foreground: 14 17% 41%;
+    --accent: 17 29% 88%;
+    --accent-foreground: 14 49% 20%;
+    --destructive: 8 62% 47%;
+    --destructive-foreground: 20 60% 98%;
+    --border: 16 28% 85%;
+    --input: 17 26% 82%;
+    --ring: 14 49% 20%;
 
-    --bg-dark: #e8edf2;
+    --bg-dark: #efe5e1;
     --dash-funnel-sep: var(--bg-card);
-    --bg-agenda: #e8edf2;
+    --bg-agenda: #f1e9e5;
     --agenda-header-bg: hsl(var(--background));
     --bg-card: hsl(var(--card));
     --bg-column: hsl(var(--muted));
@@ -247,23 +247,23 @@
     --sb-card-bg: hsl(var(--card));
     --sb-danger: hsl(var(--destructive));
     
-    --accent-primary: #E03720;
-    --accent-success: #059669;
-    --accent-warning: #d97706;
-    --accent-danger: #dc2626;
-    --accent-info: #0284c7;
-    --accent-purple: #7c3aed;
-    --accent-success-tint: rgba(5, 150, 105, 0.12);
-    --accent-warning-tint: rgba(217, 119, 6, 0.12);
-    --accent-danger-tint: rgba(220, 38, 38, 0.12);
-    --accent-info-tint: rgba(2, 132, 199, 0.12);
-    --accent-purple-tint: rgba(124, 58, 237, 0.12);
+    --accent-primary: #8a4b40;
+    --accent-success: #2f8f5e;
+    --accent-warning: #8f5b12;
+    --accent-danger: #c2412d;
+    --accent-info: #3c6f8f;
+    --accent-purple: #6d4fa8;
+    --accent-success-tint: rgba(47, 143, 94, 0.12);
+    --accent-warning-tint: rgba(143, 91, 18, 0.12);
+    --accent-danger-tint: rgba(194, 65, 45, 0.12);
+    --accent-info-tint: rgba(60, 111, 143, 0.12);
+    --accent-purple-tint: rgba(109, 79, 168, 0.12);
     --border-color: hsl(var(--border));
     --btn-secondary-bg: hsl(var(--secondary));
     --btn-secondary-hover: hsl(var(--muted));
     --btn-secondary-text: hsl(var(--secondary-foreground));
-    --bg-main: #e8edf2;
-    --bg-hover: #dde3ea;
+    --bg-main: #f6efec;
+    --bg-hover: #ece0db;
 
     /* Agenda Colors - Light Mode. A borda usa a mesma cor da fonte interna
        do card (sobretom escuro sobre o fundo pastel). */
@@ -317,27 +317,27 @@
 [data-theme="light"] .sb-flyout,
 .sb-flyout {
     color-scheme: dark;
-    --background: 230 12% 10%;
-    --foreground: 230 15% 93%;
-    --card: 230 12% 10%;
-    --card-foreground: 230 15% 93%;
-    --popover: 230 12% 10%;
-    --popover-foreground: 230 10% 65%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 1%;
-    --secondary: 230 10% 14%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 230 10% 14%;
-    --muted-foreground: 230 10% 70%;
-    --accent: 230 9% 26%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 58%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 230 9% 18%;
-    --input: 230 9% 18%;
-    --ring: 230 60% 75%;
+    --background: 17 35% 8%;
+    --foreground: 20 37% 92%;
+    --card: 17 27% 10%;
+    --card-foreground: 20 37% 92%;
+    --popover: 16 26% 11%;
+    --popover-foreground: 17 17% 68%;
+    --primary: 20 37% 95%;
+    --primary-foreground: 14 41% 10%;
+    --secondary: 17 25% 14%;
+    --secondary-foreground: 20 37% 92%;
+    --muted: 17 25% 14%;
+    --muted-foreground: 17 17% 68%;
+    --accent: 16 24% 19%;
+    --accent-foreground: 20 37% 95%;
+    --destructive: 7 75% 64%;
+    --destructive-foreground: 20 37% 97%;
+    --border: 16 28% 16%;
+    --input: 17 27% 18%;
+    --ring: 7 28% 50%;
 
-    --bg-dark: hsl(230, 12%, 9%);
+    --bg-dark: hsl(16, 35%, 6%);
     --dash-funnel-sep: var(--bg-dark);
     --bg-agenda: hsl(var(--background));
     --agenda-header-bg: hsl(var(--muted));
@@ -345,7 +345,7 @@
     --bg-column: hsl(var(--muted));
     --text-main: hsl(var(--foreground));
     --text-muted: hsl(var(--muted-foreground));
-    --header-bg: hsl(230, 12%, 12%);
+    --header-bg: hsl(14, 45%, 5%);
     --header-text: hsl(var(--foreground));
     --header-btn-bg: transparent;
     --header-btn-hover: hsl(var(--accent));
@@ -353,22 +353,22 @@
     --nav-active-bg: hsl(var(--accent));
     --nav-active-border: hsl(var(--border));
     --nav-arrow: hsl(var(--muted-foreground));
-    --sb-card-bg: hsl(230, 12%, 6%);
+    --sb-card-bg: hsl(14, 45%, 3.5%);
     --sb-danger: hsl(var(--destructive));
 
-    --accent-primary: #E03720;
-    --accent-success: #10b981;
-    --accent-warning: #fbbf24;
-    --accent-danger: #f87171;
-    --accent-info: #38bdf8;
-    --accent-purple: #a78bfa;
-    --accent-success-tint: rgba(16, 185, 129, 0.12);
-    --accent-warning-tint: rgba(251, 191, 36, 0.12);
-    --accent-danger-tint: rgba(248, 113, 113, 0.12);
-    --accent-info-tint: rgba(56, 189, 248, 0.12);
-    --accent-purple-tint: rgba(167, 139, 250, 0.12);
-    --bg-main: hsl(230, 12%, 10%);
-    --bg-hover: hsl(230, 9%, 16%);
+    --accent-primary: #a3655d;
+    --accent-success: #5fb88a;
+    --accent-warning: #e3a857;
+    --accent-danger: #e8705f;
+    --accent-info: #8fb0c8;
+    --accent-purple: #b49fd6;
+    --accent-success-tint: rgba(95, 184, 138, 0.13);
+    --accent-warning-tint: rgba(227, 168, 87, 0.13);
+    --accent-danger-tint: rgba(232, 112, 95, 0.13);
+    --accent-info-tint: rgba(143, 176, 200, 0.13);
+    --accent-purple-tint: rgba(180, 159, 214, 0.13);
+    --bg-main: hsl(17, 35%, 8%);
+    --bg-hover: hsl(16, 26%, 14%);
     --border-color: hsl(var(--border));
     --btn-secondary-bg: hsl(var(--secondary));
     --btn-secondary-hover: hsl(var(--muted));
@@ -952,7 +952,7 @@ nav.tabs-container.sb-nav {
     font-size: 15px;
     width: 16px;
     text-align: center;
-    color: hsl(230, 8%, 40%);
+    color: hsl(17, 14%, 54%);
     flex-shrink: 0;
     transition: color 0.12s ease;
 }
@@ -1004,7 +1004,7 @@ nav.tabs-container.sb-nav {
 .sb-section-label {
     font-size: 10.5px;
     letter-spacing: 0.07em;
-    color: hsl(230, 8%, 36%);
+    color: hsl(17, 15%, 58%);
     padding: 0 10px;
     margin: 20px 0 4px;
 }
@@ -1040,7 +1040,7 @@ nav.tabs-container.sb-nav {
 
 /* Bottom divider — uses the new tinted neutral */
 .sb-bottom {
-    border-top-color: hsl(230, 9%, 14%);
+    border-top-color: hsl(16, 28%, 16%);
 }
 
 /* Flyout polish — better shadow and color alignment */
@@ -1922,7 +1922,7 @@ th {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--accent-primary), #711100);
+    background: var(--accent-primary);
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -3740,7 +3740,7 @@ select.form-control option,
     --adp-day-name-color: var(--text-muted);
     --adp-nav-arrow-color: var(--text-muted);
     --adp-color-selected: #fff;
-    --adp-pointer-bg-color: hsl(230, 12%, 9%);
+    --adp-pointer-bg-color: hsl(16, 35%, 6%);
     box-shadow: none !important;
     border: 1px solid var(--border-color) !important;
     font-family: inherit;
@@ -3867,7 +3867,7 @@ select.form-control option,
 }
 
 .air-datepicker--pointer::after {
-    background: hsl(230, 12%, 9%) !important;
+    background: hsl(16, 35%, 6%) !important;
     border-color: var(--border-color) !important;
 }
 
@@ -4150,7 +4150,7 @@ select.form-control option,
 .column-add-card-btn:hover {
     background: rgba(255, 255, 255, 0.09);
     color: var(--text-main);
-    border-color: var(--accent-primary, #E03720);
+    border-color: var(--accent-primary);
 }
 
 /* Cards - Premium Clean Theme */
@@ -6345,12 +6345,12 @@ body.is-chat-resizing #chat-lead-panel {
     opacity: 0.5;
 }
 .btn-primary {
-    background-color: hsl(var(--primary)) !important;
-    color: hsl(var(--primary-foreground)) !important;
+    background-color: var(--accent-primary) !important;
+    color: #fff !important;
     box-shadow: none;
 }
 .btn-primary:hover {
-    background-color: hsl(var(--primary) / 0.9) !important;
+    background-color: color-mix(in srgb, var(--accent-primary) 88%, white) !important;
 }
 .btn-secondary {
     background-color: hsl(var(--secondary)) !important;
@@ -6464,7 +6464,7 @@ body:has(#login-overlay.active) header { display: none; }
     width: 2.35rem;
     height: 2.35rem;
     border-radius: 11px;
-    background: linear-gradient(150deg, var(--accent-primary), #711100);
+    background: var(--accent-primary);
     color: #fff;
     font-size: 1.05rem;
     box-shadow: 0 8px 20px -8px color-mix(in srgb, var(--accent-primary) 65%, transparent);
@@ -6591,7 +6591,7 @@ body:has(#login-overlay.active) header { display: none; }
 .auth-btn-submit {
     position: relative;
     margin-top: 0.35rem;
-    background: linear-gradient(180deg, var(--accent-primary), #711100);
+    background: var(--accent-primary);
     color: #fff;
     height: 2.85rem;
     width: 100%;
@@ -9590,7 +9590,7 @@ h1, h2,
 }
 
 .auth-wordmark {
-    color: #E03720;
+    color: var(--accent-primary);
     font-weight: 800;
 }
 
@@ -10312,3 +10312,348 @@ textarea.sched-input { resize: vertical; min-height: 84px; line-height: 1.45; }
 /* Agendamento: puxar dados do paciente da conversa (IA) */
 .ag-extrair { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: -0.25rem 0 1rem; }
 .ag-extrair span { font-size: 0.8rem; color: var(--text-muted); }
+
+/* ============================================================================
+   NATUCLINIC · LIVRO DE RECEPÇÃO
+   O CRM como o livro de recepção da clínica: o menu lateral é a capa de couro,
+   as listas são páginas pautadas e a fita rosé marca onde a pessoa está.
+   O livro vive na cor, na pauta e na fita, nunca em textura imitando couro.
+   - O rosé (--accent-primary) só aparece na ação principal e no item ativo.
+   - Horas, contagens e esperas em algarismos tabulares.
+   - Espera em três níveis fixos (folga / atenção / urgente), sempre no mesmo lugar.
+   - Um só movimento: --nc-dur com --nc-ease em tudo que anima.
+   A Agenda fica de fora: herda as cores, mas nenhuma regra daqui mexe nela.
+   ============================================================================ */
+:root {
+    --nc-foil: #ffc2c2;
+    --nc-serif: 'Playfair Display', Georgia, 'Times New Roman', serif;
+    --nc-sans: 'Aspekta', 'Schibsted Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --nc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --nc-dur: 180ms;
+    --nc-bubble-out: #5c3229;
+    --nc-bubble-out-text: #fbf1ee;
+    --nc-shadow: 0 1px 2px rgba(10, 4, 2, 0.35), 0 6px 18px -10px rgba(10, 4, 2, 0.55);
+}
+[data-theme="light"] {
+    --nc-foil: #4c261a;
+    --nc-bubble-out: #f1ddd7;
+    --nc-bubble-out-text: #2b1610;
+    --nc-shadow: 0 1px 2px rgba(76, 38, 26, 0.08), 0 6px 18px -10px rgba(76, 38, 26, 0.22);
+}
+/* Menu e login continuam escuros no modo claro: a fita volta a ser rosa. */
+[data-theme="light"] header,
+[data-theme="light"] #login-overlay,
+[data-theme="light"] .sb-flyout { --nc-foil: #ffc2c2; }
+
+/* ---- Superfícies do navegador ---- */
+::selection { background: color-mix(in srgb, var(--accent-primary) 42%, transparent); color: inherit; }
+html { accent-color: var(--accent-primary); caret-color: var(--accent-primary); }
+* { scrollbar-color: hsl(var(--accent)) transparent; }
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+/* ---- Títulos correntes: a serifa da marca só nos títulos de tela e de janela ---- */
+h1, h2,
+.auth-title,
+.modal h2,
+.orcx-head h2, .lnx-head h2 {
+    font-family: var(--nc-serif);
+    font-weight: 600;
+    letter-spacing: -0.005em;
+}
+.agx-head h2,
+.column-title { font-family: var(--nc-sans); }
+
+/* ---- Algarismos tabulares onde há hora, contagem ou espera ---- */
+.chat-row__time, .chat-row__unread, .wa-janela, .chat-bubble-time,
+.column-count, .chat-inbox-tab-badge, .tab-btn .badge, .nav-badge {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Capa: menu lateral e fita marcadora ---- */
+.sb-nav .tab-btn {
+    transition: background-color var(--nc-dur) var(--nc-ease), color var(--nc-dur) var(--nc-ease);
+}
+.sb-nav .tab-btn.active {
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent) !important;
+    color: var(--nc-foil) !important;
+    box-shadow: none !important;
+}
+.sb-nav .tab-btn.active i { color: var(--nc-foil) !important; }
+/* A fita: um marcador de livro preso na borda da capa, com o corte em V embaixo. */
+.sb-nav .tab-btn.active::before {
+    content: "";
+    position: absolute;
+    left: -11px;
+    top: -4px;
+    width: 6px;
+    height: calc(100% + 10px);
+    background: var(--accent-primary);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% calc(100% - 6px), 0 100%);
+    pointer-events: none;
+}
+
+/* ---- Botões: o rosé sólido é só da ação principal ---- */
+.btn-primary,
+.auth-btn-submit {
+    background: var(--accent-primary);
+    color: #fff;
+    box-shadow: var(--nc-shadow);
+    transition: filter var(--nc-dur) var(--nc-ease), transform var(--nc-dur) var(--nc-ease);
+}
+.btn-primary:hover,
+.auth-btn-submit:hover { filter: brightness(1.08); }
+.btn-primary:active,
+.auth-btn-submit:active { transform: translateY(1px); }
+
+/* Cabeçalho da conversa: ferramentas no mesmo tom; nenhuma disputa por atenção. */
+.copilot-btn,
+.copilot-btn--purple,
+.copilot-btn--warning,
+.copilot-btn--danger,
+.copilot-btn--success {
+    background: transparent;
+    color: var(--text-main);
+    border: 1px solid hsl(var(--border));
+    filter: none;
+}
+.copilot-btn i:first-child,
+.copilot-btn--purple i:first-child,
+.copilot-btn--warning i:first-child,
+.copilot-btn--danger i:first-child,
+.copilot-btn--success i:first-child { color: var(--text-muted); }
+.copilot-btn:hover,
+.copilot-btn--purple:hover,
+.copilot-btn--warning:hover,
+.copilot-btn--danger:hover,
+.copilot-btn--success:hover {
+    background: hsl(var(--accent));
+    border-color: hsl(var(--accent));
+    filter: none;
+}
+.copilot-btn:hover i:first-child { color: var(--text-main); }
+.copilot-btn--success::before { display: none; }
+.copilot-btn--success i:first-child { color: var(--accent-success); }
+
+/* ---- Página pautada: lista de conversas ---- */
+.chat-day-divider {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0.5rem 1rem 0.4rem;
+    background: hsl(var(--background));
+    border-bottom: 1px solid hsl(var(--border));
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.chat-row {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.8rem 1rem;
+    border-bottom: 1px solid hsl(var(--border));
+    cursor: pointer;
+    transition: background-color var(--nc-dur) var(--nc-ease);
+}
+.chat-row:hover { background: hsl(var(--secondary)); }
+.chat-row.is-active { background: color-mix(in srgb, var(--accent-primary) 14%, hsl(var(--card))); }
+.chat-row.is-selected { background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+.chat-row.is-archived { opacity: 0.6; }
+.chat-row__body { flex: 1; min-width: 0; display: grid; gap: 0.2rem; }
+.chat-row__top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.chat-row__name { display: flex; align-items: center; gap: 0.35rem; min-width: 0; overflow: hidden; }
+.chat-row__name strong {
+    color: var(--text-main);
+    font-size: 0.95rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-row.has-unread .chat-row__name strong { font-weight: 700; }
+.chat-row__pin { font-size: 0.68rem; color: var(--text-muted); transform: rotate(45deg); flex-shrink: 0; }
+.chat-row__meta { display: flex; align-items: center; flex-shrink: 0; }
+.chat-row__time { font-size: 0.72rem; color: var(--text-muted); }
+.chat-row.has-unread .chat-row__time { color: var(--accent-success); font-weight: 600; }
+.chat-row__line { display: flex; align-items: center; gap: 0.5rem; }
+.chat-row__preview {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.84rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-row.has-unread .chat-row__preview { color: var(--text-main); }
+.chat-row__draft { color: var(--accent-danger); font-weight: 600; }
+.chat-row__unread {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--accent-success);
+    color: #10140f;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.chat-row__unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent-success); flex-shrink: 0; }
+.chat-row__tags { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; margin-top: 0.15rem; }
+
+/* Responsável e janela de 24h: texto quieto; só vira selo quando pede ação. */
+.chat-owner {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.chat-owner.is-mine { color: var(--text-main); }
+.chat-owner.is-none { font-style: italic; }
+.chat-owner i { font-size: 0.68rem; }
+.wa-janela {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.wa-janela i { font-size: 0.62rem; }
+.wa-janela--atencao { color: var(--accent-warning); font-weight: 600; }
+.wa-janela--urgente {
+    color: var(--accent-danger);
+    font-weight: 700;
+    background: var(--accent-danger-tint);
+    padding: 0.08rem 0.45rem;
+    border-radius: 999px;
+}
+.chat-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--accent-warning);
+    white-space: nowrap;
+}
+.chat-lock i { font-size: 0.6rem; }
+.chat-chip--bloqueado {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.08rem 0.5rem;
+    border-radius: 999px;
+    background: var(--accent-danger-tint);
+    color: var(--accent-danger);
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+
+/* Estados do atendimento: selos com fundo só pra quem precisa de alguém agora. */
+.chat-badge-state {
+    font-size: 0.68rem;
+    padding: 0.08rem 0.5rem;
+    border: none;
+    animation: none;
+}
+.chat-badge-state--waiting { background: var(--accent-warning-tint); color: var(--accent-warning); }
+.chat-badge-state--hot { background: color-mix(in srgb, var(--accent-primary) 20%, transparent); color: var(--nc-foil); }
+.chat-badge-state--ai { background: var(--accent-purple-tint); color: var(--accent-purple); }
+
+/* Filtros e abas da caixa de entrada */
+.chat-filter-chip { background: transparent; }
+.chat-filter-chip.active {
+    background: hsl(var(--accent));
+    border-color: hsl(var(--accent));
+    color: var(--text-main);
+}
+.chat-inbox-tabs { background: hsl(var(--secondary)); border-color: hsl(var(--border)); }
+.chat-inbox-tab.active[data-inbox="humano"],
+.chat-inbox-tab.active[data-inbox="ia"],
+.chat-inbox-tab.active[data-inbox="todas"] {
+    background: hsl(var(--card));
+    color: var(--text-main);
+    border-color: hsl(var(--border));
+    box-shadow: var(--nc-shadow);
+}
+
+/* ---- Conversa aberta: a página da direita ---- */
+.chat-bubble-out {
+    background: var(--nc-bubble-out);
+    color: var(--nc-bubble-out-text);
+}
+.chat-bubble-out .chat-bubble-time { color: color-mix(in srgb, var(--nc-bubble-out-text) 70%, transparent); }
+.chat-bubble-in {
+    background: hsl(var(--card));
+    border-color: hsl(var(--border));
+}
+
+/* ---- Kanban: cada lead é uma ficha da página ---- */
+.card {
+    background: hsl(var(--card)) !important;
+    border: 1px solid hsl(var(--border)) !important;
+    border-radius: 10px !important;
+    color: var(--text-main) !important;
+    box-shadow: var(--nc-shadow) !important;
+    transition: border-color var(--nc-dur) var(--nc-ease), transform var(--nc-dur) var(--nc-ease);
+}
+.card:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, hsl(var(--border))) !important;
+    transform: translateY(-1px);
+}
+.card { gap: 0.6rem; }
+
+/* Enviar é a ação principal da conversa. */
+.chat-input-send-btn { color: var(--accent-primary); }
+.chat-input-send-btn:hover { background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+
+/* ---- Dashboard: os indicadores falam pelo número; ícone e rótulo ficam quietos ---- */
+.dash-kpi-card { background: hsl(var(--card)) !important; border-color: hsl(var(--border)) !important; }
+.dash-kpi-card div[style*="padding: 0.6rem"] { background: hsl(var(--secondary)) !important; color: var(--text-muted) !important; }
+.dash-kpi-card span[style*="border-radius: 20px"] { color: var(--text-muted) !important; background: transparent !important; }
+
+/* ---- Revisão: capa mais escura que a página, com lombada ---- */
+header { border-right: 1px solid hsl(16 28% 14%); }
+
+/* Espera do paciente: três níveis fixos (folga / atenção / urgente). */
+.chat-badge-state--waiting.is-folga { background: transparent; color: var(--text-muted); padding-left: 0; }
+.chat-badge-state--waiting.is-atencao { background: var(--accent-warning-tint); color: var(--accent-warning); }
+.chat-badge-state--waiting.is-urgente { background: var(--accent-danger-tint); color: var(--accent-danger); }
+
+/* A janela de 24h tem lugar fixo: sempre encostada à direita da linha de estado. */
+.chat-row__tags .wa-janela { margin-left: auto; }
+
+/* Filtros: no máximo três atalhos visíveis; "Meus atendimentos" e "Não lidos" ficam no menu ⋮
+   (o atalho só aparece quando é o filtro ativo). */
+#chat-filter-chips .chat-filter-chip[data-filter="mine"]:not(.active),
+#chat-filter-chips .chat-filter-chip[data-filter="unread"]:not(.active) { display: none; }
+.chat-filter-chip i { color: var(--text-muted); }
+
+/* Verde só pra mensagem não lida. */
+.chat-inbox-tab-badge { background: hsl(var(--accent)); color: var(--text-main); }
+.chat-agent-switch-btn.active.is-human {
+    background: hsl(var(--accent));
+    color: var(--text-main);
+    border-color: hsl(var(--border));
+    box-shadow: none;
+}
+.copilot-btn--success i:first-child { color: var(--text-muted); }
+
+/* A janela de 24h nunca usa preenchimento: o fundo colorido é só da espera do paciente.
+   Janela perto de fechar = contorno, pra não competir com "Aguardando 1h42". */
+.wa-janela--urgente { background: transparent; border: 1px solid color-mix(in srgb, var(--accent-danger) 55%, transparent); padding: 0.02rem 0.4rem; }
