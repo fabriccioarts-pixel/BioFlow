@@ -155,3 +155,12 @@ export const LIQUID_BLUE = {
   color13: '#1403DE', color14: '#B6BAF6', color15: '#C1BEEB', color16: '#290ECB',
   color17: '#3F4CC0'
 };
+
+// Mesma esfera nos tons da Natuclinic: espresso, rosé e rosa claro no lugar do azul.
+export const LIQUID_ROSA = {
+  color1: '#FFFFFF', color2: '#6B2F25', color3: '#D7A9A1', color4: '#FFFBFA',
+  color5: '#FDF6F4', color6: '#E8C8C2', color7: '#5A2219', color8: '#4C261A',
+  color9: '#A3655D', color10: '#C48B82', color11: '#3B1A12', color12: '#EFD9D5',
+  color13: '#5C2A20', color14: '#E3BDB6', color15: '#F0D8D3', color16: '#6E3328',
+  color17: '#8A4B40'
+};

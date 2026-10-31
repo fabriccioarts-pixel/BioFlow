@@ -1297,9 +1297,9 @@ let _kanbanTabInitialized = false;
 const DEFAULT_PIPELINE_ID = 'principal';
 const PIPELINE_SYSTEM_IDS = ['col-entrada', 'col-contatado', 'col-orcado', 'col-agendado', 'col-ganho', 'col-perdido'];
 const DEFAULT_PIPELINE_STAGES = [
-    { id: 'col-entrada',   nome: 'Entrada',   cor: '#64748b', icone: 'fa-solid fa-inbox' },
+    { id: 'col-entrada',   nome: 'Entrada',   cor: '#8c7b74', icone: 'fa-solid fa-inbox' },
     { id: 'col-contatado', nome: 'Contatado', cor: '#fbbf24', icone: 'fa-brands fa-whatsapp' },
-    { id: 'col-orcado',    nome: 'Orçado',    cor: '#E03720', icone: 'fa-solid fa-file-invoice-dollar' },
+    { id: 'col-orcado',    nome: 'Orçado',    cor: '#a3655d', icone: 'fa-solid fa-file-invoice-dollar' },
     { id: 'col-agendado',  nome: 'Agendado',  cor: '#2dd4bf', icone: 'fa-solid fa-calendar-check' },
     { id: 'col-ganho',     nome: 'Ganho',     cor: '#10b981', icone: 'fa-solid fa-trophy' },
     { id: 'col-perdido',   nome: 'Follow Up', cor: '#fb923c', icone: 'fa-solid fa-arrow-rotate-left' },
@@ -2076,8 +2076,9 @@ procedimentoName = found;
 }
 }
 if (!procedimentoName) {
-procedimentoName = 'Procedimento a Definir';
+procedimentoName = 'Procedimento a definir';
 }
+const temProcedimento = procedimentoName !== 'Procedimento a definir';
 procedimentoName = escapeHtml(procedimentoName);
 
 // 2. Tempo de Inatividade / Idade do Lead
@@ -2160,22 +2161,18 @@ card.innerHTML = `
 ${avatarHTML}
 <div style="overflow: hidden; flex: 1; min-width: 0;">
 <div class="card-title" title="${escapeHtml(lead.nome)}">${escapeHtml(lead.nome)}</div>
-<div style="font-size: 0.8rem; font-weight: 500; color: var(--accent-primary); margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px;"></i> ${procedimentoName}</div>
+<div style="font-size: 0.8rem; font-weight: 500; color: var(--text-muted); margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${temProcedimento ? '<i class="fa-solid fa-spa" style="font-size: 0.72rem; margin-right: 4px; color: var(--accent-primary);"></i> ' : ''}${procedimentoName}</div>
 </div>
 </div>
 
-<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.35rem; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 0.45rem;">
-<div style="display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted); font-size: 0.8rem;">
-${metadataIconsHTML}
-</div>
-<span style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; font-weight: 500;" title="Tempo desde a entrada"><i class="fa-regular fa-clock" style="font-size: 0.7rem;"></i> ${daysSince}</span>
-</div>
+${metadataIconsHTML.trim() ? `<div style="display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted); font-size: 0.8rem;">${metadataIconsHTML}</div>` : ''}
 
-<div style="display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.4rem; align-items: center;">
+<div style="display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center;">
 ${origemBadgeHTML}
 ${ownerTag}
 ${valorBadgeHTML}
 ${tagsBadges}
+<span style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; font-weight: 500; font-variant-numeric: tabular-nums;" title="Tempo desde a entrada"><i class="fa-regular fa-clock" style="font-size: 0.7rem;"></i> ${daysSince}</span>
 </div>
 `;
 col.appendChild(card);
@@ -4382,7 +4379,7 @@ function switchTab(tabId) {
         cerebro: 'Segundo Cérebro',
         historico: 'Financeiro',
     };
-    if (tabTitles[tabId]) document.title = 'BioFlow — ' + tabTitles[tabId];
+    if (tabTitles[tabId]) document.title = 'Natuclinic CRM · ' + tabTitles[tabId];
 
     if (tabId === 'historico') {
         if (!window.location.pathname.includes('historico.html')) {
@@ -8543,10 +8540,14 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
         return v || fallback;
     };
-    const accent = cssVar('--accent-primary', '#E03720');
+    const accent = cssVar('--accent-primary', '#a3655d');
+    // Preenchimento em degradê da própria cor de destaque, pra seguir o tema.
+    const accentRgb = /^#[0-9a-f]{6}$/i.test(accent)
+        ? [1, 3, 5].map(i => parseInt(accent.slice(i, i + 2), 16)).join(',')
+        : '163,101,93';
     const accentFill = isDark
-        ? ['rgba(224,55,32,0.38)', 'rgba(224,55,32,0.08)', 'rgba(224,55,32,0)']
-        : ['rgba(224,55,32,0.22)', 'rgba(224,55,32,0.05)', 'rgba(224,55,32,0)'];
+        ? [`rgba(${accentRgb},0.38)`, `rgba(${accentRgb},0.08)`, `rgba(${accentRgb},0)`]
+        : [`rgba(${accentRgb},0.22)`, `rgba(${accentRgb},0.05)`, `rgba(${accentRgb},0)`];
     // Alternativa textual dos gráficos <canvas> — leitor de tela não lê pixels.
     const setChartAria = (id, label) => {
         const c = document.getElementById(id);
@@ -8696,7 +8697,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
                 return `<div style="display:flex;align-items:center;gap:0.75rem;">
                     <span style="flex:0 0 78px;font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">${d.label}</span>
                     <div style="flex:1;height:20px;background:var(--bg-hover);border-radius:6px;overflow:hidden;">
-                        <div style="width:${Math.max(pct,2)}%;height:100%;background:linear-gradient(90deg,#f3836f,#E03720);"></div>
+                        <div style="width:${Math.max(pct,2)}%;height:100%;background:linear-gradient(90deg,#e3b3ab,#a3655d);"></div>
                     </div>
                     <span style="flex:0 0 auto;min-width:3ch;text-align:right;font-size:0.85rem;font-weight:700;color:var(--text-main);">${formatValue(d.value)}</span>
                 </div>`;
@@ -8707,8 +8708,8 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
         let svgHtml = `<svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="position: absolute; top: 0; left: 0; z-index: 1;">
             <defs>
                 <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%"   stop-color="#f3836f"/>
-                    <stop offset="100%" stop-color="#E03720"/>
+                    <stop offset="0%"   stop-color="#e3b3ab"/>
+                    <stop offset="100%" stop-color="#a3655d"/>
                 </linearGradient>
             </defs>`;
         
@@ -8801,7 +8802,7 @@ function renderCharts(origemMap = {}, isInPeriod = () => true) {
     // Origem Doughnut Chart
     const origemLabels = Object.keys(origemMap);
     const origemValues = Object.values(origemMap);
-    const origemColors = ['#E03720', '#f59e0b', '#10b981', '#2dd4bf', '#711100', '#fb923c', '#f472b6'];
+    const origemColors = ['#a3655d', '#e3a857', '#5fb88a', '#8fb0c8', '#6b3b32', '#d9a07a', '#b49fd6'];
 
     const ctxOrigem = document.getElementById('origemChart');
     if (ctxOrigem) {

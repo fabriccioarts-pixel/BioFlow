@@ -1,14 +1,16 @@
 {
-  "name": "Gonecta",
-  "short_name": "Gonecta",
-  "description": "CRM de atendimento, WhatsApp e funil de leads da clínica.",
+  "name": "Natuclinic CRM",
+  "short_name": "Natuclinic",
+  "description": "CRM de atendimento, WhatsApp e funil de leads da Natuclinic.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#E03720",
-  "theme_color": "#E03720",
+  "background_color": "#1a110d",
+  "theme_color": "#24140f",
   "icons": [
-    { "src": "/favicon.png", "sizes": "135x121", "type": "image/png", "purpose": "any" }
+    { "src": "/vendor/illustrations/favicon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/vendor/illustrations/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }
