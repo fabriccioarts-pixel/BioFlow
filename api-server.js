@@ -6925,6 +6925,11 @@ function broadcastLeadsUpdate(action = 'updated', leadId = null, extra = null) {
 }
 
 app.get('/api/kanban/events', (req, res) => {
+    // Na Vercel cada conexão SSE prende uma função aberta até o maxDuration (e o
+    // front reconecta logo em seguida) — era o maior gasto de cota do plano, e o
+    // evento nem chegava quando o webhook caía noutra instância. Lá o tempo real
+    // fica com o polling; 204 diz ao EventSource pra não reconectar.
+    if (process.env.VERCEL) return res.status(204).end();
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');

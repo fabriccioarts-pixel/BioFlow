@@ -610,6 +610,8 @@ function initKanbanSSE() {
     if (window._kanbanSSE) return;
     const es = new EventSource('/api/kanban/events');
     window._kanbanSSE = es;
+    let conectou = false;
+    es.onopen = () => { conectou = true; };
 
     es.onmessage = (e) => {
         try {
@@ -646,10 +648,13 @@ function initKanbanSSE() {
         } catch (_) {}
     };
 
+    // Caiu depois de conectar: reconecta rápido. Nem chegou a abrir (na Vercel o
+    // servidor responde 204 de propósito): tenta de novo só daqui a 5 min, pra não
+    // virar uma chamada à API a cada 10s por aba.
     es.onerror = () => {
         es.close();
         window._kanbanSSE = null;
-        setTimeout(initKanbanSSE, 10000);
+        setTimeout(initKanbanSSE, conectou ? 10000 : 5 * 60 * 1000);
     };
 }
 
@@ -4521,24 +4526,10 @@ function switchTab(tabId) {
         if (view) {
             view.style.display = 'flex';
             loadChats();
-            // Inicia polling se ainda não estiver rodando. A lista de conversas
-            // (loadChats) é a consulta mais cara do sistema — agora que mensagem
-            // nova chega por SSE (evento wa_message), o poll dela virou só rede
-            // de segurança e vai a ~90s. A conversa ABERTA (openChat refresh) é
-            // barata (filtra por telefone) e segue rápida, a cada 6s.
-            if (!window.chatPollingInterval) {
-                let chatTick = 0;
-                window.chatPollingInterval = setInterval(() => {
-                    if (document.getElementById('view-chat').style.display === 'none') return;
-                    chatTick++;
-                    if (window.currentActiveChat) {
-                        openChat(window.currentActiveChat.phone, window.currentActiveChat.name, true);
-                    }
-                    if (chatTick % 15 === 1) {
-                        loadChats(true);
-                    }
-                }, 6000);
-            }
+            if (typeof refreshChatPresence === 'function') refreshChatPresence();
+            // O refresh da conversa aberta e da lista fica só no startGlobalChatCheck
+            // (wa_chat_logic.js). Aqui havia um segundo loop de 6s repetindo o mesmo
+            // openChat — dobrava as chamadas à API com o chat aberto.
         }
     } else if (tabId === 'fluxos') {
         const view = document.getElementById('view-fluxos');
