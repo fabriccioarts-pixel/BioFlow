@@ -44,5 +44,3 @@ scratch_*.mjs
 
 # Windows: config de pasta
 desktop.ini
-
-.vercel
