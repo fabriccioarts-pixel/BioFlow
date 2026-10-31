@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=37">
+    <link rel="stylesheet" href="style.css?v=38">
     <script src="theme.js?v=7"></script>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" href="favicon.png">
@@ -432,6 +432,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                 onerror="this.remove()">
         </div>
         <nav class="tabs-container sb-nav">
+            <button class="tab-btn" onclick="switchTab('hoje')" id="tab-hoje" title="Hoje">
+                <i class="fa-regular fa-sun"></i> Hoje
+            </button>
             <button class="tab-btn" onclick="switchTab('kanban')" id="tab-kanban" style="position: relative;" title="CRM Vendas">
                 <i class="fa-solid fa-briefcase"></i> CRM Vendas
                 <span id="kanban-entrada-badge"
@@ -686,6 +689,53 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                 <button class="user-flyout-item danger" onclick="logout()">
                     <i class="fa-solid fa-right-from-bracket"></i> Sair
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- HOJE: a página do dia (abre por padrão) -->
+    <div class="view-section" id="view-hoje" style="display: none;">
+        <div class="hoje">
+            <div class="hoje-cabeca">
+                <div>
+                    <h1 class="hoje-dia-semana" id="hoje-dia-semana">Hoje</h1>
+                    <p class="hoje-data" id="hoje-data"></p>
+                </div>
+                <div class="hoje-acoes">
+                    <span class="hoje-meta" id="hoje-meta"></span>
+                    <button type="button" class="hoje-btn-texto" id="hoje-atualizar" onclick="atualizarResumoHoje()">
+                        <i class="fa-solid fa-rotate-right"></i> Atualizar resumo
+                    </button>
+                </div>
+            </div>
+
+            <div class="hoje-grade">
+                <div class="hoje-coluna">
+                    <section class="hoje-bloco" aria-labelledby="hoje-t-resumo">
+                        <h2 class="hoje-titulo" id="hoje-t-resumo">Para começar o dia</h2>
+                        <div id="hoje-resumo" class="hoje-resumo"><p class="hoje-vazio">Montando o dia…</p></div>
+                        <ol id="hoje-prioridades" class="hoje-prioridades"></ol>
+                    </section>
+                    <section class="hoje-bloco" aria-labelledby="hoje-t-relatorio">
+                        <h2 class="hoje-titulo" id="hoje-t-relatorio">Relatório resumido</h2>
+                        <dl id="hoje-relatorio" class="hoje-razao"></dl>
+                        <ul id="hoje-alertas" class="hoje-alertas"></ul>
+                    </section>
+                </div>
+                <div class="hoje-coluna">
+                    <section class="hoje-bloco" aria-labelledby="hoje-t-leads">
+                        <h2 class="hoje-titulo" id="hoje-t-leads">Leads</h2>
+                        <dl id="hoje-leads" class="hoje-razao"></dl>
+                    </section>
+                    <section class="hoje-bloco" aria-labelledby="hoje-t-data">
+                        <h2 class="hoje-titulo" id="hoje-t-data">Data comemorativa</h2>
+                        <div id="hoje-comemorativa"></div>
+                    </section>
+                    <section class="hoje-bloco" aria-labelledby="hoje-t-conteudo">
+                        <h2 class="hoje-titulo" id="hoje-t-conteudo">Conteúdo do dia</h2>
+                        <div id="hoje-conteudo"></div>
+                    </section>
+                </div>
             </div>
         </div>
     </div>
@@ -5288,8 +5338,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <!-- Scripts da Aplicação -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
-    <script src="wa_chat_logic.js?v=33"></script>
-    <script src="app.js?v=38"></script>
+    <script src="wa_chat_logic.js?v=34"></script>
+    <script src="app.js?v=39"></script>
+    <script src="hoje.js?v=1"></script>
     <script src="personalizacao.js?v=4"></script>
     <script src="flows.js?v=25"></script>
 

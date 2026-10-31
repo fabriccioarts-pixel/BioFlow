@@ -5,5 +5,11 @@
       "source": "/api/(.*)",
       "destination": "/api/index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/hoje/cron",
+      "schedule": "30 10 * * *"
+    }
   ]
 }

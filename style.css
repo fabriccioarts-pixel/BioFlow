@@ -10657,3 +10657,178 @@ header { border-right: 1px solid hsl(16 28% 14%); }
 /* A janela de 24h nunca usa preenchimento: o fundo colorido é só da espera do paciente.
    Janela perto de fechar = contorno, pra não competir com "Aguardando 1h42". */
 .wa-janela--urgente { background: transparent; border: 1px solid color-mix(in srgb, var(--accent-danger) 55%, transparent); padding: 0.02rem 0.4rem; }
+
+/* ============================================================================
+   HOJE — a página do dia. Uma folha do livro de recepção: o dia da semana como
+   título corrente, o resumo em texto corrido e os números como razão (rótulo,
+   pontilhado, valor tabular). Sem cartões: blocos separados por espaço e filete.
+   ============================================================================ */
+#view-hoje { flex-direction: column; min-height: 0; overflow-y: auto; background: var(--bg-main); }
+.hoje {
+    width: 100%;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 2.75rem 3rem 4rem;
+}
+.hoje-cabeca {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid hsl(var(--border));
+}
+.hoje-dia-semana {
+    font-size: 3.2rem;
+    line-height: 1;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text-main);
+}
+.hoje-data { margin-top: 0.6rem; font-size: 1.05rem; color: var(--text-muted); }
+.hoje-acoes { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
+.hoje-meta { font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.hoje-btn-texto {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--nc-dur) var(--nc-ease), border-color var(--nc-dur) var(--nc-ease);
+}
+.hoje-btn-texto i { color: var(--text-muted); }
+.hoje-btn-texto:hover { background: hsl(var(--accent)); border-color: hsl(var(--accent)); }
+.hoje-btn-texto:disabled { opacity: 0.55; cursor: default; }
+.hoje-btn-texto[hidden] { display: none; }
+
+.hoje-grade {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    gap: 3.5rem;
+    margin-top: 2.25rem;
+}
+.hoje-coluna { display: flex; flex-direction: column; gap: 2.75rem; min-width: 0; }
+.hoje-titulo {
+    font-family: var(--nc-sans);
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: var(--text-main);
+    margin-bottom: 0.9rem;
+}
+.hoje-resumo p {
+    font-size: 1.12rem;
+    line-height: 1.65;
+    color: var(--text-main);
+    max-width: 62ch;
+}
+.hoje-vazio { font-size: 0.92rem; line-height: 1.55; color: var(--text-muted); }
+.hoje-texto { font-size: 0.95rem; line-height: 1.6; color: var(--text-main); margin-top: 0.5rem; }
+
+/* Prioridades numeradas na margem, como itens de agenda. */
+.hoje-prioridades { list-style: none; counter-reset: prio; margin-top: 1.4rem; display: grid; gap: 0.15rem; }
+.hoje-prioridades:empty { display: none; }
+.hoje-prioridades li {
+    counter-increment: prio;
+    display: grid;
+    grid-template-columns: 2rem 1fr;
+    align-items: baseline;
+    padding: 0.6rem 0;
+    border-top: 1px solid hsl(var(--border));
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--text-main);
+}
+.hoje-prioridades li::before {
+    content: counter(prio, decimal-leading-zero);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+
+/* Razão: rótulo, pontilhado e valor tabular alinhado à direita. */
+.hoje-razao { display: grid; gap: 0.1rem; }
+.hoje-linha {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.42rem 0;
+    font-size: 0.92rem;
+}
+.hoje-linha dt { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hoje-linha::after { content: none; }
+.hoje-linha dd {
+    order: 3;
+    margin: 0;
+    color: var(--text-main);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.hoje-linha::before {
+    content: "";
+    order: 2;
+    flex: 1;
+    min-width: 1.5rem;
+    border-bottom: 1px dotted hsl(var(--border));
+    transform: translateY(-0.25rem);
+}
+.hoje-linha dt { order: 1; }
+.hoje-linha.is-destaque dd { font-size: 1.35rem; font-weight: 700; }
+.hoje-linha.is-destaque dt { color: var(--text-main); }
+.hoje-razao--compacta { margin-top: 1rem; }
+.hoje-razao--compacta .hoje-linha { font-size: 0.85rem; padding: 0.3rem 0; }
+
+.hoje-alertas { list-style: none; margin-top: 1rem; display: grid; gap: 0.4rem; }
+.hoje-alertas:empty { display: none; }
+.hoje-alertas li {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--accent-warning);
+    padding-left: 1.1rem;
+    position: relative;
+}
+.hoje-alertas li::before { content: "!"; position: absolute; left: 0; font-weight: 700; }
+
+.hoje-data-nome {
+    font-family: var(--nc-serif);
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-main);
+}
+.hoje-conteudo-tema { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 1rem; font-weight: 600; color: var(--text-main); }
+.hoje-formato {
+    padding: 0.12rem 0.55rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    color: var(--nc-foil);
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.hoje-legenda {
+    margin: 1rem 0 0.75rem;
+    padding: 0.9rem 1rem;
+    background: hsl(var(--secondary));
+    border-radius: 10px;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: var(--text-main);
+    white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+    .hoje { padding: 1.75rem 1.25rem 3rem; }
+    .hoje-grade { grid-template-columns: 1fr; gap: 2.5rem; }
+    .hoje-cabeca { flex-direction: column; align-items: flex-start; }
+    .hoje-acoes { justify-content: flex-start; }
+    .hoje-dia-semana { font-size: 2.5rem; }
+}

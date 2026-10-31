@@ -367,6 +367,9 @@ function initApp() {
         if (gotoTab && !openChatPhone && typeof switchTab === 'function') {
             switchTab(gotoTab);
             window.history.replaceState({}, document.title, window.location.pathname);
+        } else if (!openChatPhone && typeof switchTab === 'function') {
+            // Toda abertura do app começa pela página do dia.
+            switchTab('hoje');
         }
     } else {
         const overlay = document.getElementById('login-overlay');
@@ -4361,6 +4364,7 @@ function switchTab(tabId) {
     if (sbHeader) sbHeader.classList.remove('sb-flyout-open');
 
     const tabTitles = {
+        hoje: 'Hoje',
         kanban: 'CRM Vendas',
         agenda: 'Agenda Completa',
         chat: 'Atendimento',
@@ -4414,6 +4418,8 @@ function switchTab(tabId) {
         if (mainCampBtn) mainCampBtn.classList.add('active');
     }
     
+    const hojeView = document.getElementById('view-hoje');
+    if (hojeView) hojeView.style.display = 'none';
     document.getElementById('view-kanban').style.display = 'none';
     document.getElementById('view-agenda').style.display = 'none';
     const chatView = document.getElementById('view-chat');
@@ -4452,7 +4458,10 @@ function switchTab(tabId) {
         if(el) el.style.display = 'none';
     });
     
-    if(tabId === 'kanban') {
+    if (tabId === 'hoje') {
+        if (hojeView) hojeView.style.display = 'flex';
+        if (typeof carregarHoje === 'function') carregarHoje();
+    } else if(tabId === 'kanban') {
         document.getElementById('view-kanban').style.display = 'flex';
     } else if (tabId === 'dashboard') {
         const view = document.getElementById('view-dashboard');

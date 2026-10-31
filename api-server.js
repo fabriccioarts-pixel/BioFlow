@@ -231,7 +231,7 @@ async function migrateChatPhone(oldTo, newTo) {
 // Montado via app.use('/api', requireAuth) — dentro do middleware, req.path já vem
 // SEM o prefixo /api (o Express remove o trecho do mount point), por isso a lista
 // abaixo usa os caminhos relativos ao mount.
-const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick', '/webhooks/psp', '/gestor/briefing']);
+const PUBLIC_API_PATHS = new Set(['/login', '/ping', '/whatsapp/webhook', '/flow-tick', '/webhooks/psp', '/gestor/briefing', '/hoje/cron']);
 
 function requireAuth(req, res, next) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
@@ -11569,7 +11569,11 @@ app.all('/api/flow-tick', async (req, res) => {
         let gestor = { skipped: 'erro' };
         try { gestor = await gestorBriefingTick(); } catch (e) { console.error('Erro no briefing do gestor:', e); }
 
-        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, leadAds, kanbanRegras, waChats, gestor, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
+        // Resumo da página "Hoje" — uma vez por dia a partir das 7:30 (o cron da Vercel também chama).
+        let hoje = { skipped: 'erro' };
+        try { hoje = await hojeTick(); } catch (e) { console.error('Erro no resumo do dia:', e); }
+
+        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, leadAds, kanbanRegras, waChats, gestor, hoje, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
     } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
 });
 
@@ -13966,6 +13970,257 @@ app.get('/api/gestor/briefing', async (req, res) => {
     } catch (e) {
         console.error('[gestor] briefing:', e);
         res.status(500).json({ error: e.message });
+    }
+});
+
+// ==========================================
+// PÁGINA "HOJE" — o dia em uma página, com resumo do Gemini
+// ==========================================
+// Uma vez por dia, a partir das 7:30 (horário de Brasília), junta o briefing do
+// gestor, os números do funil e a data comemorativa do dia e pede ao Gemini um
+// resumo curto pra começar o dia, mais uma ideia de conteúdo. Fica gravado em
+// crm_settings 'hoje_resumo'. Quem gera: o cron da Vercel (vercel.json), o
+// /api/flow-tick (se o pinger estiver ligado) ou a primeira abertura da página
+// depois das 7:30 — o que vier primeiro. Os outros só leem.
+const HOJE_HORA_MIN = 7 * 60 + 30;
+const HOJE_MANUAL_INTERVALO_MS = 10 * 60 * 1000;
+
+// Datas fixas que a clínica pode usar em post (dia-mês). Móveis vêm de hojeDatasMoveis().
+const HOJE_DATAS_FIXAS = {
+    '01-01': 'Ano Novo',
+    '02-04': 'Dia Mundial do Câncer',
+    '03-04': 'Dia Mundial da Obesidade',
+    '03-08': 'Dia Internacional da Mulher',
+    '03-15': 'Dia do Consumidor',
+    '03-20': 'Dia Internacional da Felicidade',
+    '03-22': 'Dia Mundial da Água',
+    '04-07': 'Dia Mundial da Saúde',
+    '05-28': 'Dia Internacional de Luta pela Saúde da Mulher',
+    '05-31': 'Dia Mundial sem Tabaco',
+    '06-05': 'Dia Mundial do Meio Ambiente',
+    '06-12': 'Dia dos Namorados',
+    '07-20': 'Dia do Amigo',
+    '07-26': 'Dia dos Avós',
+    '08-08': 'Dia Nacional de Combate ao Colesterol',
+    '08-31': 'Dia do Nutricionista',
+    '09-01': 'Início do Setembro Amarelo',
+    '09-09': 'Dia da Beleza',
+    '09-15': 'Dia do Cliente',
+    '09-29': 'Dia Mundial do Coração',
+    '10-01': 'Início do Outubro Rosa',
+    '10-10': 'Dia Mundial da Saúde Mental',
+    '10-12': 'Dia das Crianças',
+    '10-15': 'Dia do Professor',
+    '10-16': 'Dia Mundial da Alimentação',
+    '10-18': 'Dia do Médico',
+    '10-31': 'Halloween',
+    '11-01': 'Início do Novembro Azul',
+    '11-14': 'Dia Mundial do Diabetes',
+    '11-20': 'Dia da Consciência Negra e Dia do Biomédico',
+    '12-25': 'Natal',
+    '12-31': 'Réveillon'
+};
+
+// Páscoa (algoritmo de Meeus), Carnaval, Dia das Mães, Dia dos Pais e Black Friday do ano.
+function hojeDatasMoveis(ano) {
+    const a = ano % 19, b = Math.floor(ano / 100), c = ano % 100, d = Math.floor(b / 4), e = b % 4;
+    const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mesPascoa = Math.floor((h + l - 7 * m + 114) / 31), diaPascoa = ((h + l - 7 * m + 114) % 31) + 1;
+    const iso = dt => dt.toISOString().slice(0, 10);
+    const pascoa = new Date(Date.UTC(ano, mesPascoa - 1, diaPascoa, 12));
+    const carnaval = new Date(pascoa); carnaval.setUTCDate(carnaval.getUTCDate() - 47);
+    // n-ésimo dia da semana (0 = domingo) de um mês.
+    const enesimo = (mes, diaSemana, n) => {
+        const dt = new Date(Date.UTC(ano, mes, 1, 12));
+        dt.setUTCDate(1 + ((diaSemana - dt.getUTCDay() + 7) % 7) + (n - 1) * 7);
+        return dt;
+    };
+    const blackFriday = enesimo(10, 4, 4); blackFriday.setUTCDate(blackFriday.getUTCDate() + 1);
+    return {
+        [iso(carnaval)]: 'Carnaval',
+        [iso(pascoa)]: 'Páscoa',
+        [iso(enesimo(4, 0, 2))]: 'Dia das Mães',
+        [iso(enesimo(7, 0, 2))]: 'Dia dos Pais',
+        [iso(blackFriday)]: 'Black Friday'
+    };
+}
+
+function hojeDataComemorativa(dia) {
+    const moveis = hojeDatasMoveis(Number(dia.slice(0, 4)));
+    return moveis[dia] || HOJE_DATAS_FIXAS[dia.slice(5)] || null;
+}
+
+// A de hoje (se houver) e as próximas em até 10 dias, pra dar tempo de preparar o post.
+function hojeDatasComemorativas(dia) {
+    const proximas = [];
+    for (let n = 1; n <= 10 && proximas.length < 3; n++) {
+        const d = gestorSomaDias(dia, n);
+        const nome = hojeDataComemorativa(d);
+        if (nome) proximas.push({ dia: d, nome, em_dias: n });
+    }
+    return { hoje: hojeDataComemorativa(dia), proximas };
+}
+
+function hojeMinutosSP() {
+    const [h, m] = new Date().toLocaleTimeString('en-GB', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).split(':').map(Number);
+    return h * 60 + m;
+}
+
+// Números do funil direto do banco: baratos, então a página também mostra eles ao vivo.
+async function hojeNumerosLeads(dia) {
+    const desdeHoje = gestorUtcDe(dia, 0);
+    const desdeOntem = gestorUtcDe(gestorSomaDias(dia, -1), 0);
+    const [tot, novos] = await Promise.all([
+        queryD1('SELECT COUNT(*) AS n FROM leads'),
+        queryD1('SELECT SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS hoje, SUM(CASE WHEN created_at >= ? AND created_at < ? THEN 1 ELSE 0 END) AS ontem FROM leads WHERE created_at >= ?',
+            [desdeHoje, desdeOntem, desdeHoje, desdeOntem])
+    ]);
+    return {
+        total: _num(tot && tot[0] && tot[0].n),
+        novos_hoje: _num(novos && novos[0] && novos[0].hoje),
+        novos_ontem: _num(novos && novos[0] && novos[0].ontem)
+    };
+}
+
+// Gemini em modo JSON. Mesmo modelo do copiloto.
+async function hojeGeminiJSON(systemPrompt, userText) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no servidor.');
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${COPILOT_MODEL}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+        body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: userText }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 4096, responseMimeType: 'application/json' }
+        })
+    });
+    const json = await r.json();
+    if (!r.ok) throw new Error(json.error ? json.error.message : 'Erro na API do Gemini');
+    const texto = (json.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '').trim();
+    const inicio = texto.indexOf('{'), fim = texto.lastIndexOf('}');
+    if (inicio < 0 || fim < inicio) throw new Error('O Gemini não devolveu o resumo no formato esperado.');
+    return JSON.parse(texto.slice(inicio, fim + 1));
+}
+
+const HOJE_PROMPT = `Você prepara o começo do dia da equipe da Natuclinic, clínica de estética e nutrição ortomolecular em Brasília/Taguatinga. Quem lê são as atendentes comerciais e o gestor, logo cedo, antes de abrir o WhatsApp.
+Escreva em português do Brasil, tom profissional e direto, sem exagero e sem emoji. Use só os números recebidos; nunca invente dado, nome de paciente ou procedimento que não esteja nos dados. Se um dado faltar, não comente a falta.
+Responda SOMENTE com um JSON neste formato:
+{
+  "resumo": "3 a 5 frases dizendo como o dia começa: leads que chegaram, conversas esperando, agenda e o que merece atenção primeiro",
+  "prioridades": ["até 4 ações concretas pra fazer hoje, em ordem, cada uma com no máximo 14 palavras"],
+  "comemorativa": "1 ou 2 frases com uma ideia de post ligada à data comemorativa de hoje, ou à próxima se hoje não tiver; string vazia se não houver nenhuma",
+  "conteudo": { "formato": "Reels, Carrossel, Stories ou Post", "tema": "tema curto", "ideia": "2 frases dizendo o que mostrar", "legenda": "legenda pronta de até 280 caracteres, com chamada para agendar avaliação pelo WhatsApp" }
+}`;
+
+async function hojeGerarResumo(origem) {
+    const dia = gestorDiaSP();
+    const [leads, comemorativas] = await Promise.all([hojeNumerosLeads(dia), hojeDatasComemorativas(dia)]);
+    let briefing = null, erroBriefing = null;
+    try { briefing = await gestorBriefing({ momento: 'manha' }); } catch (e) { erroBriefing = e.message; }
+
+    const n = (briefing && briefing.numeros) || {};
+    const dados = {
+        leads,
+        leads_noite: briefing ? briefing.leads_noite : null,
+        agenda_hoje: briefing && briefing.agenda ? briefing.agenda.total : null,
+        conversas_esperando: briefing ? briefing.conversas_esperando : null,
+        followups: briefing ? briefing.followups : null,
+        anuncios: briefing && briefing.meta_atualizada ? {
+            gasto_ontem: n.gasto, cpl_ontem: n.cpl, leads_crm_ontem: n.leads_crm,
+            gasto_semana: n.gasto_semana, cpl_semana: n.cpl_semana, melhor_campanha: n.melhor_campanha || null
+        } : null,
+        receita_mes: n.receita_mes == null ? null : n.receita_mes,
+        conversao_semana_pct: n.conversao_semana_pct == null ? null : n.conversao_semana_pct,
+        alertas: briefing ? briefing.alertas.slice(0, 4) : [],
+        comemorativas
+    };
+
+    let ia = null, erroIa = null;
+    try {
+        const diaSemana = new Date(`${dia}T12:00:00Z`).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+        ia = await hojeGeminiJSON(HOJE_PROMPT, `Hoje é ${diaSemana}.\nDados do dia (JSON):\n${JSON.stringify(dados)}\n\nPrioridades que o briefing do gestor já apontou:\n${briefing ? briefing.prioridades.slice(0, 6).join('\n') : '(sem briefing)'}`);
+    } catch (e) { erroIa = e.message; console.error('[hoje] Gemini:', e.message); }
+
+    const registro = { dia, gerado_em: new Date().toISOString(), origem, dados, ia, erro_ia: erroIa, erro_briefing: erroBriefing };
+    await queryD1("INSERT INTO crm_settings (key, value) VALUES ('hoje_resumo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(registro)]);
+    return registro;
+}
+
+async function hojeLerResumo() {
+    const r = await queryD1("SELECT value FROM crm_settings WHERE key = 'hoje_resumo'");
+    try { return r && r[0] && r[0].value ? JSON.parse(r[0].value) : null; } catch (e) { return null; }
+}
+
+// Trava de 2 minutos: só quem conseguir gravar o horário gera; os outros esperam o resultado.
+async function hojeTentarTravar() {
+    const agora = Date.now();
+    const trava = await queryD1Meta(
+        `INSERT INTO crm_settings (key, value) VALUES ('hoje_trava', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(crm_settings.value AS INTEGER) < ?`,
+        [String(agora), agora - 120000]
+    );
+    return !!(trava && trava.meta && trava.meta.changes);
+}
+
+// Gera o resumo de hoje se ainda não existe e já passou das 7:30. Devolve o registro (ou null).
+async function hojeGarantirResumo(origem, minimoMin = HOJE_HORA_MIN) {
+    const dia = gestorDiaSP();
+    const atual = await hojeLerResumo();
+    if (atual && atual.dia === dia) return { registro: atual };
+    if (hojeMinutosSP() < minimoMin) return { registro: null, antes_do_horario: true };
+    if (!(await hojeTentarTravar())) return { registro: null, gerando: true };
+    return { registro: await hojeGerarResumo(origem), gerado_agora: true };
+}
+
+async function hojeTick(origem = 'flow-tick', minimoMin = HOJE_HORA_MIN) {
+    const r = await hojeGarantirResumo(origem, minimoMin);
+    return r.gerado_agora ? { gerado: true } : { skipped: r.antes_do_horario ? 'antes das 7:30' : (r.gerando ? 'gerando' : 'já gerado') };
+}
+
+// A página: números ao vivo + o resumo do dia (gerado na hora se for a primeira abertura depois das 7:30).
+app.get('/api/hoje', async (req, res) => {
+    try {
+        const dia = gestorDiaSP();
+        const [r, leads] = await Promise.all([hojeGarantirResumo('abertura'), hojeNumerosLeads(dia)]);
+        res.json({
+            dia, agora_min: hojeMinutosSP(), hora_resumo: '07:30',
+            leads, comemorativas: hojeDatasComemorativas(dia),
+            resumo: r.registro, gerando: !!r.gerando, antes_do_horario: !!r.antes_do_horario
+        });
+    } catch (e) {
+        console.error('[hoje] GET:', e);
+        res.status(500).json({ error: 'Erro ao montar o dia.' });
+    }
+});
+
+// "Atualizar resumo" na página: gera de novo, no máximo a cada 10 minutos.
+app.post('/api/hoje/gerar', async (req, res) => {
+    try {
+        const atual = await hojeLerResumo();
+        if (atual && atual.dia === gestorDiaSP() && Date.now() - new Date(atual.gerado_em).getTime() < HOJE_MANUAL_INTERVALO_MS) {
+            return res.status(429).json({ error: 'O resumo foi atualizado há pouco. Tente de novo em alguns minutos.', resumo: atual });
+        }
+        if (!(await hojeTentarTravar())) return res.status(409).json({ error: 'O resumo já está sendo gerado. Aguarde alguns segundos.' });
+        res.json({ resumo: await hojeGerarResumo('manual') });
+    } catch (e) {
+        console.error('[hoje] gerar:', e);
+        res.status(500).json({ error: 'Erro ao gerar o resumo.' });
+    }
+});
+
+// Cron diário da Vercel (vercel.json, 10:30 UTC = 7:30 em Brasília). A Vercel manda
+// Authorization: Bearer CRON_SECRET. No plano gratuito o disparo cai em algum minuto
+// daquela hora, então aqui vale a partir das 7:00 pra não perder o dia.
+app.get('/api/hoje/cron', async (req, res) => {
+    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+    if (!process.env.CRON_SECRET || bearer !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Não autorizado.' });
+    try {
+        res.json(await hojeTick('cron', 7 * 60));
+    } catch (e) {
+        console.error('[hoje] cron:', e);
+        res.status(500).json({ error: 'Erro no resumo do dia.' });
     }
 });
 
