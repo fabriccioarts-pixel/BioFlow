@@ -14,6 +14,7 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import webpush from 'web-push';
+import { waitUntil } from '@vercel/functions';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -11494,20 +11495,45 @@ app.all('/api/flow-tick', async (req, res) => {
     })();
     if (!authed) return res.status(401).json({ error: 'Não autorizado.' });
 
+    const now = flowDbTime();
+
+    // Heartbeat: guarda quando o tick rodou. Abrir /api/flow-tick logado mostra
+    // "prev_run" = quando foi a última execução — se for ~2 min atrás, o pinger
+    // externo está vivo; se for null / horas atrás, o pinger parou.
+    let prevRun = null;
+    let ultimoResultado = null;
+    try {
+        const pr = await queryD1("SELECT key, value FROM crm_settings WHERE key IN ('flow_tick_last_run', 'flow_tick_last_result')");
+        for (const r of (pr || [])) {
+            if (r.key === 'flow_tick_last_run') prevRun = r.value;
+            if (r.key === 'flow_tick_last_result') { try { ultimoResultado = JSON.parse(r.value); } catch (e) {} }
+        }
+    } catch (e) {}
+    queryD1("INSERT INTO crm_settings (key, value) VALUES ('flow_tick_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [now]).catch(() => {});
+    const prevRunAgoSec = prevRun ? Math.round((Date.now() - (followupParseTs(prevRun)?.getTime() || Date.now())) / 1000) : null;
+
+    const tick = flowTickRun(now);
+
+    // ?wait=1 espera o tick terminar e devolve o resultado completo (diagnóstico).
+    if (req.query.wait === '1') {
+        const result = await tick;
+        return res.status(result.error ? 500 : 200).json({ ...result, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec });
+    }
+
+    // Padrão: responde na hora e o tick continua em segundo plano. O tick inteiro
+    // passa dos ~30s que o pinger externo (cron-job.org) espera, e cada timeout
+    // conta como falha — com falhas seguidas o cron-job.org desativa o job.
+    // waitUntil mantém a função da Vercel viva até o tick terminar.
+    waitUntil(tick);
+    res.json({ ok: true, em_segundo_plano: true, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, ultimo_resultado: ultimoResultado });
+});
+
+// O trabalho do tick em si. Nunca rejeita: erro vira { error } no resultado.
+// O resultado fica em crm_settings 'flow_tick_last_result' (aparece como
+// "ultimo_resultado" na resposta rápida do /api/flow-tick).
+async function flowTickRun(now) {
     try {
         const tickStart = Date.now();
-        const now = flowDbTime();
-
-        // Heartbeat: guarda quando o tick rodou. Abrir /api/flow-tick logado mostra
-        // "prev_run" = quando foi a última execução — se for ~1 min atrás, o pinger
-        // externo está vivo; se for null / horas atrás, o pinger parou.
-        let prevRun = null;
-        try {
-            const pr = await queryD1("SELECT value FROM crm_settings WHERE key = 'flow_tick_last_run'");
-            prevRun = pr && pr[0] ? pr[0].value : null;
-        } catch (e) {}
-        queryD1("INSERT INTO crm_settings (key, value) VALUES ('flow_tick_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [now]).catch(() => {});
-        const prevRunAgoSec = prevRun ? Math.round((Date.now() - (followupParseTs(prevRun)?.getTime() || Date.now())) / 1000) : null;
 
         const due = await queryD1(
             "SELECT * FROM crm_flow_runs WHERE status IN ('sleeping','waiting_reply') AND next_wake_at IS NOT NULL AND next_wake_at <= ? ORDER BY next_wake_at ASC LIMIT 25", [now]);
@@ -11573,9 +11599,14 @@ app.all('/api/flow-tick', async (req, res) => {
         let hoje = { skipped: 'erro' };
         try { hoje = await hojeTick(); } catch (e) { console.error('Erro no resumo do dia:', e); }
 
-        res.json({ processed, followup, programadas, lembretes, opps, insights, marketing, leadAds, kanbanRegras, waChats, gestor, hoje, prev_run: prevRun, prev_run_ago_sec: prevRunAgoSec, followup_ativo: (await followupGetConfig()).ativo });
-    } catch (e) { console.error('Erro no tick de fluxos:', e); res.status(500).json({ error: 'Erro interno.' }); }
-});
+        const result = { processed, followup, programadas, lembretes, opps, insights, marketing, leadAds, kanbanRegras, waChats, gestor, hoje, followup_ativo: (await followupGetConfig()).ativo };
+        try {
+            const resumo = JSON.stringify({ iniciado_em: now, duracao_ms: Date.now() - tickStart, ...result });
+            await queryD1("INSERT INTO crm_settings (key, value) VALUES ('flow_tick_last_result', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [resumo]);
+        } catch (e) { console.error('Erro ao salvar resultado do tick:', e); }
+        return result;
+    } catch (e) { console.error('Erro no tick de fluxos:', e); return { error: 'Erro interno.' }; }
+}
 
 // ==========================================
 // FOLLOW-UP AUTOMÁTICO (Fase 1 — cadência global)
