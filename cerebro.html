@@ -300,6 +300,7 @@ input::placeholder,textarea::placeholder{color:var(--text-3)}
 .em-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px;border-top:1px solid var(--line);flex-shrink:0}
 .em-saved-badge{font-size:12px;color:var(--ok);display:none;align-items:center;gap:6px}
 .em-saved-badge.show{display:flex}
+.em-saved-badge.err{color:var(--warn,#E8A23A);max-width:60%;line-height:1.35}
 
 /* ════════════════ PAINEL LATERAL (Assistente + Gerador) ════════════════ */
 body.dock-open #top-hud,
@@ -1093,11 +1094,15 @@ body.dock-open .view{right:var(--dock-w)}
   </div>
 </div>
 
-<!-- Arquivos de conhecimento da pasta, gerados por atualizar-conhecimento.bat -->
+<!-- Notas do Segundo Cérebro (banco do CRM) e o que foi editado/criado no mapa -->
 <script src="/api/brain/knowledge.js" onerror="window.KNOWLEDGE=[]"></script>
+<script src="/api/brain/graph.js" onerror="window.BRAIN_GRAPH=null"></script>
 <script>
 // ════════════════════════════════════════════════
-// KNOWLEDGE DATA  — adicione novos nós aqui
+// KNOWLEDGE DATA — nós de base, escritos à mão.
+// Não precisa mais adicionar nós aqui: cada nota nova e cada ficha "## " de
+// R_procedimentos viram nós sozinhas (ver MAPA VIVO), e o que for editado no
+// painel fica salvo no CRM.
 // ════════════════════════════════════════════════
 const NODES = [
   {id:'hub',    label:'Natuclinic',           type:'hub',    r:7,  desc:'Hub central',
@@ -1449,6 +1454,191 @@ const EDGE_COLOR=0x6B4A3E, EDGE_ACTIVE=0xD9B3A8, EDGE_MUTED=0x3A2820;
 const ic=(name,cls='')=>`<svg class="i ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 // ════════════════════════════════════════
+// MAPA VIVO — o grafo acompanha as notas
+// ════════════════════════════════════════
+// 1. Cada nota que ainda não tem nó vira um nó de arquivo, ligado ao centro e ao
+//    que ela cita (equipe, unidades, conceitos, procedimentos).
+// 2. Cada ficha "## " de R_procedimentos* que não bate com nenhum nó vira um
+//    procedimento, com os campos "**Campo:** valor" da ficha.
+// 3. Por cima vem o que foi editado/criado no painel (window.BRAIN_GRAPH, do banco).
+// Os ids dos nós automáticos saem do nome, então edições e ligações salvas
+// continuam valendo quando a página recarrega.
+const MV_R={hub:7,file:4,proc:2.6,concept:3,person:2.5,loc:3,ad:2.3};
+const MV_STOP=new Set('para como mais pela pelo com sem que uma umas uns dos das nos nas por sobre entre esta este essa esse isso ser ter tem sua seu suas seus aqui onde quando qual quais cada todo toda todos todas depois antes ainda tambem mesmo outra outro programa detalhes site blog'.split(' '));
+const mvNorm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+const mvWords=s=>mvNorm(s).split(/[^a-z0-9]+/).filter(w=>w.length>=3&&!MV_STOP.has(w));
+const mvStems=s=>mvWords(s).map(w=>w.slice(0,5));
+const mvSlug=s=>mvWords(s).join('_').slice(0,60);
+const mvEdgeKey=(a,b)=>a<b?a+'|'+b:b+'|'+a;
+// Texto contém a expressão como palavra(s) inteira(s)?
+function mvHas(textoNorm,expr){
+  const e=mvNorm(expr).trim();if(e.length<4) return false;
+  return new RegExp('(^|[^a-z0-9])'+e.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^a-z0-9])').test(textoNorm);
+}
+// Título de ficha → variantes de nome: "Toxina botulínica (Botox)" → ["Toxina botulínica","Botox"]
+function mvTitulos(t){
+  t=t.replace(/^#+\s*/,'').replace(/[®™"“”]/g,'').split(/\s+[—–-]\s+/)[0].trim();
+  const paren=(t.match(/\((.*?)\)/)||[])[1];
+  return [t.replace(/\(.*?\)/g,'').trim(),paren].filter(x=>x&&mvStems(x).length);
+}
+// Um nó existente já representa esse nome? Todo o nome está no nó, ou o nó inteiro
+// está no nome e cobre pelo menos metade dele ("Depilação a laser" ~ "Laser",
+// mas "Laser Fracionado CO2 Fusion" não é "Laser").
+function mvMesmoNome(a,b){
+  const sa=mvStems(a),sb=mvStems(b);if(!sa.length||!sb.length) return false;
+  const m=(x,y)=>x.startsWith(y)||y.startsWith(x);
+  const cobreA=sa.filter(x=>sb.some(y=>m(x,y))).length/sa.length;
+  const cobreB=sb.filter(y=>sa.some(x=>m(x,y))).length/sb.length;
+  return cobreA>=.99||(cobreB>=.99&&cobreA>=.5);
+}
+function mvNomesDoNo(n){
+  const v=[n.label.replace(/\(.*?\)/g,''),(n.label.match(/\((.*?)\)/)||[])[1]];
+  for(const [k,val] of Object.entries(n.detail||{})) if(/tamb[eé]m chamad/i.test(k)) v.push(...String(val).split(/,| ou /));
+  return v.map(x=>String(x||'').trim()).filter(Boolean);
+}
+// Campos "**Campo:** valor" (valor na mesma linha ou na seguinte)
+function mvCampos(corpo){
+  const det={},linhas=corpo.split('\n');
+  for(let i=0;i<linhas.length&&Object.keys(det).length<8;i++){
+    const m=/^\s*[-*]?\s*\*\*([^*]{2,40}?):?\*\*:?\s*(.*)$/.exec(linhas[i]);if(!m) continue;
+    let v=m[2].trim();
+    if(!v){for(let j=i+1;j<linhas.length;j++){const l=linhas[j].trim();if(!l) continue;if(/^\*\*|^#/.test(l)) break;v=l;break;}}
+    if(v) det[m[1].trim()]=v.replace(/\*\*/g,'').slice(0,400);
+  }
+  return det;
+}
+function mvLabelDaNota(nome){
+  const base=nome.replace(/\.(md|txt|csv)$/i,'').replace(/^[PARX]_/i,'').replace(/^\d{4}-\d{2}-\d{2}_/,'').replace(/[_-]+/g,' ').trim();
+  const t=base.length>34?base.slice(0,32).replace(/\s+\S*$/,'')+'…':base;
+  return t.charAt(0).toUpperCase()+t.slice(1);
+}
+
+// Devolve os nós e ligações que faltam no mapa para refletir as notas.
+// `existentes` = {id: nó}; `ligadas` = Set de mvEdgeKey das ligações que já existem.
+function mvDerivar(existentes,ligadas){
+  const novos=[],arestas=[];
+  const todos=()=>[...Object.values(existentes),...novos];
+  const liga=(a,b)=>{if(!a||!b||a===b) return;const k=mvEdgeKey(a,b);if(ligadas.has(k)) return;ligadas.add(k);arestas.push([a,b]);};
+  // Pessoas, unidades, conceitos e procedimentos que um texto cita
+  const citados=(textoNorm,maxProc)=>{
+    const out=[],procs=[];
+    for(const n of todos()){
+      if(!['person','loc','concept','proc'].includes(n.type)) continue;
+      const nomes=n.type==='person'?mvNomesDoNo(n).map(x=>x.replace(/^dra?\.?\s+/i,'').split(/\s+/)[0]):mvNomesDoNo(n);
+      const hits=nomes.reduce((s,x)=>{const e=mvNorm(x).trim();if(e.length<4||!mvHas(textoNorm,e)) return s;
+        return s+(textoNorm.match(new RegExp('(^|[^a-z0-9])'+e.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^a-z0-9])','g'))||[]).length;},0);
+      if(!hits) continue;
+      if(n.type==='proc') procs.push([n.id,hits]); else out.push(n.id);
+    }
+    procs.sort((a,b)=>b[1]-a[1]);
+    return [...out,...procs.filter(p=>p[1]>=(maxProc>3?2:1)).slice(0,maxProc).map(p=>p[0])];
+  };
+  const arquivos=(window.KNOWLEDGE||[]).filter(f=>f&&f.nome);
+
+  // Nó de arquivo de cada nota: o escrito à mão (pelo campo Arquivo) ou um novo
+  const chave=s=>mvNorm(String(s||'').replace(/\.(md|txt|csv)$/i,'')).replace(/[^a-z0-9]/g,'');
+  const fileNos=()=>todos().filter(n=>n.type==='file');
+  const arqDoNo=n=>(n.detail&&n.detail.Arquivo)||String(n.desc||'').split(' · ')[0];
+  const noDaNota={};
+  for(const f of arquivos){
+    let no=fileNos().find(n=>chave(arqDoNo(n))===chave(f.nome));
+    if(!no){
+      const pal=mvWords(f.nome.replace(/\.(md|txt|csv)$/i,''));
+      no=fileNos().find(n=>{const p=mvWords(String(arqDoNo(n)).replace(/\.(md|txt|csv)$/i,''));return p.length>=3&&p.every(w=>pal.includes(w));});
+    }
+    if(!no){
+      const secoes=(f.conteudo.match(/^#{1,3} /gm)||[]).length;
+      const sub=(/^# .*?\s[—–]\s(.+)$/m.exec(f.conteudo)||[])[1];
+      no={id:'nota_'+(chave(f.nome).slice(0,60)||Math.random().toString(36).slice(2,8)),label:mvLabelDaNota(f.nome),type:'file',r:MV_R.file,
+        desc:f.nome+(sub?' · '+sub.trim().slice(0,80):''),auto:true,
+        detail:{Arquivo:f.nome,...(sub?{Conteúdo:sub.trim()}:{}),...(secoes?{Seções:String(secoes)}:{}),Alterado:f.alterado||''}};
+      if(!existentes[no.id]&&!novos.some(x=>x.id===no.id)){
+        novos.push(no);liga('hub',no.id);
+        citados(mvNorm(f.conteudo),6).forEach(id=>liga(no.id,id));
+      }
+    }
+    noDaNota[f.nome]=no.id;
+  }
+
+  // Fichas de procedimento sem nó
+  const cobertos=new Set();
+  for(const f of arquivos.filter(f=>/^R_procedimentos/i.test(f.nome))){
+    for(const sec of f.conteudo.split(/\n(?=## )/)){
+      const m=/^## (.+)/.exec(sec);if(!m) continue;
+      const titulos=mvTitulos(m[1]);
+      if(!titulos.length||/^(equipe|outros|template|perguntas|pend[eê]ncias|fontes?)\b/i.test(mvNorm(titulos[0]))) continue;
+      const k=mvStems(titulos[0]).join('_');
+      if(cobertos.has(k)) continue;
+      const ja=todos().find(n=>['proc','concept','file'].includes(n.type)&&n.type!=='hub'&&
+        titulos.some(t=>mvNomesDoNo(n).some(nm=>mvMesmoNome(t,nm))));
+      titulos.forEach(t=>cobertos.add(mvStems(t).join('_')));
+      if(ja) continue;
+      const corpo=sec.replace(/^## .*\n?/,'').trim();
+      if(corpo.length<20) continue;
+      const det=mvCampos(corpo);
+      // Resumo: o primeiro campo preenchido (o que resolve/é, como funciona…) ou a primeira frase
+      const limpo=v=>String(v||'').replace(/\s*\[(CONFIRMAR|DEFINIR)[^\]]*\]/gi,'').trim();
+      const campos=Object.entries(det).filter(([c,v])=>limpo(v).length>=8);
+      const resolve=campos.find(([c])=>/o que (resolve|é|e)\b/i.test(c))||campos.find(([c])=>/como funciona|para quem|indica/i.test(c));
+      const frase=corpo.replace(/\*\*/g,'').split('\n').map(l=>l.trim()).find(l=>limpo(l).length>=8&&!/^[-*#]|^[^:]{2,40}:|^fonte/i.test(l));
+      const base=limpo(resolve?resolve[1]:frase);
+      const confirmar=/\[CONFIRMAR|\[DEFINIR/.test(corpo);
+      const id='auto_'+(mvSlug(titulos[0])||k);
+      if(existentes[id]||novos.some(x=>x.id===id)) continue;
+      const no={id,label:titulos[0].slice(0,40),type:'proc',r:MV_R.proc,auto:true,
+        desc:(base?base.slice(0,70)+(base.length>70?'…':''):'Ficha nova')+(confirmar?' · ficha a completar':''),
+        detail:{...det,Ficha:f.nome}};
+      novos.push(no);
+      liga(noDaNota[f.nome]||'hub',id);
+      citados(mvNorm(corpo),3).forEach(x=>liga(id,x));
+    }
+  }
+  return {novos,arestas};
+}
+
+// Monta o mapa antes da simulação: notas → nós; depois o que está salvo no banco.
+const mvSalvos=new Set();      // ids com edição salva no CRM
+(function mvMontar(){
+  const porId=Object.fromEntries(NODES.map(n=>[n.id,n]));
+  const ligadas=new Set(EDGES.map(([a,b])=>mvEdgeKey(a,b)));
+  try{
+    const {novos,arestas}=mvDerivar(porId,ligadas);
+    novos.forEach(n=>{NODES.push(n);porId[n.id]=n;});
+    arestas.forEach(e=>EDGES.push(e));
+  }catch(e){console.warn('Mapa vivo (notas):',e);}
+  const g=window.BRAIN_GRAPH;
+  if(!g) return;
+  for(const s of g.nodes||[]){
+    if(!s||!s.id) continue;
+    const n=porId[s.id];
+    if(n){
+      if(s.label) n.label=s.label;
+      if(typeof s.desc==='string') n.desc=s.desc;
+      if(s.detail) n.detail=s.detail;
+      if(n.auto&&s.type&&TYPE[s.type]) n.type=s.type;
+    }else if(s.label&&TYPE[s.type]){
+      const novo={id:s.id,label:s.label,type:s.type,r:MV_R[s.type]||2.5,desc:s.desc||'',detail:s.detail||{},criado:true};
+      NODES.push(novo);porId[s.id]=novo;
+    }else continue;
+    mvSalvos.add(s.id);
+  }
+  for(const [a,b] of g.edges||[]){
+    if(porId[a]&&porId[b]&&!ligadas.has(mvEdgeKey(a,b))){ligadas.add(mvEdgeKey(a,b));EDGES.push([a,b]);}
+  }
+})();
+
+// Grava no CRM. nodes = ids (manda o estado atual de cada um); edges = [[a,b]].
+async function mvSalvar(ids,edges=[]){
+  const nodes=[...new Set(ids)].map(id=>nodeMap[id]).filter(Boolean)
+    .map(n=>({id:n.id,label:n.label,type:n.type,desc:n.desc||'',detail:n.detail||{}}));
+  const r=await fetch('/api/brain/graph',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({nodes,edges})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||'Não consegui salvar o mapa no CRM.');
+  nodes.forEach(n=>mvSalvos.add(n.id));
+  return j;
+}
+
+// ════════════════════════════════════════
 // FORCE SIMULATION
 // ════════════════════════════════════════
 const nodeMap = {};
@@ -1521,7 +1711,8 @@ const S8=new THREE.SphereGeometry(1,20,16);
 window.OBS_SCALE=0.42;
 const OBS_SCALE=window.OBS_SCALE;
 
-NODES.forEach(n=>{
+// Cria a bolinha + brilho de um nó (índice alinhado com NODES, labelDivs e glowMeshes)
+function addNodeMesh(n){
   const col=TYPE[n.type]?.color??0xffffff;
   const visR=n.r*OBS_SCALE;
   const m=new THREE.Mesh(S8,new THREE.MeshBasicMaterial({color:col}));
@@ -1535,29 +1726,69 @@ NODES.forEach(n=>{
   g.userData={base:glowBase(n),size:glowSize,phase:Math.random()*Math.PI*2,speed:.6+Math.random()*1.1,
     flashAt:Math.random()*12,flashStart:-99};
   scene.add(g);glowMeshes.push(g);
-});
+}
+NODES.forEach(addNodeMesh);
 
 const edgeLines=[];
-EDGES.forEach(([a,b])=>{
+function addEdgeLine(a,b){
   const na=nodeMap[a],nb=nodeMap[b];if(!na||!nb)return;
   const geo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(na.x,na.y,na.z),new THREE.Vector3(nb.x,nb.y,nb.z)]);
   // Obsidian: linhas muito finas, cinza escuro
   const l=new THREE.Line(geo,new THREE.LineBasicMaterial({color:EDGE_COLOR,transparent:true,opacity:.4}));
   l.userData={a,b};scene.add(l);edgeLines.push(l);
-});
+}
+EDGES.forEach(([a,b])=>addEdgeLine(a,b));
 
 // Labels
 const labelContainer=document.getElementById('labels');
 const labelDivs=[];
-NODES.forEach(n=>{
+function addLabelDiv(n){
   const d=document.createElement('div');
   d.className='nl';d.textContent=n.label;
   labelContainer.appendChild(d);labelDivs.push(d);
-});
+}
+NODES.forEach(addLabelDiv);
 
-document.getElementById('sn').textContent=NODES.length;
-document.getElementById('se').textContent=EDGES.length;
-// Carregar edições salvas do localStorage
+function updateGraphStats(){
+  document.getElementById('sn').textContent=NODES.length;
+  document.getElementById('se').textContent=EDGES.length;
+}
+updateGraphStats();
+
+// Acrescenta um nó com a página aberta (assistente, nota nova). Nasce perto do
+// primeiro vizinho e a simulação acomoda o resto.
+function addGraphNode(n,vizinho){
+  if(nodeMap[n.id]) return nodeMap[n.id];
+  const v=vizinho&&nodeMap[vizinho]||nodeMap.hub;
+  n.r=n.r||MV_R[n.type]||2.5;
+  n.x=(v?.x||0)+(Math.random()-.5)*12;n.y=(v?.y||0)+(Math.random()-.5)*12;n.z=(v?.z||0)+(Math.random()-.5)*12;
+  n.vx=n.vy=n.vz=0;n.idx=NODES.length;
+  NODES.push(n);nodeMap[n.id]=n;
+  addNodeMesh(n);addLabelDiv(n);
+  if(typeof activeFilter!=='undefined'&&activeFilter!=='all'){
+    const show=n.type===activeFilter;const i=NODES.length-1;
+    nodeMeshes[i].visible=glowMeshes[i].visible=show;labelDivs[i].style.opacity=show?'':0;
+  }
+  _consultIndex=null;
+  updateGraphStats();
+  return n;
+}
+function addGraphEdge(a,b){
+  if(!nodeMap[a]||!nodeMap[b]||a===b) return false;
+  if(EDGES.some(([x,y])=>(x===a&&y===b)||(x===b&&y===a))) return false;
+  EDGES.push([a,b]);addEdgeLine(a,b);updateGraphStats();
+  return true;
+}
+// Notas mudaram com a página aberta: acrescenta o que ainda não tem nó
+function mvSincronizarNotas(){
+  try{
+    const {novos,arestas}=mvDerivar({...nodeMap},new Set(EDGES.map(([a,b])=>mvEdgeKey(a,b))));
+    novos.forEach(n=>addGraphNode(n,(arestas.find(e=>e.includes(n.id))||[]).find(x=>x!==n.id)));
+    arestas.forEach(([a,b])=>addGraphEdge(a,b));
+  }catch(e){console.warn('Mapa vivo (sincronizar):',e);}
+}
+
+// Edições antigas que ficaram no navegador (antes do mapa ir pro CRM)
 setTimeout(loadSavedEdits,100);
 
 // ════════════════════════════════════════
@@ -1974,19 +2205,27 @@ function writeEdits(saved){
   try{localStorage.setItem(EDITS_KEY,JSON.stringify(saved));}catch{}
 }
 
-function loadSavedEdits(){
+// Antes, as edições do mapa ficavam só no localStorage. Ao abrir, aplica as que
+// ainda não existem no CRM e tenta mandá-las pra lá (só admin consegue); se
+// subirem, limpa o navegador. O que já está salvo no CRM vale mais que o local.
+async function loadSavedEdits(){
+  let saved;
+  try{saved=readEdits();}catch(e){return;}
+  const ids=Object.keys(saved).filter(id=>nodeMap[id]&&!mvSalvos.has(id));
+  ids.forEach(id=>{
+    const n=nodeMap[id],data=saved[id]||{};
+    if(data.label) n.label=data.label;
+    if(data.desc)  n.desc=data.desc;
+    if(data.detail) n.detail=Object.assign(n.detail||{},data.detail);
+    const idx=NODES.findIndex(x=>x.id===id);
+    if(idx>=0&&labelDivs[idx]) labelDivs[idx].textContent=n.label;
+  });
+  if(!Object.keys(saved).length) return;
   try{
-    const saved=readEdits();
-    Object.entries(saved).forEach(([id,data])=>{
-      const n=nodeMap[id];if(!n)return;
-      if(data.label) n.label=data.label;
-      if(data.desc)  n.desc=data.desc;
-      if(data.detail) n.detail=Object.assign(n.detail||{},data.detail);
-      // Atualiza label no DOM
-      const idx=NODES.findIndex(x=>x.id===id);
-      if(idx>=0&&labelDivs[idx]) labelDivs[idx].textContent=n.label;
-    });
-  }catch(e){}
+    if(ids.length) await mvSalvar(ids);
+    writeEdits({});
+    try{localStorage.removeItem(EDITS_KEY);}catch{}
+  }catch(e){console.info('Edições locais do mapa continuam só neste navegador:',e.message);}
 }
 
 function openEditModal(id){
@@ -1997,7 +2236,7 @@ function openEditModal(id){
 
   document.getElementById('em-dot').style.cssText=`background:${col};box-shadow:0 0 6px ${col}55`;
   document.getElementById('em-title').textContent=n.label;
-  document.getElementById('em-saved').classList.remove('show');
+  document.getElementById('em-saved').classList.remove('show','err');
 
   const body=document.getElementById('em-body');
   body.innerHTML=`
@@ -2065,15 +2304,22 @@ function saveNodeEdit(){
   if(idx>=0&&labelDivs[idx]) labelDivs[idx].textContent=label;
   document.getElementById('em-title').textContent=label;
 
-  // Persiste no localStorage
-  const saved=readEdits();
-  saved[editNodeId]={label,desc,detail};
-  writeEdits(saved);
+  _consultIndex=null;
 
-  // Feedback
+  // Grava no CRM (vale pra todo mundo, em qualquer aparelho)
   const badge=document.getElementById('em-saved');
-  badge.classList.add('show');
-  setTimeout(()=>badge.classList.remove('show'),2500);
+  badge.classList.remove('err');
+  badge.innerHTML=`${ic('clock','sm')}Salvando…`;badge.classList.add('show');
+  const id=editNodeId;
+  mvSalvar([id]).then(()=>{
+    if(editNodeId!==id) return;
+    badge.innerHTML=`${ic('check','sm')}Salvo no CRM`;
+    setTimeout(()=>badge.classList.remove('show'),2500);
+  }).catch(e=>{
+    if(editNodeId!==id) return;
+    badge.classList.add('err');
+    badge.innerHTML=`${ic('alert','sm')}${escHtml(e.message)} Vale só até fechar esta página.`;
+  });
 
   // Se info card estiver aberto, atualiza
   if(selectedId===editNodeId) selectNode(editNodeId, VW/2, innerHeight/2);
@@ -2310,11 +2556,21 @@ Vá direto à recomendação e ao porquê, com base nos dados. Seja prático e e
 FORMATAÇÃO: o chat entende markdown simples — **negrito**, listas com "-" ou "1.", títulos curtos com "###" e parágrafos separados por linha em branco. Não use tabelas nem blocos de código. Use formatação para facilitar a leitura, sem exagero.
 
 MODO 2 — ATUALIZAÇÃO DE CONHECIMENTO: quando o usuário informa algo novo sobre a clínica, equipe, procedimentos ou correção de dados.
-Nesse caso: confirme em 1 frase e retorne bloco(s) JSON:
+Nesse caso: confirme em 1 frase e retorne bloco(s) JSON.
+Para atualizar um nó que já existe:
 \`\`\`edit
-{"node_id":"ID_DO_NO","label":null,"desc":"Nova desc ou null","detail_merge":{"Campo":"Valor"}}
+{"node_id":"ID_DO_NO","label":null,"desc":"Nova desc ou null","detail_merge":{"Campo":"Valor"},"ligar":[]}
+\`\`\`
+Para criar um nó que ainda não existe no grafo (procedimento, pessoa, conceito, unidade, campanha nova):
+\`\`\`edit
+{"node_id":"p_nome_curto","novo":true,"type":"proc","label":"Nome visível","desc":"Resumo curto","detail_merge":{"Campo":"Valor"},"ligar":["ID_PROFISSIONAL","ID_CATEGORIA"]}
 \`\`\`
 Regras do edit: node_id = ID do grafo; campos sem mudança = null; detail_merge mescla sem apagar; múltiplos nós = múltiplos blocos.
+- Antes de criar, confira no grafo se o nó já existe com outro nome; se existir, atualize-o.
+- Nó novo: id em minúsculas sem acento, com prefixo do tipo (p_ procedimento, pe_ pessoa, c_ conceito, l_ unidade); type = proc, person, concept, loc, file ou ad.
+- "ligar" = ids de nós que já existem no grafo (profissional, unidade, categoria, conceito, campanha). Ligue sempre o nó novo a pelo menos um nó.
+- O que não foi informado fica [CONFIRMAR] no detail_merge; não invente.
+- Isso muda só o mapa. Para a IA do WhatsApp aprender, a informação precisa estar numa nota R_; lembre o usuário disso quando a novidade for sobre procedimento, preço ou protocolo.
 
 IMPORTANTE — SUGESTÕES CONTEXTUAIS:
 Ao final de TODA resposta (exceto quando retornar blocos edit), adicione obrigatoriamente este bloco com 3 perguntas de acompanhamento específicas e contextuais ao que foi discutido:
@@ -2389,29 +2645,54 @@ function buildSystem(modeInstructions,volatile){
   return blocks;
 }
 
+// Aplica os blocos ```edit``` do assistente: altera nós, cria nós novos ("novo":true)
+// e liga nós ("ligar":[ids]). Mostra na hora e grava no CRM em seguida; o resultado
+// do salvamento aparece no lugar da linha "Salvando no CRM…" (ver data-mv-save).
+const MV_TIPOS_NOVOS=['proc','concept','person','loc','file','ad'];
 function applyEditBlocks(text){
   const regex=/\`\`\`edit\s*([\s\S]*?)\`\`\`/g;
   let match;const applied=[];
-  const saved=readEdits();
+  const tocados=new Set(),ligacoes=[];
+  const val=v=>v!==null&&v!==undefined&&v!=='null'&&String(v).trim()!=='';
   while((match=regex.exec(text))!==null){
     try{
       const edit=JSON.parse(match[1].trim());
-      const n=nodeMap[edit.node_id];
-      if(!n){applied.push(`${ic("alert","sm")}<span>Nó não encontrado: ${escHtml(edit.node_id)}</span>`);continue;}
-      if(edit.label&&edit.label!=='null'&&edit.label!==null) n.label=edit.label;
-      if(edit.desc&&edit.desc!=='null'&&edit.desc!==null) n.desc=edit.desc;
-      if(edit.detail_merge) n.detail=Object.assign(n.detail||{},edit.detail_merge);
-      const idx=NODES.findIndex(x=>x.id===edit.node_id);
+      const id=String(edit.node_id||'').trim();
+      let n=nodeMap[id],criado=false;
+      if(!n&&(edit.novo||edit.type)){
+        if(!/^[A-Za-z0-9_.:-]{2,80}$/.test(id)) throw new Error('id inválido para nó novo: '+id);
+        if(!val(edit.label)) throw new Error('nó novo sem nome: '+id);
+        const type=MV_TIPOS_NOVOS.includes(edit.type)?edit.type:'proc';
+        const viz=(Array.isArray(edit.ligar)?edit.ligar:[]).find(x=>nodeMap[x]);
+        n=addGraphNode({id,label:String(edit.label).slice(0,80),type,desc:val(edit.desc)?String(edit.desc):'',detail:{},criado:true},viz);
+        criado=true;
+      }
+      if(!n){applied.push(`${ic("alert","sm")}<span>Nó não encontrado: ${escHtml(id)}</span>`);continue;}
+      if(!criado&&val(edit.label)) n.label=String(edit.label).slice(0,80);
+      if(!criado&&val(edit.desc)) n.desc=String(edit.desc);
+      if(edit.detail_merge&&typeof edit.detail_merge==='object') n.detail=Object.assign(n.detail||{},edit.detail_merge);
+      const idx=NODES.findIndex(x=>x.id===n.id);
       if(idx>=0&&labelDivs[idx]) labelDivs[idx].textContent=n.label;
-      if(!saved[edit.node_id]) saved[edit.node_id]={};
-      if(edit.label&&edit.label!=='null'&&edit.label!==null) saved[edit.node_id].label=edit.label;
-      if(edit.desc&&edit.desc!=='null'&&edit.desc!==null) saved[edit.node_id].desc=edit.desc;
-      saved[edit.node_id].detail=Object.assign(saved[edit.node_id].detail||{},edit.detail_merge||{});
-      applied.push(`${ic("check","sm")}<span><strong>${escHtml(n.label)}</strong> atualizado no grafo</span>`);
+      tocados.add(n.id);
+      const novasLig=[];
+      for(const alvo of Array.isArray(edit.ligar)?edit.ligar:[]){
+        if(!nodeMap[alvo]) continue;
+        if(addGraphEdge(n.id,alvo)) novasLig.push(nodeMap[alvo].label);
+        ligacoes.push([n.id,alvo]);
+      }
+      const lig=novasLig.length?` · ligado a ${escHtml(novasLig.join(', '))}`:'';
+      applied.push(`${ic("check","sm")}<span><strong>${escHtml(n.label)}</strong> ${criado?'criado':'atualizado'} no mapa${lig}</span>`);
     }catch(e){applied.push(`${ic("alert","sm")}<span>Erro ao atualizar: ${escHtml(e.message)}</span>`);}
   }
-  if(applied.length){
-    writeEdits(saved);
+  if(tocados.size||ligacoes.length){
+    _consultIndex=null;
+    // A linha fica no próprio array (que vira msg.editResults) e é trocada quando o
+    // salvamento termina; o chat é redesenhado a partir dele.
+    const pos=applied.push(`${ic('clock','sm')}<span>Salvando no CRM…</span>`)-1;
+    const mostra=html=>{applied[pos]=html;try{renderAIHistory();}catch(e){}};
+    mvSalvar([...tocados],ligacoes)
+      .then(()=>mostra(`${ic('check','sm')}<span>Salvo no CRM: todo mundo vê no mapa.</span>`))
+      .catch(e=>mostra(`${ic('alert','sm')}<span>${escHtml(e.message)} A mudança vale só até fechar esta página.</span>`));
     if(selectedId) setTimeout(()=>selectNode(selectedId,VW/2,innerHeight/2),100);
   }
   return applied;
@@ -2491,7 +2772,7 @@ function renderAIHistory(){
       <h2>Como posso ajudar?</h2>
       <p>Estratégia, conteúdo, procedimentos e anúncios, com base nos arquivos do Segundo Cérebro.</p>
       <div class="ai-starters">${AI_STARTERS.map(s=>`<button class="ai-starter" data-q="${escHtml(s)}" onclick="sendAIQuery(this.dataset.q)">${escHtml(s)}</button>`).join('')}</div>
-      ${noKb?`<div class="callout warn">${ic('alert','sm')}<span>Os arquivos do Segundo Cérebro não foram carregados, então a IA só conhece o grafo. Abra o index.html direto no Chrome ou Edge e, se adicionou arquivos novos, rode atualizar-conhecimento.bat.</span></div>`:''}
+      ${noKb?`<div class="callout warn">${ic('alert','sm')}<span>As notas do Segundo Cérebro não foram carregadas, então a IA só conhece o mapa. Recarregue a página; se continuar, confira se você ainda está logado no CRM.</span></div>`:''}
     </div>`;
     return;
   }
@@ -3059,6 +3340,7 @@ async function refreshKnowledgeFromFolder(){
     if(!files.length) return false;
     files.sort((a,b)=>a.nome.localeCompare(b.nome));
     window.KNOWLEDGE=files;_sections=null;_consultIndex=null;planOverrides=null;
+    mvSincronizarNotas();
     return true;
   }catch(e){console.warn('Leitura da pasta:',e);return false;}
 }
