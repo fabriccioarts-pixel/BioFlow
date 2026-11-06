@@ -5971,9 +5971,34 @@ function isWhatsAppDestino(url) {
     return /(^|\/\/)(wa\.me|api\.whatsapp\.com)\//i.test(url.trim()) || /^wa\.me\//i.test(url.trim());
 }
 
+const CAMPAIGN_CANAIS = ['site', 'instagram', 'google', 'fisico'];
+
+// Onde a campanha leva a pessoa: "whatsapp" (frase-gatilho) ou "pagina" (UTM).
+// O canal é só onde ela aparece; qualquer canal pode levar ao WhatsApp.
+function campaignLeadsToWhatsApp(canal, destino_tipo, destino_url) {
+    if (destino_tipo === 'whatsapp') return true;
+    if (destino_tipo === 'pagina') return false;
+    return canal === 'fisico' || isWhatsAppDestino(destino_url);
+}
+
+// A origem é decidida por "a primeira mensagem contém a frase" e vale a primeira campanha
+// que casar. Duas frases em que uma contém a outra deixam a atribuição ambígua.
+async function findTriggerConflict(trigger, excludeId) {
+    const t = String(trigger || '').trim().toLowerCase();
+    if (!t) return null;
+    const rows = await queryD1(
+        "SELECT id, nome, trigger_text FROM crm_campaigns WHERE status = 'ativa' AND trigger_text IS NOT NULL AND id != ?",
+        [excludeId || '']
+    );
+    return (rows || []).find(r => {
+        const other = String(r.trigger_text || '').trim().toLowerCase();
+        return other && (other.includes(t) || t.includes(other));
+    }) || null;
+}
+
 // Monta o link final da campanha a partir dos dados de canal.
-async function buildCampaignLink(canal, { nome, trigger_text, destino_url, utm_source, utm_medium, utm_campaign }) {
-    if (canal === 'fisico' || isWhatsAppDestino(destino_url)) {
+async function buildCampaignLink(canal, { nome, trigger_text, destino_url, destino_tipo, utm_source, utm_medium, utm_campaign }) {
+    if (campaignLeadsToWhatsApp(canal, destino_tipo, destino_url)) {
         const finalTrigger = (trigger_text && trigger_text.trim()) || `Olá! Vim de: ${nome}`;
         const number = await getClinicWhatsAppNumber();
         return { link: `https://wa.me/${number}?text=${encodeURIComponent(finalTrigger)}`, trigger_text: finalTrigger };
@@ -6025,33 +6050,55 @@ function isStablePublicHost(req) {
     return true;
 }
 
+// ?dias=N limita leads e cliques aos últimos N dias (sem o parâmetro: todo o período).
+// Três consultas agregadas no total (antes eram 4 por campanha), o que importa no plano
+// gratuito da hospedagem. Além das campanhas, devolve "origens": todos os leads do período
+// agrupados pela origem, para a Visão geral comparar campanhas, anúncios e orgânico.
 app.get('/api/campaigns', async (req, res) => {
     try {
-        const campaigns = await queryD1('SELECT * FROM crm_campaigns ORDER BY created_at DESC');
+        const diasNum = parseInt(req.query.dias, 10);
+        const dias = Number.isFinite(diasNum) ? Math.min(Math.max(diasNum, 1), 3650) : null;
+        const leadsWhere = dias ? `WHERE created_at >= datetime('now', '-${dias} days')` : '';
+        const clicksWhere = dias ? `WHERE clicked_at >= datetime('now', '-${dias} days')` : '';
+
+        const [campaigns, origens, clicks] = await Promise.all([
+            queryD1('SELECT * FROM crm_campaigns ORDER BY created_at DESC'),
+            queryD1(`
+                SELECT
+                    COALESCE(NULLIF(TRIM(origem), ''), 'Sem origem') as origem,
+                    COUNT(*) as leads,
+                    SUM(CASE WHEN column_id = 'col-agendado' THEN 1 ELSE 0 END) as agendados,
+                    SUM(CASE WHEN column_id = 'col-ganho' THEN 1 ELSE 0 END) as ganhos,
+                    COALESCE(SUM(CASE WHEN column_id IN ('col-ganho', 'col-agendado') THEN valor_recebido ELSE 0 END), 0) as receita
+                FROM leads ${leadsWhere}
+                GROUP BY 1
+                ORDER BY leads DESC`),
+            queryD1(`SELECT campaign_id, COUNT(*) as total FROM crm_campaign_clicks ${clicksWhere} GROUP BY campaign_id`)
+        ]);
+
+        const byOrigem = new Map((origens || []).map(o => [o.origem, o]));
+        const clicksById = new Map((clicks || []).map(c => [c.campaign_id, c.total]));
         const baseUrl = `${req.protocol}://${req.get('host')}`;
         const canUseShortLink = isStablePublicHost(req);
 
-        const withStats = await Promise.all((campaigns || []).map(async (c) => {
-            // Casa tanto pelo nome da campanha (mídia física, atribuição manual)
-            // quanto pelo utm_campaign (o que o site manda de verdade quando segue
-            // o snippet de integração) — sem isso, campanhas online nunca batiam
-            // porque o site manda o slug, não o nome bonito da campanha.
-            const [leadsRows, convertidosRows, receitaRows, clicksRows] = await Promise.all([
-                queryD1('SELECT COUNT(*) as total FROM leads WHERE origem = ? OR origem = ?', [c.nome, c.utm_campaign]),
-                queryD1("SELECT COUNT(*) as total FROM leads WHERE (origem = ? OR origem = ?) AND column_id = 'col-ganho'", [c.nome, c.utm_campaign]),
-                queryD1("SELECT COALESCE(SUM(valor_recebido), 0) as total FROM leads WHERE (origem = ? OR origem = ?) AND column_id IN ('col-ganho', 'col-agendado')", [c.nome, c.utm_campaign]),
-                queryD1('SELECT COUNT(*) as total FROM crm_campaign_clicks WHERE campaign_id = ?', [c.id])
-            ]);
+        const withStats = (campaigns || []).map((c) => {
+            // Casa tanto pelo nome da campanha (frase-gatilho, atribuição manual)
+            // quanto pelo utm_campaign (o que o site manda quando segue o snippet de integração).
+            const keys = [...new Set([c.nome, c.utm_campaign].filter(Boolean))];
+            const sum = (field) => keys.reduce((s, k) => s + (Number(byOrigem.get(k)?.[field]) || 0), 0);
 
-            const leads_count = leadsRows?.[0]?.total || 0;
-            const convertidos_count = convertidosRows?.[0]?.total || 0;
-            const valor_gerado = receitaRows?.[0]?.total || 0;
-            const clicks_count = clicksRows?.[0]?.total || 0;
+            const leads_count = sum('leads');
+            const agendados_count = sum('agendados');
+            const convertidos_count = sum('ganhos');
+            const valor_gerado = sum('receita');
+            const clicks_count = clicksById.get(c.id) || 0;
             const valor_investido = parseFloat(c.valor_investido) || 0;
 
             return {
                 ...c,
+                destino_tipo: c.trigger_text ? 'whatsapp' : 'pagina',
                 leads_count,
+                agendados_count,
                 convertidos_count,
                 valor_gerado,
                 clicks_count,
@@ -6059,9 +6106,9 @@ app.get('/api/campaigns', async (req, res) => {
                 roi: valor_investido > 0 ? ((valor_gerado - valor_investido) / valor_investido) * 100 : null,
                 short_link: (c.slug && canUseShortLink) ? `${baseUrl}/r/${c.slug}` : null
             };
-        }));
+        });
 
-        res.json({ campaigns: withStats });
+        res.json({ campaigns: withStats, origens: origens || [], periodo_dias: dias });
     } catch (e) {
         console.error('Erro ao listar campanhas:', e);
         res.status(500).json({ error: 'Erro interno ao listar campanhas.' });
@@ -6070,15 +6117,24 @@ app.get('/api/campaigns', async (req, res) => {
 
 app.post('/api/campaigns', async (req, res) => {
     try {
-        const { nome, canal, trigger_text, destino_url, utm_source, utm_medium, utm_campaign, valor_investido } = req.body;
+        const { nome, canal, trigger_text, destino_url, destino_tipo, utm_source, utm_medium, utm_campaign, valor_investido } = req.body;
 
         if (!nome || !canal) {
             return res.status(400).json({ error: 'Nome e canal da campanha são obrigatórios.' });
         }
+        if (!CAMPAIGN_CANAIS.includes(canal)) {
+            return res.status(400).json({ error: 'Canal inválido.' });
+        }
 
         const id = `camp-${Date.now()}`;
         const slug = await generateUniqueSlug(nome);
-        const built = await buildCampaignLink(canal, { nome, trigger_text, destino_url, utm_source, utm_medium, utm_campaign });
+        const built = await buildCampaignLink(canal, { nome, trigger_text, destino_url, destino_tipo, utm_source, utm_medium, utm_campaign });
+        if (built.trigger_text !== undefined) {
+            const conflict = await findTriggerConflict(built.trigger_text, null);
+            if (conflict) {
+                return res.status(400).json({ error: `A frase-gatilho se confunde com a da campanha "${conflict.nome}" ("${conflict.trigger_text}"). Use uma frase diferente.` });
+            }
+        }
         const investido = parseFloat(valor_investido) || 0;
 
         if (built.trigger_text !== undefined) {
@@ -6110,24 +6166,30 @@ app.put('/api/campaigns/:id', async (req, res) => {
             return res.status(404).json({ error: 'Campanha não encontrada.' });
         }
         const existing = existingRows[0];
-        const { nome, trigger_text, destino_url, utm_source, utm_medium, utm_campaign, valor_investido } = req.body;
+        const { nome, canal, trigger_text, destino_url, destino_tipo, utm_source, utm_medium, utm_campaign, valor_investido } = req.body;
 
         if (!nome) {
             return res.status(400).json({ error: 'Nome da campanha é obrigatório.' });
         }
+        // O canal é só onde a campanha aparece; pode mudar sem quebrar o link.
+        const finalCanal = canal && CAMPAIGN_CANAIS.includes(canal) ? canal : existing.canal;
 
-        const built = await buildCampaignLink(existing.canal, { nome, trigger_text, destino_url, utm_source, utm_medium, utm_campaign });
+        const built = await buildCampaignLink(finalCanal, { nome, trigger_text, destino_url, destino_tipo, utm_source, utm_medium, utm_campaign });
         const investido = valor_investido !== undefined ? (parseFloat(valor_investido) || 0) : (parseFloat(existing.valor_investido) || 0);
 
         if (built.trigger_text !== undefined) {
+            const conflict = await findTriggerConflict(built.trigger_text, req.params.id);
+            if (conflict) {
+                return res.status(400).json({ error: `A frase-gatilho se confunde com a da campanha "${conflict.nome}" ("${conflict.trigger_text}"). Use uma frase diferente.` });
+            }
             await queryD1(
-                'UPDATE crm_campaigns SET nome = ?, trigger_text = ?, destino_url = ?, utm_source = NULL, utm_medium = NULL, utm_campaign = NULL, link = ?, valor_investido = ? WHERE id = ?',
-                [nome, built.trigger_text, destino_url || null, built.link, investido, req.params.id]
+                'UPDATE crm_campaigns SET nome = ?, canal = ?, trigger_text = ?, destino_url = ?, utm_source = NULL, utm_medium = NULL, utm_campaign = NULL, link = ?, valor_investido = ? WHERE id = ?',
+                [nome, finalCanal, built.trigger_text, isWhatsAppDestino(destino_url) ? destino_url : null, built.link, investido, req.params.id]
             );
         } else {
             await queryD1(
-                'UPDATE crm_campaigns SET nome = ?, destino_url = ?, utm_source = ?, utm_medium = ?, utm_campaign = ?, trigger_text = NULL, link = ?, valor_investido = ? WHERE id = ?',
-                [nome, destino_url, built.utm_source, built.utm_medium, built.utm_campaign, built.link, investido, req.params.id]
+                'UPDATE crm_campaigns SET nome = ?, canal = ?, destino_url = ?, utm_source = ?, utm_medium = ?, utm_campaign = ?, trigger_text = NULL, link = ?, valor_investido = ? WHERE id = ?',
+                [nome, finalCanal, destino_url, built.utm_source, built.utm_medium, built.utm_campaign, built.link, investido, req.params.id]
             );
         }
 

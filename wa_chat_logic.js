@@ -4375,10 +4375,13 @@ async function saveCRMSettings() {
 // CAMPANHAS (Origem de Leads / UTMs)
 // ==========================================
 let cachedCampaigns = [];
+let cachedOrigens = [];
 let editingCampaignId = null;
+// Período das métricas da tela de UTMs (null = todo o período).
+let utmPeriodDias = 30;
 
 function campaignCanalLabel(canal) {
-    return { fisico: 'Físico (QR/Link)', google: 'Google Ads', instagram: 'Instagram', site: 'Site' }[canal] || canal;
+    return { fisico: 'QR e panfleto', google: 'Google Ads', instagram: 'Instagram', site: 'Site' }[canal] || canal;
 }
 
 function campaignCanalIcon(canal) {
@@ -4394,23 +4397,57 @@ function fmtMoney(v) {
     return 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 }
 
+// O canal é só onde a campanha aparece (para agrupar e filtrar). O que decide como a
+// origem é rastreada é o destino: WhatsApp (frase-gatilho) ou página (UTM).
 function onCampaignCanalChange() {
     const canal = document.getElementById('new-campaign-canal')?.value;
-    const fisicoFields = document.getElementById('campaign-fields-fisico');
-    const onlineFields = document.getElementById('campaign-fields-online');
-    const isFisico = canal === 'fisico';
-    if (fisicoFields) fisicoFields.style.display = isFisico ? 'block' : 'none';
-    if (onlineFields) onlineFields.style.display = isFisico ? 'none' : 'flex';
-
     document.querySelectorAll('.utm-channel-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.canal === canal);
     });
+    updateCampaignPreview();
 }
 
 function pickCampaignCanal(canal) {
     const select = document.getElementById('new-campaign-canal');
     if (select) select.value = canal;
     onCampaignCanalChange();
+}
+
+function pickCampaignDestino(tipo) {
+    const input = document.getElementById('new-campaign-destino-tipo');
+    if (input) input.value = tipo;
+    document.querySelectorAll('#campaign-destino-seg button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.destino === tipo);
+    });
+    const wa = document.getElementById('campaign-fields-whatsapp');
+    const pg = document.getElementById('campaign-fields-pagina');
+    if (wa) wa.style.display = tipo === 'whatsapp' ? 'block' : 'none';
+    if (pg) pg.style.display = tipo === 'pagina' ? 'block' : 'none';
+    updateCampaignPreview();
+}
+
+// Mostra a mensagem que já chega escrita no WhatsApp (o servidor usa a frase como texto do link).
+function updateCampaignPreview() {
+    const box = document.getElementById('campaign-trigger-preview');
+    if (!box) return;
+    const nome = document.getElementById('new-campaign-nome')?.value.trim();
+    const trigger = document.getElementById('new-campaign-trigger')?.value.trim();
+    const msg = trigger || `Olá! Vim de: ${nome || 'nome da campanha'}`;
+    const canal = document.getElementById('new-campaign-canal')?.value;
+    const extra = canal === 'fisico' ? ' O QR code e o link curto saem prontos na lista de campanhas.' : '';
+    box.innerHTML = `<span class="utm-preview-label">Mensagem que já chega escrita</span><span class="utm-preview-msg">${escapeHtml(msg)}</span>${trigger ? '' : '<span class="utm-preview-note">Sem frase, o CRM usa esta mensagem automática.</span>'}${extra ? `<span class="utm-preview-note">${extra.trim()}</span>` : ''}`;
+}
+
+function utmPeriodText(dias) {
+    return dias ? `últimos ${dias} dias` : 'todo o período';
+}
+
+function setUtmPeriod(dias) {
+    utmPeriodDias = dias;
+    document.querySelectorAll('#view-origem-leads .utm-period-bar .utm-seg button').forEach(btn => {
+        btn.classList.toggle('active', String(btn.dataset.dias) === String(dias ?? ''));
+    });
+    loadCampaigns();
 }
 
 // Navegação por etapas (componente .utm-tabs / .utm-tabpanel) — escopo por container.
@@ -4454,15 +4491,19 @@ async function loadCampaigns() {
     if (!listEl) return;
     listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.85rem;"><span class="amicro-loader"><span></span><span></span><span></span></span> Carregando campanhas...</div>`;
 
+    const periodLabel = document.getElementById('utm-period-label');
+    if (periodLabel) periodLabel.textContent = utmPeriodDias ? `Leads que entraram nos últimos ${utmPeriodDias} dias` : 'Todos os leads';
+
     try {
-        const res = await fetch('/api/campaigns');
+        const res = await fetch(utmPeriodDias ? `/api/campaigns?dias=${utmPeriodDias}` : '/api/campaigns');
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Erro ao carregar campanhas');
 
         cachedCampaigns = json.campaigns || [];
+        cachedOrigens = json.origens || [];
         renderCampaignsList();
-        renderTopCampaignsRanking();
-        renderUtmKpiRow();
+        renderUtmOverview();
+        updateCampaignPreview();
     } catch (e) {
         console.error('Erro ao carregar campanhas:', e);
         listEl.innerHTML = `<div style="text-align:center; padding: 1.5rem 0; color: var(--accent-danger); font-size: 0.85rem;">Falha ao carregar campanhas: ${escapeHtml(e.message)}</div>`;
@@ -4527,60 +4568,125 @@ async function loadMetaAdsReport() {
     }
 }
 
-function renderUtmKpiRow() {
-    const box = document.getElementById('utm-kpi-row');
-    if (!box) return;
+// Agrupa os leads do período por origem: cada campanha (pelo nome ou utm_campaign),
+// todos os anúncios da Meta numa linha, o WhatsApp sem campanha e o que sobrar.
+function buildUtmOriginRows() {
+    const campaignByKey = new Map();
+    cachedCampaigns.forEach(c => {
+        [c.nome, c.utm_campaign].filter(Boolean).forEach(k => campaignByKey.set(k, c));
+    });
 
-    const ativas = cachedCampaigns.filter(c => c.status === 'ativa');
-    const totalLeads = cachedCampaigns.reduce((s, c) => s + (c.leads_count || 0), 0);
-    const totalScans = cachedCampaigns.reduce((s, c) => s + (c.clicks_count || 0), 0);
-    const totalInvestido = cachedCampaigns.reduce((s, c) => s + (parseFloat(c.valor_investido) || 0), 0);
+    const rows = new Map();
+    const add = (key, base, o) => {
+        const r = rows.get(key) || { ...base, leads: 0, agendados: 0, ganhos: 0, receita: 0 };
+        r.leads += Number(o.leads) || 0;
+        r.agendados += Number(o.agendados) || 0;
+        r.ganhos += Number(o.ganhos) || 0;
+        r.receita += Number(o.receita) || 0;
+        rows.set(key, r);
+    };
 
-    const chips = [
-        { label: 'Campanhas ativas', value: ativas.length },
-        { label: 'Leads gerados', value: totalLeads },
-        { label: 'Scans de QR/link', value: totalScans },
-        { label: 'Investido no total', value: fmtMoney(totalInvestido) }
-    ];
+    cachedOrigens.forEach(o => {
+        const c = campaignByKey.get(o.origem);
+        if (c) add(`c:${c.id}`, { tipo: 'campanha', nome: c.nome, canal: c.canal, arquivada: c.status === 'arquivada' }, o);
+        else if (/^meta ads/i.test(o.origem)) add('meta', { tipo: 'meta', nome: 'Anúncios Meta', detalhe: 'Clique em anúncio que abre o WhatsApp' }, o);
+        else if (o.origem === 'WhatsApp Orgânico') add('organico', { tipo: 'organico', nome: 'WhatsApp sem campanha', detalhe: 'Primeira mensagem sem frase-gatilho nem anúncio' }, o);
+        else add(`o:${o.origem}`, { tipo: 'outra', nome: o.origem, detalhe: 'Origem gravada fora das campanhas' }, o);
+    });
 
-    box.innerHTML = chips.map(c => `
-        <div class="utm-kpi-chip">
-            <span class="utm-kpi-value">${c.value}</span>
-            <span class="utm-kpi-label">${c.label}</span>
-        </div>
-    `).join('');
+    // Campanhas ativas sem nenhum lead no período também aparecem (zeradas).
+    cachedCampaigns.filter(c => c.status === 'ativa').forEach(c => {
+        if (!rows.has(`c:${c.id}`)) rows.set(`c:${c.id}`, { tipo: 'campanha', nome: c.nome, canal: c.canal, leads: 0, agendados: 0, ganhos: 0, receita: 0 });
+    });
+
+    return [...rows.values()].sort((a, b) => b.leads - a.leads || a.nome.localeCompare(b.nome));
 }
 
-function renderTopCampaignsRanking() {
-    const box = document.getElementById('campaigns-top-ranking');
-    if (!box) return;
+function utmPct(part, total) {
+    if (!total) return '—';
+    const p = (part / total) * 100;
+    return `${p < 10 && p > 0 ? p.toFixed(1).replace('.', ',') : Math.round(p)}%`;
+}
 
-    const top = cachedCampaigns
-        .filter(c => c.status === 'ativa' && c.convertidos_count > 0)
-        .sort((a, b) => b.convertidos_count - a.convertidos_count)
-        .slice(0, 3);
+function utmNum(n) {
+    return (Number(n) || 0).toLocaleString('pt-BR');
+}
 
-    if (top.length === 0) {
-        box.style.display = 'none';
-        box.innerHTML = '';
+function renderUtmOverview() {
+    const kpiBox = document.getElementById('utm-kpi-row');
+    const tableBox = document.getElementById('utm-origin-table');
+    const rows = buildUtmOriginRows();
+
+    const total = rows.reduce((s, r) => s + r.leads, 0);
+    const agendados = rows.reduce((s, r) => s + r.agendados, 0);
+    const ganhos = rows.reduce((s, r) => s + r.ganhos, 0);
+    const receita = rows.reduce((s, r) => s + r.receita, 0);
+    const rastreados = rows.filter(r => r.tipo === 'campanha' || r.tipo === 'meta').reduce((s, r) => s + r.leads, 0);
+
+    if (kpiBox) {
+        const chips = [
+            { label: 'Leads', value: utmNum(total), sub: utmPeriodText(utmPeriodDias) },
+            { label: 'Com origem rastreada', value: utmPct(rastreados, total), sub: `${utmNum(rastreados)} por campanha ou anúncio` },
+            { label: 'Agendados', value: utmNum(agendados), sub: 'no estágio Agendado do funil' },
+            { label: 'Vendas', value: utmNum(ganhos), sub: receita > 0 ? fmtMoney(receita) : 'sem valor registrado' }
+        ];
+        kpiBox.innerHTML = chips.map(c => `
+            <div class="utm-kpi-chip">
+                <span class="utm-kpi-label">${c.label}</span>
+                <span class="utm-kpi-value">${c.value}</span>
+                <span class="utm-kpi-sub">${escapeHtml(c.sub)}</span>
+            </div>`).join('');
+    }
+
+    if (!tableBox) return;
+    if (rows.length === 0) {
+        tableBox.innerHTML = `<div class="utm-empty-state"><i class="fa-solid fa-inbox"></i><strong>Nenhum lead em ${escapeHtml(utmPeriodText(utmPeriodDias))}</strong><span>Escolha um período maior acima.</span></div>`;
         return;
     }
 
-    box.style.display = 'block';
-    const medals = ['🥇', '🥈', '🥉'];
-    box.innerHTML = `
-        <div class="utm-panel" style="padding: 1.1rem 1.25rem;">
-            <h3 style="color: var(--text-main); font-size: 0.92rem; margin: 0 0 0.7rem 0; display:flex; align-items:center; gap:0.5rem;"><i class="fa-solid fa-trophy" style="color: #f59e0b;"></i> Top Campanhas (vendas)</h3>
-            <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                ${top.map((c, idx) => `
-                    <div style="display: flex; align-items: center; gap: 0.8rem; padding: 0.45rem 0.65rem; background: var(--bg-main); border-radius: 8px;">
-                        <div style="font-size: 1.05rem;">${medals[idx]}</div>
-                        <div style="flex: 1; min-width: 0; font-weight: 600; color: var(--text-main); font-size: 0.83rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(c.nome)}</div>
-                        <div style="font-size: 0.76rem; color: var(--accent-success); font-weight: 700;">${c.convertidos_count} venda(s)</div>
-                        <div style="font-size: 0.76rem; color: var(--text-muted);">${c.leads_count} lead(s)</div>
-                    </div>
-                `).join('')}
-            </div>
+    const maxLeads = Math.max(...rows.map(r => r.leads), 1);
+    const icon = (r) => r.tipo === 'campanha' ? campaignCanalIcon(r.canal)
+        : r.tipo === 'meta' ? 'fa-brands fa-meta'
+        : r.tipo === 'organico' ? 'fa-brands fa-whatsapp'
+        : 'fa-solid fa-tag';
+    const detail = (r) => r.tipo === 'campanha'
+        ? `Campanha · ${campaignCanalLabel(r.canal)}${r.arquivada ? ' · arquivada' : ''}`
+        : r.detalhe;
+
+    tableBox.innerHTML = `
+        <div class="utm-table-wrap">
+            <table class="utm-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Origem</th>
+                        <th scope="col" class="num">Leads</th>
+                        <th scope="col" class="num">Agendados</th>
+                        <th scope="col" class="num">Vendas</th>
+                        <th scope="col" class="num" title="Agendados e vendas sobre os leads">Avançaram</th>
+                        <th scope="col" class="num">Receita</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(r => `
+                        <tr class="utm-row-${r.tipo}">
+                            <td>
+                                <div class="utm-origin">
+                                    <span class="utm-origin-icon"><i class="${icon(r)}"></i></span>
+                                    <span class="utm-origin-text">
+                                        <strong>${escapeHtml(r.nome)}</strong>
+                                        <small>${escapeHtml(detail(r))}${r.tipo === 'meta' ? ` · <button type="button" class="utm-link-btn" onclick="switchUtmTab('metaads')">ver por anúncio</button>` : ''}</small>
+                                    </span>
+                                </div>
+                                <div class="utm-bar" aria-hidden="true"><span style="width: ${Math.max((r.leads / maxLeads) * 100, r.leads ? 2 : 0)}%"></span></div>
+                            </td>
+                            <td class="num"><strong>${utmNum(r.leads)}</strong><small>${utmPct(r.leads, total)}</small></td>
+                            <td class="num">${utmNum(r.agendados)}</td>
+                            <td class="num">${utmNum(r.ganhos)}</td>
+                            <td class="num">${utmPct(r.agendados + r.ganhos, r.leads)}</td>
+                            <td class="num">${r.receita > 0 ? fmtMoney(r.receita) : '—'}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
         </div>`;
 }
 
@@ -4601,60 +4707,77 @@ function renderCampaignsList() {
     const listEl = document.getElementById('campaigns-list');
     if (!listEl) return;
 
+    const periodEl = document.getElementById('campaigns-list-period');
+    if (periodEl) periodEl.textContent = `Números de ${utmPeriodText(utmPeriodDias)} (mude o período na Visão geral)`;
+
     const filtered = getFilteredCampaigns();
 
     if (filtered.length === 0) {
         const empty = cachedCampaigns.length === 0;
         listEl.innerHTML = `<div class="utm-empty-state" style="flex: 1; justify-content: center;">
-            <i class="fa-solid fa-${empty ? 'bullseye' : 'filter-circle-xmark'}" style="font-size: 1.8rem;"></i>
-            <strong style="color: var(--text-main); font-size: 0.92rem;">${empty ? 'Nenhuma campanha ainda' : 'Nenhuma campanha encontrada'}</strong>
-            <span style="max-width: 320px;">${empty ? 'Vá até a aba "Nova campanha", preencha os dados e clique em "Criar Campanha" para começar a rastrear a origem dos seus leads.' : 'Nenhuma campanha corresponde aos filtros selecionados.'}</span>
+            <i class="fa-solid fa-${empty ? 'bullseye' : 'filter-circle-xmark'}"></i>
+            <strong>${empty ? 'Nenhuma campanha ainda' : 'Nenhuma campanha encontrada'}</strong>
+            <span style="max-width: 320px;">${empty ? 'Crie a primeira na aba "Nova campanha" para começar a ver de onde vêm os seus leads.' : 'Nenhuma campanha corresponde aos filtros selecionados.'}</span>
         </div>`;
         return;
     }
 
     listEl.innerHTML = filtered.map(c => {
         const isArquivada = c.status === 'arquivada';
-        const displayLink = c.short_link || c.link;
-        const hasInvestment = c.valor_investido > 0;
+        const isWhats = (c.destino_tipo || (c.trigger_text ? 'whatsapp' : 'pagina')) === 'whatsapp';
+        const displayLink = c.short_link || c.link || '';
+        let destino = '';
+        if (isWhats) {
+            destino = `<i class="fa-brands fa-whatsapp"></i> WhatsApp · frase <q>${escapeHtml(c.trigger_text || '')}</q>`;
+        } else {
+            let host = c.destino_url || '';
+            try { host = new URL(c.destino_url).host; } catch (e) { /* mantém o texto */ }
+            destino = `<i class="fa-solid fa-link"></i> Página · ${escapeHtml(host)}`;
+        }
 
-        const statsChips = [
-            `<span title="Leads gerados"><i class="fa-solid fa-user-plus"></i> ${c.leads_count} lead(s)</span>`,
-            `<span title="Viraram venda" style="color: var(--accent-success);"><i class="fa-solid fa-check"></i> ${c.convertidos_count} venda(s)</span>`
+        const stats = [
+            { label: 'Cliques', value: utmNum(c.clicks_count), title: 'Acessos pelo link curto ou QR code' },
+            { label: 'Leads', value: utmNum(c.leads_count) },
+            { label: 'Agendados', value: utmNum(c.agendados_count) },
+            { label: 'Vendas', value: utmNum(c.convertidos_count) },
+            { label: 'Receita', value: c.valor_gerado > 0 ? fmtMoney(c.valor_gerado) : '—' }
         ];
-        if (c.canal === 'fisico') {
-            statsChips.unshift(`<span title="Vezes que o QR/link foi acessado"><i class="fa-solid fa-eye"></i> ${c.clicks_count} scan(s)</span>`);
+        if (c.valor_investido > 0) {
+            stats.push({ label: 'Custo por lead', value: c.cpl !== null ? fmtMoney(c.cpl) : '—' });
+            if (c.roi !== null) stats.push({ label: 'Retorno', value: `${c.roi.toFixed(0)}%`, tone: c.roi >= 0 ? 'good' : 'bad' });
         }
-        if (c.valor_gerado > 0) {
-            statsChips.push(`<span title="Receita gerada" style="color: var(--accent-success);">${fmtMoney(c.valor_gerado)}</span>`);
-        }
-        if (hasInvestment) {
-            statsChips.push(`<span title="Investido">Invest.: ${fmtMoney(c.valor_investido)}</span>`);
-            if (c.cpl !== null) statsChips.push(`<span title="Custo por lead">CPL: ${fmtMoney(c.cpl)}</span>`);
-            if (c.roi !== null) statsChips.push(`<span title="Retorno sobre investimento" style="color: ${c.roi >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'};">ROI: ${c.roi.toFixed(0)}%</span>`);
-        }
+
+        const media = isWhats
+            ? `<button type="button" class="utm-camp-qr" onclick="openImagePreviewModal('/api/campaigns/${encodeURIComponent(c.id)}/qrcode')" title="Ver QR code"><img src="/api/campaigns/${encodeURIComponent(c.id)}/qrcode" alt="QR code da campanha ${escapeHtml(c.nome)}" loading="lazy"></button>`
+            : `<span class="utm-camp-icon"><i class="${campaignCanalIcon(c.canal)}"></i></span>`;
 
         return `
-        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.8rem 0.9rem; display: flex; gap: 0.8rem; align-items: center; opacity: ${isArquivada ? '0.55' : '1'};">
-            ${c.canal === 'fisico' ? `<img src="/api/campaigns/${encodeURIComponent(c.id)}/qrcode" alt="QR Code" style="width: 56px; height: 56px; border-radius: 6px; background: #fff; padding: 3px; flex-shrink: 0; cursor: pointer;" onclick="openImagePreviewModal(this.src)">` : `<div style="width: 56px; height: 56px; border-radius: 6px; background: var(--bg-main); display:flex; align-items:center; justify-content:center; flex-shrink: 0;"><i class="${campaignCanalIcon(c.canal)}" style="font-size: 1.3rem; color: var(--text-muted);"></i></div>`}
-            <div style="flex: 1; min-width: 0;">
-                <div style="font-weight: 600; font-size: 0.88rem; color: var(--text-main); display:flex; align-items:center; gap:0.4rem; flex-wrap: wrap;">
-                    ${escapeHtml(c.nome)}
-                    <span style="font-size: 0.7rem; font-weight: 600; color: var(--text-muted); background: var(--bg-main); padding: 0.1rem 0.45rem; border-radius: 6px;">${campaignCanalLabel(c.canal)}</span>
-                    ${isArquivada ? `<span style="font-size: 0.7rem; font-weight: 600; color: var(--accent-danger);">Arquivada</span>` : ''}
+        <article class="utm-camp${isArquivada ? ' is-archived' : ''}">
+            <div class="utm-camp-main">
+                ${media}
+                <div class="utm-camp-text">
+                    <div class="utm-camp-name">
+                        <strong>${escapeHtml(c.nome)}</strong>
+                        <span class="utm-chip"><i class="${campaignCanalIcon(c.canal)}"></i> ${campaignCanalLabel(c.canal)}</span>
+                        ${isArquivada ? '<span class="utm-chip utm-chip-muted">Arquivada</span>' : ''}
+                    </div>
+                    <div class="utm-camp-dest">${destino}</div>
+                    <button type="button" class="utm-camp-link" onclick="copyCampaignLink('${c.id}')" title="Copiar link">
+                        <span>${escapeHtml(displayLink)}</span><i class="fa-solid fa-copy"></i>
+                    </button>
                 </div>
-                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem; word-break: break-all;">${escapeHtml(displayLink)}</div>
-                <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.35rem; display: flex; gap: 0.7rem; flex-wrap: wrap; font-weight: 600;">${statsChips.join('')}</div>
+                <div class="utm-camp-actions">
+                    ${isWhats ? `<button type="button" onclick="downloadCampaignQR('${c.id}', ${escapeHtml(JSON.stringify(c.nome))})" title="Baixar QR code" aria-label="Baixar QR code"><i class="fa-solid fa-download"></i></button>` : ''}
+                    <button type="button" onclick="startEditCampaign('${c.id}')" title="Editar" aria-label="Editar"><i class="fa-solid fa-pen"></i></button>
+                    <button type="button" onclick="duplicateCampaign('${c.id}')" title="Duplicar" aria-label="Duplicar"><i class="fa-solid fa-clone"></i></button>
+                    <button type="button" onclick="toggleCampaignStatus('${c.id}', '${isArquivada ? 'ativa' : 'arquivada'}')" title="${isArquivada ? 'Reativar' : 'Arquivar'}" aria-label="${isArquivada ? 'Reativar' : 'Arquivar'}"><i class="fa-solid fa-${isArquivada ? 'rotate-left' : 'box-archive'}"></i></button>
+                    <button type="button" class="is-danger" onclick="deleteCampaign('${c.id}')" title="Excluir" aria-label="Excluir"><i class="fa-solid fa-trash"></i></button>
+                </div>
             </div>
-            <div style="display: flex; flex-direction: column; gap: 0.35rem; flex-shrink: 0;">
-                <button type="button" onclick="copyCampaignLink('${c.id}')" title="Copiar link" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-copy"></i></button>
-                ${c.canal === 'fisico' ? `<button type="button" onclick="downloadCampaignQR('${c.id}', ${escapeHtml(JSON.stringify(c.nome))})" title="Baixar QR Code" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-download"></i></button>` : ''}
-                <button type="button" onclick="startEditCampaign('${c.id}')" title="Editar" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-pen"></i></button>
-                <button type="button" onclick="duplicateCampaign('${c.id}')" title="Duplicar (criar campanha parecida)" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-clone"></i></button>
-                <button type="button" onclick="toggleCampaignStatus('${c.id}', '${isArquivada ? 'ativa' : 'arquivada'}')" title="${isArquivada ? 'Reativar' : 'Arquivar'}" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-${isArquivada ? 'rotate-left' : 'box-archive'}"></i></button>
-                <button type="button" onclick="deleteCampaign('${c.id}')" title="Excluir" style="background: var(--bg-main); border: 1px solid var(--border-color); color: var(--accent-danger); padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem;"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>`;
+            <dl class="utm-camp-stats">
+                ${stats.map(s => `<div${s.title ? ` title="${s.title}"` : ''}${s.tone ? ` class="is-${s.tone}"` : ''}><dt>${s.label}</dt><dd>${s.value}</dd></div>`).join('')}
+            </dl>
+        </article>`;
     }).join('');
 }
 
@@ -4721,13 +4844,13 @@ function startEditCampaign(id) {
     document.getElementById('new-campaign-nome').value = c.nome;
     document.getElementById('new-campaign-investimento').value = c.valor_investido || '';
 
-    // Canal não pode mudar depois de criada (o link é montado em cima dele)
-    const canalGroup = document.getElementById('campaign-canal-group');
-    if (canalGroup) canalGroup.style.display = 'none';
+    // O canal pode mudar (é só onde a campanha aparece); a frase-gatilho e o link continuam.
     document.getElementById('new-campaign-canal').value = c.canal;
     onCampaignCanalChange();
 
-    if (c.canal === 'fisico') {
+    const tipo = c.destino_tipo || (c.trigger_text ? 'whatsapp' : 'pagina');
+    pickCampaignDestino(tipo);
+    if (tipo === 'whatsapp') {
         document.getElementById('new-campaign-trigger').value = c.trigger_text || '';
     } else {
         document.getElementById('new-campaign-destino').value = c.destino_url || '';
@@ -4735,6 +4858,7 @@ function startEditCampaign(id) {
         document.getElementById('new-campaign-utm-medium').value = c.utm_medium || '';
         document.getElementById('new-campaign-utm-campaign').value = c.utm_campaign || '';
     }
+    updateCampaignPreview();
 
     document.getElementById('campaign-form-title').innerHTML = '<i class="fa-solid fa-pen" style="color: #38bdf8;"></i> Editar Campanha';
     const btn = document.getElementById('btn-create-campaign');
@@ -4756,16 +4880,20 @@ function duplicateCampaign(id) {
     document.getElementById('new-campaign-canal').value = c.canal;
     onCampaignCanalChange();
 
-    if (c.canal === 'fisico') {
+    const tipo = c.destino_tipo || (c.trigger_text ? 'whatsapp' : 'pagina');
+    pickCampaignDestino(tipo);
+    if (tipo === 'whatsapp') {
+        // A frase precisa ser única: fica em branco para a cópia ganhar a sua.
         document.getElementById('new-campaign-trigger').value = '';
     } else {
         document.getElementById('new-campaign-destino').value = c.destino_url || '';
         document.getElementById('new-campaign-utm-source').value = c.utm_source || '';
         document.getElementById('new-campaign-utm-medium').value = c.utm_medium || '';
     }
+    updateCampaignPreview();
 
     switchUtmTab('new');
-    if (typeof showToast === 'function') showToast('Campanha duplicada no formulário — ajuste o nome e crie.', 'success');
+    if (typeof showToast === 'function') showToast('Campanha copiada para o formulário. Ajuste o nome e a frase e crie.', 'success');
 }
 
 function cancelEditCampaign() {
@@ -4774,10 +4902,9 @@ function cancelEditCampaign() {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
-    const canalGroup = document.getElementById('campaign-canal-group');
-    if (canalGroup) canalGroup.style.display = 'block';
-    document.getElementById('new-campaign-canal').value = 'fisico';
+    document.getElementById('new-campaign-canal').value = 'site';
     onCampaignCanalChange();
+    pickCampaignDestino('whatsapp');
 
     document.getElementById('campaign-form-title').innerHTML = '<i class="fa-solid fa-circle-plus" style="color: #38bdf8;"></i> Nova Campanha';
     const btn = document.getElementById('btn-create-campaign');
@@ -4795,15 +4922,15 @@ async function submitNewCampaign() {
         return;
     }
 
-    const body = { nome, valor_investido: document.getElementById('new-campaign-investimento')?.value || 0 };
-    if (!editingCampaignId) body.canal = canal;
+    const destinoTipo = document.getElementById('new-campaign-destino-tipo')?.value || 'whatsapp';
+    const body = { nome, canal, destino_tipo: destinoTipo, valor_investido: document.getElementById('new-campaign-investimento')?.value || 0 };
 
-    if (canal === 'fisico') {
+    if (destinoTipo === 'whatsapp') {
         body.trigger_text = document.getElementById('new-campaign-trigger')?.value.trim() || '';
     } else {
         const destino = document.getElementById('new-campaign-destino')?.value.trim();
         if (!destino) {
-            if (typeof showToast === 'function') showToast('Informe a URL de destino.', 'danger'); else alert('Informe a URL de destino.');
+            if (typeof showToast === 'function') showToast('Informe o endereço da página.', 'danger'); else alert('Informe o endereço da página.');
             return;
         }
         body.destino_url = destino;
