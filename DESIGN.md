@@ -164,8 +164,8 @@ O sistema recusa o painel SaaS genérico de cinza azulado com acento neon. Modo 
 **Key Characteristics:**
 - Capa espresso mais escura que a página, com lombada de 1px.
 - Páginas pautadas: filetes de 1px separam linhas; tom, não sombra, separa planos.
-- Fita rosé de 6px com corte em V no item ativo da capa; texto ativo em rosa `nc-foil`.
-- Rosé sólido só na ação principal; no resto, rosé aparece como fita, tinta leve (14–18%) ou anel de foco.
+- Item ativo da capa: tinta rosé de 18% no fundo e texto em rosa `nc-foil`, sem fita lateral (removida em 06/11/2026 a pedido do usuário).
+- Rosé sólido só na ação principal; no resto, rosé aparece como tinta leve (14–18%) ou anel de foco.
 - Serifa da marca (Playfair Display) só em títulos de tela e de janela.
 - Algarismos tabulares em hora, contagem, espera e janela.
 - Um só movimento: 180ms com `cubic-bezier(0.22, 1, 0.36, 1)`.
@@ -281,7 +281,7 @@ Contidos e de uma voz só: quase tudo é ferramenta neutra; um único botão por
 
 ### Navigation
 - **Capa:** itens de 13px peso 500, ícone de 15px desbotado, cantos 7px. Hover troca para `bg-hover` e tinta.
-- **Ativo:** tinta rosé de 18% no fundo, texto e ícone em `nc-foil`, sem sombra, e a fita na borda da capa.
+- **Ativo:** tinta rosé de 18% no fundo, texto e ícone em `nc-foil`, sem sombra e sem fita lateral.
 
 ### Linha de Conversa (componente-assinatura)
 A página pautada do Atendimento. Avatar, nome (500; 700 com não lida), hora meta tabular à direita (verde e 600 só com não lida), prévia desbotada (tinta com não lida), contador verde em pílula com texto `#10140f`, e a faixa de estado: espera nos três níveis, responsável em texto quieto (tinta quando é "você", itálico quando ninguém) e a janela de 24h encostada à direita. Fixada leva alfinete desbotado; rascunho aparece em vermelho 600; arquivada cai para 60% de opacidade. Aberta: tinta rosé de 14% sobre a ficha.
@@ -298,7 +298,7 @@ Enviadas em Bolha Espresso, recebidas em ficha com filete; ambas 12px com o cant
 ## Do's and Don'ts
 
 ### Do:
-- **Do** usar a fita rosé e o texto `nc-foil` para marcar o item ativo da capa, e só isso.
+- **Do** usar a tinta rosé de fundo e o texto `nc-foil` para marcar o item ativo da capa, e só isso. **Don't** voltar com a fita lateral: o usuário não gostou dela.
 - **Do** manter um único botão rosé sólido por contexto; o resto é ferramenta neutra com filete.
 - **Do** escrever toda espera do paciente com `esperaRespostaHTML` (folga ≤15min, atenção ≤1h, urgente >1h) e toda janela com `whatsappWindowBadgeHTML`, no mesmo lugar da linha.
 - **Do** separar linhas com filetes de 1px `border` e separar planos por tom (ficha > página > mesa > capa).
