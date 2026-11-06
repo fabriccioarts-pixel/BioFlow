@@ -1077,8 +1077,21 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
         <!-- ETAPA 1: Visão geral -->
         <div class="utm-tabpanel active" data-utm-panel="overview">
+            <div class="utm-period-bar">
+                <span class="utm-period-label" id="utm-period-label">Leads que entraram nos últimos 30 dias</span>
+                <div class="utm-seg" role="group" aria-label="Período">
+                    <button type="button" data-dias="7" onclick="setUtmPeriod(7)">7 dias</button>
+                    <button type="button" data-dias="30" class="active" onclick="setUtmPeriod(30)">30 dias</button>
+                    <button type="button" data-dias="90" onclick="setUtmPeriod(90)">90 dias</button>
+                    <button type="button" data-dias="" onclick="setUtmPeriod(null)">Tudo</button>
+                </div>
+            </div>
             <div class="utm-kpi-row" id="utm-kpi-row"></div>
-            <div id="campaigns-top-ranking" style="display: none;"></div>
+            <div class="utm-panel">
+                <h3 class="utm-panel-title">De onde vieram os leads</h3>
+                <p class="utm-panel-sub">A origem é definida pela primeira mensagem: frase-gatilho de uma campanha, clique em anúncio da Meta ou, sem nenhum dos dois, "WhatsApp sem campanha".</p>
+                <div id="utm-origin-table"></div>
+            </div>
         </div>
 
         <!-- Anúncios Meta (Click-to-WhatsApp): leads com ctwa_clid, agrupados pelo
@@ -1104,58 +1117,70 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                 </h3>
 
                 <div class="utm-field">
-                    <label>Nome interno</label>
-                    <input type="text" id="new-campaign-nome" placeholder="Recepção — balcão de entrada">
+                    <label for="new-campaign-nome">Nome da campanha</label>
+                    <input type="text" id="new-campaign-nome" placeholder="Ex.: Site, Bio do Instagram, Panfleto da recepção" oninput="updateCampaignPreview()">
+                    <span class="utm-hint">É o nome que aparece como origem do lead no CRM.</span>
                 </div>
 
                 <div class="utm-field" id="campaign-canal-group">
-                    <label>Canal</label>
+                    <label>Onde a campanha aparece</label>
                     <select id="new-campaign-canal" onchange="onCampaignCanalChange()" style="display: none;">
-                        <option value="fisico">Físico</option>
-                        <option value="google">Google Ads</option>
-                        <option value="instagram">Instagram</option>
                         <option value="site">Site</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="google">Google Ads</option>
+                        <option value="fisico">Físico</option>
                     </select>
                     <div class="utm-channel-picker" id="utm-channel-picker">
-                        <button type="button" class="utm-channel-btn active" data-canal="fisico" onclick="pickCampaignCanal('fisico')"><i class="fa-solid fa-qrcode"></i> Físico</button>
+                        <button type="button" class="utm-channel-btn active" data-canal="site" onclick="pickCampaignCanal('site')"><i class="fa-solid fa-globe"></i> Site</button>
+                        <button type="button" class="utm-channel-btn" data-canal="instagram" onclick="pickCampaignCanal('instagram')"><i class="fa-brands fa-instagram"></i> Instagram</button>
                         <button type="button" class="utm-channel-btn" data-canal="google" onclick="pickCampaignCanal('google')"><i class="fa-brands fa-google"></i> Google</button>
-                        <button type="button" class="utm-channel-btn" data-canal="instagram" onclick="pickCampaignCanal('instagram')"><i class="fa-brands fa-instagram"></i> Insta</button>
-                        <button type="button" class="utm-channel-btn" data-canal="site" onclick="pickCampaignCanal('site')"><i class="fa-solid fa-globe"></i> Site</button>
-                    </div>
-                </div>
-
-                <div id="campaign-fields-fisico" class="utm-field">
-                    <label>Frase-gatilho no WhatsApp</label>
-                    <input type="text" id="new-campaign-trigger" placeholder="Deixe em branco pra gerar automaticamente">
-                    <span class="utm-hint">Quem escanear o QR já manda essa frase — o lead cai marcado com essa origem sozinho.</span>
-                </div>
-
-                <div id="campaign-fields-online" style="display: none; flex-direction: column; gap: 0.75rem;">
-                    <div class="utm-field">
-                        <label>URL de destino</label>
-                        <input type="text" id="new-campaign-destino" placeholder="https://natuclinic.com/contato ou wa.me/55...">
-                        <span class="utm-hint">Se o destino for o seu WhatsApp (wa.me/... ou api.whatsapp.com/...), o UTM abaixo é ignorado — a origem é identificada sozinha por uma frase pré-preenchida na mensagem, porque o WhatsApp descarta parâmetros UTM.</span>
-                    </div>
-                    <div style="display: flex; gap: 0.5rem;">
-                        <div class="utm-field" style="flex: 1;">
-                            <label>utm_source</label>
-                            <input type="text" id="new-campaign-utm-source" placeholder="auto">
-                        </div>
-                        <div class="utm-field" style="flex: 1;">
-                            <label>utm_medium</label>
-                            <input type="text" id="new-campaign-utm-medium" placeholder="auto">
-                        </div>
-                    </div>
-                    <div class="utm-field">
-                        <label>utm_campaign</label>
-                        <input type="text" id="new-campaign-utm-campaign" placeholder="gerado a partir do nome">
+                        <button type="button" class="utm-channel-btn" data-canal="fisico" onclick="pickCampaignCanal('fisico')"><i class="fa-solid fa-qrcode"></i> QR e panfleto</button>
                     </div>
                 </div>
 
                 <div class="utm-field">
-                    <label>Investimento (R$)</label>
+                    <label>Para onde ela leva</label>
+                    <input type="hidden" id="new-campaign-destino-tipo" value="whatsapp">
+                    <div class="utm-seg utm-seg-wide" role="group" aria-label="Destino da campanha" id="campaign-destino-seg">
+                        <button type="button" data-destino="whatsapp" class="active" onclick="pickCampaignDestino('whatsapp')"><i class="fa-brands fa-whatsapp"></i> WhatsApp da clínica</button>
+                        <button type="button" data-destino="pagina" onclick="pickCampaignDestino('pagina')"><i class="fa-solid fa-link"></i> Página ou site</button>
+                    </div>
+                </div>
+
+                <div id="campaign-fields-whatsapp" class="utm-field">
+                    <label for="new-campaign-trigger">Frase-gatilho</label>
+                    <input type="text" id="new-campaign-trigger" placeholder="Ex.: vim pelo site" oninput="updateCampaignPreview()">
+                    <span class="utm-hint">Quando a primeira mensagem do paciente contém essa frase, o lead entra com a origem desta campanha. Use uma frase curta e que só esta campanha tenha.</span>
+                    <div class="utm-preview" id="campaign-trigger-preview" aria-live="polite"></div>
+                </div>
+
+                <div id="campaign-fields-pagina" class="utm-field" style="display: none;">
+                    <label for="new-campaign-destino">Endereço da página</label>
+                    <input type="text" id="new-campaign-destino" placeholder="https://www.natuclinic.com.br/...">
+                    <span class="utm-hint">O CRM acrescenta os UTMs ao endereço. A origem chega quando o formulário do site manda o lead (aba Integração).</span>
+                    <details class="utm-adv">
+                        <summary>UTMs (avançado)</summary>
+                        <div class="utm-adv-grid">
+                            <div class="utm-field">
+                                <label for="new-campaign-utm-source">utm_source</label>
+                                <input type="text" id="new-campaign-utm-source" placeholder="automático">
+                            </div>
+                            <div class="utm-field">
+                                <label for="new-campaign-utm-medium">utm_medium</label>
+                                <input type="text" id="new-campaign-utm-medium" placeholder="automático">
+                            </div>
+                            <div class="utm-field">
+                                <label for="new-campaign-utm-campaign">utm_campaign</label>
+                                <input type="text" id="new-campaign-utm-campaign" placeholder="gerado a partir do nome">
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <div class="utm-field">
+                    <label for="new-campaign-investimento">Investimento (R$)</label>
                     <input type="number" step="0.01" min="0" id="new-campaign-investimento" placeholder="0,00">
-                    <span class="utm-hint">Opcional — calcula custo por lead e ROI sozinho.</span>
+                    <span class="utm-hint">Opcional. Com ele, o CRM calcula o custo por lead e o retorno.</span>
                 </div>
 
                 <div class="utm-form-actions">
@@ -1173,17 +1198,18 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <div class="utm-tabpanel" data-utm-panel="list">
             <div class="utm-panel">
                 <div class="utm-list-head">
-                    <h3 class="utm-panel-title" style="margin: 0;">
-                        <i class="fa-solid fa-list" style="color: var(--accent-success);"></i> Campanhas
-                    </h3>
+                    <div>
+                        <h3 class="utm-panel-title" style="margin: 0;">Campanhas</h3>
+                        <p class="utm-panel-sub" id="campaigns-list-period" style="margin: 0.2rem 0 0;"></p>
+                    </div>
                     <div class="utm-list-filters">
-                        <input type="text" id="campaign-filter-search" placeholder="Buscar..." oninput="renderCampaignsList()">
-                        <select id="campaign-filter-canal" onchange="renderCampaignsList()">
+                        <input type="text" id="campaign-filter-search" placeholder="Buscar campanha" aria-label="Buscar campanha" oninput="renderCampaignsList()">
+                        <select id="campaign-filter-canal" onchange="renderCampaignsList()" aria-label="Filtrar por canal">
                             <option value="">Todos os canais</option>
-                            <option value="fisico">Físico</option>
-                            <option value="google">Google Ads</option>
-                            <option value="instagram">Instagram</option>
                             <option value="site">Site</option>
+                            <option value="instagram">Instagram</option>
+                            <option value="google">Google Ads</option>
+                            <option value="fisico">QR e panfleto</option>
                         </select>
                         <select id="campaign-filter-status" onchange="renderCampaignsList()">
                             <option value="">Todos os status</option>
