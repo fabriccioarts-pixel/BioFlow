@@ -1,5 +1,12 @@
 # Changelog - CRM Natuclinic
 
+## 2026-11-09 — Mensagens enviadas presas em um tique só
+
+### Corrigido
+* **Mensagens que o paciente já tinha lido apareciam com um tique só ("enviada").** Isso acontecia com cerca de 1 a 3% das mensagens, mais quando o paciente estava com a conversa aberta. A Meta manda os avisos "enviada", "entregue" e "lida" em webhooks separados e sem ordem garantida, e o webhook gravava o último que chegava. Um "enviada" atrasado rebaixava uma mensagem lida. Já um "entregue" que chegava antes de a mensagem ser gravada no banco não achava a linha e se perdia.
+* Agora `waApplyStatus()` só deixa o status avançar (enviada → entregue → falhou → lida). O aviso que chega antes da mensagem existir fica guardado na tabela nova `wa_status_pending`, e `waApplyPendingStatus()` o aplica logo depois do INSERT em todos os caminhos de envio (atendente, IA, mídia, template e áudio). Pendentes com mais de 2 dias são apagados.
+* As mensagens que já estavam presas continuam com um tique, porque o aviso delas já se perdeu.
+
 ## 2026-10-30 — Busca de formulários desligada por padrão e campanhas fora do CRM
 
 ### Alterado
