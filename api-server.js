@@ -620,11 +620,8 @@ app.post('/api/whatsapp/webhook', webhookLimiter, async (req, res) => {
                 }
 
                 try {
-                    if (errorDetail) {
-                        await queryD1('UPDATE wa_messages SET status = ?, error_detail = ? WHERE id = ?', [s.status, errorDetail, s.id]);
-                    } else {
-                        await queryD1('UPDATE wa_messages SET status = ? WHERE id = ?', [s.status, s.id]);
-                    }
+                    // Só avança o status e guarda o aviso se a mensagem ainda não foi gravada.
+                    await waApplyStatus(s.id, s.status, errorDetail);
                 } catch(e) {
                     console.error('Erro ao atualizar status da mensagem:', e);
                 }
@@ -1030,6 +1027,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 'INSERT INTO wa_messages (id, phone, direction, message, status, quoted_id, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 [msg_id, finalTo, 'out', db_message_body, 'sent', quoted_id || null, sentBy]
             );
+            await waApplyPendingStatus(msg_id);
             await waChatsCacheTouch(finalTo, db_message_body, 'out');
 
             // Essa rota só é chamada pelo atendente logado no CRM (a IA manda mensagem
@@ -1126,6 +1124,7 @@ async function sendWhatsappTextInternal(to, text, sentBy = 'ia') {
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', text, 'sent', sentBy]
     );
+    await waApplyPendingStatus(msg_id);
     await waChatsCacheTouch(finalTo, text, 'out');
     try {
         const v = phoneVariants(finalTo);
@@ -1170,6 +1169,7 @@ async function sendWhatsappMediaLibraryInternal(to, mediaLibId, caption, sentBy 
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', db_message_body, 'sent', sentBy]
     );
+    await waApplyPendingStatus(msg_id);
     await waChatsCacheTouch(finalTo, db_message_body, 'out');
     try {
         const v = phoneVariants(finalTo);
@@ -1304,6 +1304,7 @@ async function sendWhatsappTemplateInternal(to, templateName, opts = {}) {
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', renderTemplateForHistory(name, meta, bodyParams), 'sent', opts.sentBy || 'followup']
     );
+    await waApplyPendingStatus(msg_id);
     await waChatsCacheTouch(finalTo, renderTemplateForHistory(name, meta, bodyParams), 'out');
     try {
         const v = phoneVariants(finalTo);
@@ -1334,6 +1335,7 @@ async function sendWhatsappAudioInternal(to, buffer, fileName = 'audio.ogg', sen
         'INSERT INTO wa_messages (id, phone, direction, message, status, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
         [msg_id, finalTo, 'out', `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'sent', sentBy]
     );
+    await waApplyPendingStatus(msg_id);
     await waChatsCacheTouch(finalTo, `[FILE:${fileName}]/api/whatsapp/media/${mediaId}.ogg`, 'out');
     try {
         const v = phoneVariants(finalTo);
@@ -4062,6 +4064,76 @@ queryD1("ALTER TABLE wa_messages ADD COLUMN quoted_id TEXT").catch(() => {});
 queryD1("ALTER TABLE wa_messages ADD COLUMN error_detail TEXT").catch(() => {});
 // Quem enviou a mensagem de saída: username do atendente, 'ia' pra resposta automática, NULL pra legado
 queryD1("ALTER TABLE wa_messages ADD COLUMN sent_by TEXT").catch(() => {});
+// Avisos de status da Meta que chegaram antes da mensagem ser gravada (ver waApplyStatus).
+queryD1(`CREATE TABLE IF NOT EXISTS wa_status_pending (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    error_detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+
+// ==========================================
+// STATUS DAS MENSAGENS ENVIADAS (✓ / ✓✓ / ✓✓ verde)
+// ==========================================
+// A Meta manda "sent", "delivered" e "read" em webhooks separados, sem garantia
+// de ordem, e o "delivered" de quem está com a conversa aberta pode chegar antes
+// do INSERT da própria mensagem terminar. Antes, o webhook gravava o último aviso
+// que chegava: um "sent" atrasado rebaixava uma mensagem lida para um tique só, e
+// um aviso adiantado batia em zero linhas e se perdia — a mensagem ficava em
+// "enviada" pra sempre, mesmo o paciente tendo lido.
+// Agora o status só avança (sent < delivered < failed < read) e o aviso que chega
+// antes da mensagem existir fica em wa_status_pending até o INSERT aplicá-lo.
+const WA_STATUS_RANK = { sent: 1, delivered: 2, failed: 3, read: 4 };
+function waStatusRankSql(col) {
+    return `(CASE ${col} WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'failed' THEN 3 WHEN 'read' THEN 4 ELSE 0 END)`;
+}
+
+// Aplica um aviso de status do webhook. Devolve 'updated', 'kept' (a mensagem já
+// tinha um status igual ou mais avançado) ou 'pending' (a mensagem ainda não foi gravada).
+async function waApplyStatus(id, status, errorDetail = null) {
+    const rank = WA_STATUS_RANK[status] || 0;
+    const upd = await queryD1Meta(
+        `UPDATE wa_messages SET status = ?, error_detail = COALESCE(?, error_detail) WHERE id = ? AND ${waStatusRankSql('status')} < ?`,
+        [status, errorDetail, id, rank]
+    );
+    if (upd && upd.meta && upd.meta.changes) return 'updated';
+
+    const exists = await queryD1('SELECT 1 FROM wa_messages WHERE id = ?', [id]);
+    if (exists && exists[0]) return 'kept';
+
+    await queryD1(
+        `INSERT INTO wa_status_pending (id, status, error_detail) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, error_detail = COALESCE(excluded.error_detail, wa_status_pending.error_detail)
+         WHERE ${waStatusRankSql('excluded.status')} > ${waStatusRankSql('wa_status_pending.status')}`,
+        [id, status, errorDetail]
+    );
+    // O INSERT da mensagem pode ter terminado entre a checagem acima e a gravação
+    // do pendente — nesse caso ninguém mais leria o pendente, então aplica aqui.
+    await waApplyPendingStatus(id);
+    // Pendentes de mensagens que nunca foram gravadas (enviadas por fora do CRM) não servem pra nada.
+    queryD1("DELETE FROM wa_status_pending WHERE created_at < datetime('now', '-2 days')").catch(() => {});
+    return 'pending';
+}
+
+// Chamado logo depois de gravar uma mensagem de saída: aplica um aviso de status
+// que tenha chegado antes do INSERT. Nunca lança — não pode derrubar um envio que já foi.
+async function waApplyPendingStatus(id) {
+    try {
+        const p = await queryD1('SELECT status, error_detail FROM wa_status_pending WHERE id = ?', [id]);
+        if (!p || !p[0]) return;
+        const upd = await queryD1Meta(
+            `UPDATE wa_messages SET status = ?, error_detail = COALESCE(?, error_detail) WHERE id = ? AND ${waStatusRankSql('status')} < ?`,
+            [p[0].status, p[0].error_detail, id, WA_STATUS_RANK[p[0].status] || 0]
+        );
+        let gravada = !!(upd && upd.meta && upd.meta.changes);
+        if (!gravada) {
+            const exists = await queryD1('SELECT 1 FROM wa_messages WHERE id = ?', [id]);
+            gravada = !!(exists && exists[0]);
+        }
+        // Só apaga o pendente quando a mensagem já existe; senão o INSERT ainda vai precisar dele.
+        if (gravada) await queryD1('DELETE FROM wa_status_pending WHERE id = ?', [id]);
+    } catch (e) { console.error('Status pendente da mensagem não aplicado:', e.message); }
+}
 // Migration para suportar troca obrigatória de senha no primeiro acesso
 queryD1("ALTER TABLE crm_users ADD COLUMN must_change_password INTEGER DEFAULT 0").catch(() => {});
 // Personalização de perfil do atendente
