@@ -9,6 +9,8 @@
   * Procedimentos parecidos ("preenchimento", que existe como labial e malar): a IA pergunta qual é antes de falar de valor. A busca ignora acento e caixa, e palavras como "pele" não bastam sozinhas (limpeza de pele não vira peeling de pele).
   * O valor de um procedimento não liberado nunca é enviado ao Gemini: a ferramenta só devolve o que está liberado.
   * A ferramenta e a regra só entram no prompt quando há ao menos um valor liberado. Sem tabela, a IA se comporta como antes.
+* A tabela aceita até 1.000 procedimentos. O catálogo da Natuclinic no Amigo tem 436 itens (serviços, produtos e protocolos), bem mais que os 145 da agenda.
+* `scripts/seed-precos-ia.mjs` carrega a tabela de um arquivo JSON (por exemplo, o extraído da tela "Consultar valor dos procedimentos" do Amigo). Por padrão só confere o arquivo; para gravar no D1 exige `--aplicar`, e recusa sobrescrever uma tabela já salva sem `--sobrescrever`. Os valores vêm com **Liberar** desligado.
 * Rotas novas: `GET /api/precos` (qualquer usuário logado), `PUT /api/precos` e `GET /api/precos/amigo` (só admin; o segundo consulta o Amigo de todas as unidades ativas). A leitura da tabela pela IA tem cache de 1 minuto por instância.
 
 ### Observação

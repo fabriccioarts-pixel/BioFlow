@@ -2032,7 +2032,7 @@ const MEDIA_TOOL_DECLARATION = {
 // não recebe, ela não tem como vazar. Os nomes podem ser importados do Amigo
 // pela tela do Agente de IA (/api/precos/amigo); o valor é digitado uma vez.
 const PRECOS_IA_KEY = 'precos_ia';
-const PRECOS_IA_MAX = 500;
+const PRECOS_IA_MAX = 1000;
 const PRECOS_IA_CACHE_MS = 60 * 1000;
 let _precosIaCache = null; // por instância da função; PUT limpa só a da própria instância (até 1 min de atraso nas outras)
 
