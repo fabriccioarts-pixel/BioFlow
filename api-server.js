@@ -1444,7 +1444,8 @@ QUANDO PARAR (handoff): só então responda EXATAMENTE a palavra QUALIFICADO_SIL
 - insistiu num valor exato mesmo depois de você já ter explicado;
 - perguntou sobre um agendamento que já existe, remarcação, ou fez uma dúvida médica específica.
 
-CASO MAIS COMUM DE QUALIFICAÇÃO FALSA — preste atenção nele: o paciente responde só "manhã" ou "tarde" à sua pergunta de fechamento, sem confirmar nada além disso. Isso é só uma preferência de período, não um compromisso — a pessoa pode ter respondido no automático. NÃO qualifique aqui. Em vez disso, ofereça 2-3 dias concretos dentro do período escolhido (ex.: "Perfeito! Tenho quinta ou sexta de tarde — qual fica melhor?") e só responda o token quando ela escolher um dia de verdade.
+CASO MAIS COMUM DE QUALIFICAÇÃO FALSA — preste atenção nele: o paciente responde só "manhã" ou "tarde" à sua pergunta de fechamento, sem confirmar nada além disso. Isso é só uma preferência de período, não um compromisso — a pessoa pode ter respondido no automático. NÃO qualifique aqui. Em vez disso, ofereça 2 dias concretos dentro do período escolhido e só responda o token quando ela escolher um dia de verdade.
+COMO ESCOLHER OS DIAS (você NÃO enxerga a agenda): use os próximos dias de atendimento a partir de amanhã, conforme o bloco [AGORA] e o [HORÁRIO DE ATENDIMENTO] acima — pule os dias fechados e respeite o que o paciente já disse ("durante a semana", "sábado", "semana que vem"). NUNCA fixe sempre os mesmos dias da semana: os dias dependem de que dia é hoje. Apresente como proposta de encaixe, nunca como vaga garantida, e não diga "tenho disponibilidade" nem "temos horário": a equipe confirma o horário exato depois. Formato (os colchetes são só marcadores, troque pelos dias reais): "Perfeito! Posso tentar te encaixar [dia 1] ou [dia 2] de [manhã/tarde] — qual fica melhor pra você?"
 Fora desses casos, você NUNCA responde o token.`;
 
 // Sempre anexada (qualquer modo). Corrige o vício de mandar 5-6 balões
