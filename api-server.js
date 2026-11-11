@@ -1469,7 +1469,8 @@ Você tem a ferramenta buscar_imagem_resultado, que busca uma foto de exemplo/re
 - Ao usar, em "procedimento" vai SÓ o nome do procedimento que está sendo conversado (ex.: "limpeza de pele") e em "detalhes" a região/queixa que o paciente deu (ex.: "queixo, cravos") — os detalhes ajudam a escolher a imagem certa entre várias do mesmo procedimento.
 - A imagem tem que ser DO MESMO procedimento da conversa. Nunca busque nem mande foto de outro procedimento só porque a região do corpo é parecida (ex.: cravos no queixo é limpeza de pele, não perfiloplastia).
 - Se a busca não encontrar nada (encontrada: false), NÃO invente nem diga que vai mandar uma imagem — só continue a conversa normalmente, sem mencionar a tentativa.
-- Nunca use mais de uma vez na mesma conversa a não ser que o paciente pergunte por outro procedimento diferente.
+- Se a busca devolver ja_enviada: true, o paciente já recebeu todas as fotos que existem desse procedimento: NÃO prometa outra foto nem "outro resultado". Siga o aviso que ela devolve.
+- Não use a ferramenta de novo para o mesmo procedimento por iniciativa sua. Só use de novo se o paciente pedir outro exemplo, ou se ele perguntar por outro procedimento diferente.
 - Não descreva a imagem em texto nem coloque um placeholder tipo "[imagem]" na sua resposta — o sistema anexa a foto de verdade logo depois da sua mensagem. Só fale naturalmente que vai mandar um exemplo.`;
 
 async function getWhatsappAiContext() {
@@ -1948,7 +1949,12 @@ const MEDIA_MATCH_REGION_WORDS = new Set([
 //    mais específica em vez da genérica.
 // `detalhes` é opcional; chamada antiga com tudo junto em `procedimentoPedido`
 // continua funcionando, porque as palavras de região são separadas aqui.
-async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
+// `nomesJaEnviados` (Set de nomes de arquivo, opcional): fotos que a IA já mandou
+// a esse paciente. Entre as que casam, prefere uma que ainda NÃO foi enviada —
+// senão a busca devolvia sempre a mesma foto e a IA prometia "outro resultado"
+// mandando a repetida. Se todas as que casam já foram, devolve a melhor com
+// jaEnviada: true pra quem chama avisar o modelo (e não mandar de novo).
+async function matchMediaForProcedure(procedimentoPedido, detalhes = '', nomesJaEnviados = null) {
     const rows = await queryD1('SELECT id, nome, tipo, mime, thumb_base64, legenda_padrao FROM crm_media');
     const pedidoTokens = tokenizeProcText(procedimentoPedido);
     const nomeTokens = pedidoTokens.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
@@ -1958,15 +1964,22 @@ async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
 
     const candidatos = (rows || []).filter(m => m.tipo === 'image');
     let melhor = null, melhorScore = 0;
+    let melhorNova = null, melhorNovaScore = 0;
     for (const m of candidatos) {
         const refTokens = new Set(tokenizeProcText(`${m.nome || ''} ${m.legenda_padrao || ''}`));
         const nomeHits = nomeTokens.filter(t => refTokens.has(t)).length;
         if (nomeHits < minimoNome) continue;
         const score = nomeHits * 100 + detalheTokens.filter(t => refTokens.has(t)).length;
         if (score > melhorScore) { melhor = m; melhorScore = score; }
+        const jaFoi = !!(nomesJaEnviados && nomesJaEnviados.has(m.nome));
+        if (!jaFoi && score > melhorNovaScore) { melhorNova = m; melhorNovaScore = score; }
     }
     if (!melhor) return null;
-    return { id: melhor.id, nome: melhor.nome, mime: melhor.mime, thumb_base64: melhor.thumb_base64 || null };
+    const escolhida = melhorNova || melhor;
+    return {
+        id: escolhida.id, nome: escolhida.nome, mime: escolhida.mime, thumb_base64: escolhida.thumb_base64 || null,
+        jaEnviada: !melhorNova
+    };
 }
 
 // Sempre disponível pra IA do WhatsApp (ver aiAgendarRetorno). Sem ela a IA
@@ -2209,20 +2222,34 @@ async function callGeminiForWhatsappReply(phone) {
         return { text: normalizeAiReply(texto), mediaId: null };
     }
 
+    // Prefere uma foto que o paciente ainda não recebeu. Se só existir a que ele
+    // já recebeu, o modelo é AVISADO (ja_enviada) em vez de ouvir "encontrada" —
+    // era isso que o fazia prometer "outro resultado" e repetir a mesma foto.
     let midia = null;
-    try { midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes); } catch (e) { /* segue sem mídia */ }
+    try {
+        midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes, await aiSentMediaNames(phone));
+    } catch (e) { /* segue sem mídia */ }
+    const jaEnviada = !!(midia && midia.jaEnviada);
+
+    let respostaFerramenta = { encontrada: false };
+    if (midia && jaEnviada) {
+        respostaFerramenta = {
+            encontrada: false,
+            ja_enviada: true,
+            aviso: 'Todas as fotos desse procedimento que a clínica tem já foram enviadas a este paciente nesta conversa. NÃO diga que vai mandar outra foto ou outro resultado. Se ele pediu mais exemplos, explique com naturalidade que esse é o exemplo que você tem por aqui e que a profissional mostra mais casos parecidos com o dele na avaliação presencial.'
+        };
+    } else if (midia) {
+        respostaFerramenta = { encontrada: true, nome: midia.nome };
+    }
 
     const contentsWithFnResult = [
         ...history,
         { role: 'model', parts: [fnCallPart] },
-        { role: 'user', parts: [{ functionResponse: {
-            name: 'buscar_imagem_resultado',
-            response: midia ? { encontrada: true, nome: midia.nome } : { encontrada: false }
-        } }] }
+        { role: 'user', parts: [{ functionResponse: { name: 'buscar_imagem_resultado', response: respostaFerramenta } }] }
     ];
     const second = await call({ ...body, contents: contentsWithFnResult });
     const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-    return { text: normalizeAiReply(text2), mediaId: midia ? midia.id : null };
+    return { text: normalizeAiReply(text2), mediaId: midia && !jaEnviada ? midia.id : null };
 }
 
 // Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
@@ -3046,24 +3073,37 @@ async function aiReplySupersededBy(phone, incomingWamid, triggerTs) {
     return false;
 }
 
-// A IA já mandou ESSA foto da Biblioteca de Mídia pra esse número nos últimos
-// minutos? Segunda trava contra foto repetida: cobre o caso de duas respostas
-// seguidas (rajada de mensagens, reentrega) escolherem o mesmo exemplo. Casa
-// pelo nome do arquivo gravado na mensagem ([FILE:nome]...) porque cada envio
-// faz upload novo e o media_id da Meta muda toda vez.
-const AI_MEDIA_REPEAT_WINDOW_MIN = 10;
+// Nomes das fotos da Biblioteca de Mídia que a IA já mandou a esse número nos
+// últimos dias. Casa pelo nome do arquivo gravado na mensagem ([FILE:nome]/api/...)
+// porque cada envio faz upload novo e o media_id da Meta muda toda vez. Serve a
+// duas coisas: a busca escolher uma foto que o paciente ainda não viu, e a trava
+// final contra foto repetida (duas respostas seguidas escolhendo a mesma).
+const AI_MEDIA_REPEAT_WINDOW_DAYS = 7;
+async function aiSentMediaNames(phone) {
+    const nomes = new Set();
+    try {
+        const v = phoneVariants(phone);
+        const rows = await queryD1(
+            `SELECT message FROM wa_messages WHERE phone IN (${v.map(() => '?').join(',')}) AND direction = 'out' AND sent_by = 'ia'
+               AND substr(message, 1, 6) = '[FILE:' AND timestamp >= datetime('now', ?)`,
+            [...v, `-${AI_MEDIA_REPEAT_WINDOW_DAYS} days`]
+        );
+        for (const r of rows || []) {
+            const m = String(r.message || '').match(/^\[FILE:(.*?)\]\/api\/whatsapp\/media\//);
+            if (m) nomes.add(m[1]);
+        }
+    } catch (e) { /* sem histórico: trata como "nada enviado" */ }
+    return nomes;
+}
+
+// Trava final, no momento do envio: se a foto escolhida já foi mandada a esse
+// número (corrida entre duas respostas, reentrega), não manda de novo.
 async function aiRecentlySentMedia(phone, mediaLibId) {
     try {
         const rows = await queryD1('SELECT nome FROM crm_media WHERE id = ?', [mediaLibId]);
         const nome = rows && rows[0] && rows[0].nome;
         if (!nome) return false;
-        const v = phoneVariants(phone);
-        const sent = await queryD1(
-            `SELECT 1 FROM wa_messages WHERE phone IN (${v.map(() => '?').join(',')}) AND direction = 'out' AND sent_by = 'ia'
-               AND instr(message, ?) = 1 AND timestamp >= datetime('now', ?) LIMIT 1`,
-            [...v, `[FILE:${nome}]`, `-${AI_MEDIA_REPEAT_WINDOW_MIN} minutes`]
-        );
-        return !!(sent && sent[0]);
+        return (await aiSentMediaNames(phone)).has(nome);
     } catch (e) {
         return false; // na dúvida, deixa mandar: perder a foto é pior que um raro repeteco
     }
@@ -3178,7 +3218,7 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
             if (!textoCompleto) {
                 console.log('IA: resposta cancelada no meio, foto de exemplo não enviada (a execução que assumiu cuida).');
             } else if (await aiRecentlySentMedia(phone, mediaId)) {
-                console.log('IA: mesma foto já enviada há poucos minutos, não repetindo.');
+                console.log('IA: essa foto já foi enviada a este paciente, não repetindo.');
             } else {
                 try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
                 catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
