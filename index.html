@@ -1926,6 +1926,24 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
 
                 <div class="aix-block">
+                    <div class="aix-block-label">Tabela de preços</div>
+                    <p class="aix-block-help">Os valores que a IA pode informar quando o paciente perguntar "quanto custa".
+                        O Amigo não envia valores, então eles ficam aqui: importe os nomes dos procedimentos do Amigo e
+                        digite o valor uma vez. A IA só fala o preço dos procedimentos com <strong>Liberar</strong> ligado —
+                        nos demais ela diz que o valor é definido na avaliação.</p>
+                    <div class="aix-precos-tools">
+                        <input type="search" id="precos-filtro" class="aix-input" placeholder="Buscar procedimento" aria-label="Buscar procedimento"
+                            oninput="renderPrecosIa()">
+                        <button type="button" class="btn-cancel" id="precos-importar" onclick="importarProcedimentosAmigo(this)">
+                            <i class="fa-solid fa-cloud-arrow-down"></i> Importar do Amigo</button>
+                        <button type="button" class="btn-cancel" onclick="addPrecoIaLinha()">
+                            <i class="fa-solid fa-plus"></i> Adicionar</button>
+                    </div>
+                    <div class="aix-precos" id="aix-precos" role="table" aria-label="Tabela de preços da IA"></div>
+                    <p class="aix-block-help" id="precos-resumo" style="margin:0;"></p>
+                </div>
+
+                <div class="aix-block">
                     <div class="aix-block-label">Retomada após a janela de 24h</div>
                     <p class="aix-block-help">Quando a conversa fica sem resposta até a janela de 24h fechar, mande o
                         template de retomada pelo chat. Se o lead tocar no botão, a IA responde na hora o que tinha ficado
