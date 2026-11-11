@@ -13,7 +13,7 @@
 
     <!-- Air Datepicker -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.css">
-    <link rel="stylesheet" href="style.css?v=38">
+    <link rel="stylesheet" href="style.css?v=39">
     <script src="theme.js?v=7"></script>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" href="favicon.png">
@@ -459,6 +459,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
             </button>
             <button class="tab-btn" onclick="switchTab('midias')" id="tab-midias" title="Biblioteca de mídia para enviar aos leads">
                 <i class="fa-solid fa-photo-film"></i> Mídias
+            </button>
+            <button class="tab-btn" onclick="switchTab('procedimentos')" id="tab-procedimentos" title="Procedimentos da clínica e os valores que a IA pode informar">
+                <i class="fa-solid fa-tags"></i> Procedimentos
             </button>
             <button class="tab-btn" onclick="switchTab('cerebro')" id="tab-cerebro" title="Segundo Cérebro: notas da clínica que a IA consulta">
                 <i class="fa-solid fa-brain"></i> Segundo Cérebro
@@ -1926,21 +1929,13 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                 </div>
 
                 <div class="aix-block">
-                    <div class="aix-block-label">Tabela de preços</div>
-                    <p class="aix-block-help">Os valores que a IA pode informar quando o paciente perguntar "quanto custa".
-                        O Amigo não envia valores, então eles ficam aqui: importe os nomes dos procedimentos do Amigo e
-                        digite o valor uma vez. A IA só fala o preço dos procedimentos com <strong>Liberar</strong> ligado —
-                        nos demais ela diz que o valor é definido na avaliação.</p>
-                    <div class="aix-precos-tools">
-                        <input type="search" id="precos-filtro" class="aix-input" placeholder="Buscar procedimento" aria-label="Buscar procedimento"
-                            oninput="renderPrecosIa()">
-                        <button type="button" class="btn-cancel" id="precos-importar" onclick="importarProcedimentosAmigo(this)">
-                            <i class="fa-solid fa-cloud-arrow-down"></i> Importar do Amigo</button>
-                        <button type="button" class="btn-cancel" onclick="addPrecoIaLinha()">
-                            <i class="fa-solid fa-plus"></i> Adicionar</button>
+                    <div class="aix-block-label">Valores dos procedimentos</div>
+                    <p class="aix-block-help">Quais procedimentos a IA pode informar o valor, e quanto custam, ficam na página
+                        <strong>Procedimentos</strong> do menu lateral. Lá dá para ativar vários de uma vez.</p>
+                    <div>
+                        <button type="button" class="btn-cancel" onclick="closeModals(); switchTab('procedimentos');">
+                            <i class="fa-solid fa-tags"></i> Abrir Procedimentos</button>
                     </div>
-                    <div class="aix-precos" id="aix-precos" role="table" aria-label="Tabela de preços da IA"></div>
-                    <p class="aix-block-help" id="precos-resumo" style="margin:0;"></p>
                 </div>
 
                 <div class="aix-block">
@@ -2573,6 +2568,141 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
                     </tr>
                 </thead>
                 <tbody id="list-contatos"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- ABA: PROCEDIMENTOS (valores que a IA pode informar) -->
+    <main class="relacionamento" id="view-procedimentos"
+        style="display: none; padding: 2rem; flex-grow: 1; flex-direction: column;">
+
+        <style>
+            #view-procedimentos h2 { color: var(--text-main); font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
+            #view-procedimentos .prc-count { background: color-mix(in srgb, var(--text-main) 10%, transparent); color: var(--text-main); padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 1rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+            #view-procedimentos .prc-sub { color: var(--text-muted); margin: 0.5rem 0 1.25rem; max-width: 62ch; line-height: 1.5; }
+            #view-procedimentos .prc-sub strong { color: var(--text-main); font-weight: 600; }
+            #view-procedimentos :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+            #view-procedimentos [hidden] { display: none !important; }
+
+            #view-procedimentos .prc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+            #view-procedimentos .prc-busca { position: relative; flex: 1; min-width: 220px; max-width: 340px; }
+            #view-procedimentos .prc-busca i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.8rem; pointer-events: none; }
+            #view-procedimentos .prc-busca input { width: 100%; background: var(--header-btn-bg); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.55rem 0.75rem 0.55rem 2.1rem; border-radius: 8px; font-size: 0.9rem; font-family: inherit; }
+            #view-procedimentos .prc-busca input:focus { border-color: var(--accent-primary); outline: none; }
+            #view-procedimentos .prc-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+            #view-procedimentos .prc-chip { display: inline-flex; align-items: center; gap: 0.4rem; height: 2.1rem; padding: 0 0.85rem; border: 1px solid var(--border-color); border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.82rem; font-weight: 500; cursor: pointer; transition: color 0.15s, border-color 0.15s, background-color 0.15s; }
+            #view-procedimentos .prc-chip:hover { color: var(--text-main); background: var(--bg-hover); }
+            #view-procedimentos .prc-chip[aria-pressed="true"] { color: var(--text-main); border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+            #view-procedimentos .prc-chip b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+            #view-procedimentos .prc-chip[aria-pressed="true"] b { color: var(--accent-primary); }
+            #view-procedimentos .prc-spacer { flex: 1; }
+            #view-procedimentos .prc-btn { display: inline-flex; align-items: center; gap: 0.45rem; height: 2.25rem; padding: 0 0.9rem; border-radius: 8px; font: inherit; font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+            #view-procedimentos .prc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+            #view-procedimentos .prc-dirty { color: var(--text-muted); font-size: 0.82rem; }
+
+            #view-procedimentos .prc-acoes { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; margin-bottom: 0; background: var(--bg-main); border: 1px solid var(--border-color); border-bottom: 0; border-radius: 8px 8px 0 0; }
+            #view-procedimentos .prc-todos { display: inline-flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; color: var(--text-main); cursor: pointer; }
+            #view-procedimentos .prc-sel-info { color: var(--text-muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+            #view-procedimentos .prc-link { background: none; border: 0; padding: 0; color: var(--accent-primary); font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+            #view-procedimentos .prc-link:hover { text-decoration: underline; }
+            #view-procedimentos input[type="checkbox"]:not([data-campo="informar"]) { width: 1rem; height: 1rem; accent-color: var(--accent-primary); cursor: pointer; }
+
+            #view-procedimentos .prc-wrap { border: 1px solid var(--border-color); border-radius: 0 0 8px 8px; }
+            #view-procedimentos .crm-table { table-layout: fixed; font-size: 0.9rem; border-radius: 0; }
+            #view-procedimentos .crm-table thead th { position: sticky; top: 0; z-index: 1; background: var(--btn-secondary-bg); padding: 0.7rem 0.75rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--border-color); }
+            #view-procedimentos .crm-table td { padding: 0.25rem 0.75rem; }
+            #view-procedimentos .crm-table tbody tr:hover { background: var(--bg-hover); }
+            #view-procedimentos .crm-table tbody tr.is-sel { background: color-mix(in srgb, var(--accent-primary) 9%, transparent); }
+            #view-procedimentos .prc-in { width: 100%; background: transparent; border: 1px solid transparent; color: var(--text-main); padding: 0.4rem 0.5rem; border-radius: calc(0.5rem - 2px); font: inherit; font-size: 0.9rem; }
+            #view-procedimentos .prc-in:hover:not(:disabled) { border-color: var(--border-color); }
+            #view-procedimentos .prc-in:focus { border-color: var(--accent-primary); background: var(--header-btn-bg); outline: none; }
+            #view-procedimentos .prc-in:disabled { opacity: 1; cursor: default; }
+            #view-procedimentos .prc-in::placeholder { color: var(--text-muted); opacity: 0.7; }
+            #view-procedimentos .prc-money { display: flex; align-items: center; gap: 0.3rem; color: var(--text-muted); }
+            #view-procedimentos .prc-valor { text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+            #view-procedimentos .prc-valor::-webkit-outer-spin-button, #view-procedimentos .prc-valor::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+            #view-procedimentos .prc-c-sel, #view-procedimentos .prc-c-ativo, #view-procedimentos .prc-c-del { text-align: center; }
+            #view-procedimentos .prc-del { width: 1.9rem; height: 1.9rem; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0.55; }
+            #view-procedimentos tr:hover .prc-del, #view-procedimentos .prc-del:focus-visible { opacity: 1; }
+            #view-procedimentos .prc-del:hover { color: var(--accent-danger); background: var(--accent-danger-tint); }
+            #view-procedimentos .prc-vazio { text-align: center; padding: 2.5rem 1rem !important; color: var(--text-muted); }
+
+            /* Interruptor de ativo: o acento da casa (rosé), nunca verde — verde é só "não lida". */
+            #view-procedimentos .prc-switch { position: relative; display: inline-block; width: 36px; height: 20px; vertical-align: middle; }
+            #view-procedimentos .prc-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+            #view-procedimentos .prc-switch span { position: absolute; inset: 0; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 35%, transparent); transition: background-color 0.15s; }
+            #view-procedimentos .prc-switch span::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg-main); transition: transform 0.15s; }
+            #view-procedimentos .prc-switch input:checked + span { background: var(--accent-primary); }
+            #view-procedimentos .prc-switch input:checked + span::before { transform: translateX(16px); background: #fff; }
+            #view-procedimentos .prc-switch input:disabled { cursor: not-allowed; }
+            #view-procedimentos .prc-switch input:disabled + span { opacity: 0.45; }
+            #view-procedimentos .prc-switch input:focus-visible + span { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+            @media (prefers-reduced-motion: reduce) { #view-procedimentos .prc-switch span, #view-procedimentos .prc-switch span::before { transition: none; } }
+
+            /* Somente leitura (quem não é admin): esconde o que edita */
+            #view-procedimentos.is-readonly .prc-edit, #view-procedimentos.is-readonly .prc-acoes, #view-procedimentos.is-readonly .prc-c-sel, #view-procedimentos.is-readonly .prc-c-del, #view-procedimentos.is-readonly thead th:first-child, #view-procedimentos.is-readonly thead th:last-child { display: none; }
+            #view-procedimentos.is-readonly .prc-wrap { border-radius: 8px; }
+        </style>
+
+        <h2><i class="fa-solid fa-tags" style="color: var(--accent-primary)"></i> Procedimentos
+            <span id="prc-count" class="prc-count">0</span></h2>
+        <p class="prc-sub">Os procedimentos da clínica e o valor de cada um. Os <strong>ativos</strong> são os que a IA pode informar
+            quando o paciente pergunta quanto custa; nos demais ela diz que o valor é definido na avaliação.
+            As mudanças só valem depois de <strong>Salvar alterações</strong>.</p>
+
+        <div class="prc-toolbar">
+            <div class="prc-busca">
+                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                <input type="search" id="prc-busca" placeholder="Buscar procedimento…" aria-label="Buscar procedimento" autocomplete="off">
+            </div>
+            <div class="prc-chips" id="prc-chips" role="group" aria-label="Filtrar por situação">
+                <button type="button" class="prc-chip" data-filtro="todos" aria-pressed="true">Todos <b id="prc-n-todos">0</b></button>
+                <button type="button" class="prc-chip" data-filtro="ativos" aria-pressed="false">Ativos <b id="prc-n-ativos">0</b></button>
+                <button type="button" class="prc-chip" data-filtro="inativos" aria-pressed="false">Inativos <b id="prc-n-inativos">0</b></button>
+                <button type="button" class="prc-chip" data-filtro="semvalor" aria-pressed="false">Sem valor <b id="prc-n-semvalor">0</b></button>
+            </div>
+            <span class="prc-spacer"></span>
+            <span id="prc-dirty" class="prc-dirty" role="status" aria-live="polite" hidden></span>
+            <button type="button" class="btn-secondary prc-btn prc-edit" id="prc-importar" title="Traz os nomes dos procedimentos da agenda do Amigo que ainda não estão na lista">
+                <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i> Importar do Amigo</button>
+            <button type="button" class="btn-secondary prc-btn prc-edit" id="prc-adicionar">
+                <i class="fa-solid fa-plus" aria-hidden="true"></i> Adicionar</button>
+            <button type="button" class="btn-secondary prc-btn prc-edit" id="prc-descartar" hidden>Descartar</button>
+            <button type="button" class="btn-primary prc-btn prc-edit" id="prc-salvar" disabled>
+                <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Salvar alterações</button>
+        </div>
+
+        <div class="prc-acoes">
+            <label class="prc-todos"><input type="checkbox" id="prc-master" aria-label="Selecionar todos os procedimentos da lista"> Selecionar todos</label>
+            <span class="prc-sel-info" id="prc-sel-info" aria-live="polite">Nenhum selecionado</span>
+            <button type="button" class="prc-link" id="prc-limpar-sel" hidden>Limpar seleção</button>
+            <span class="prc-spacer"></span>
+            <span class="prc-sel-info" id="prc-resumo"></span>
+            <button type="button" class="btn-secondary prc-btn" id="prc-desativar">Desativar todos</button>
+            <button type="button" class="btn-secondary prc-btn" id="prc-ativar">Ativar todos</button>
+        </div>
+
+        <div class="table-container prc-wrap">
+            <table class="crm-table" id="prc-table">
+                <colgroup>
+                    <col style="width: 44px;"> <!-- seleção -->
+                    <col> <!-- procedimento: resto do espaço -->
+                    <col style="width: 160px;"> <!-- valor -->
+                    <col style="width: 230px;"> <!-- condição -->
+                    <col style="width: 80px;"> <!-- ativo -->
+                    <col style="width: 52px;"> <!-- remover -->
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Procedimento</th>
+                        <th style="text-align: right;">Valor</th>
+                        <th>Condição</th>
+                        <th style="text-align: center;">Ativo</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="prc-body"></tbody>
             </table>
         </div>
     </main>
@@ -5383,8 +5513,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=34"></script>
-    <script src="app.js?v=39"></script>
+    <script src="app.js?v=40"></script>
     <script src="hoje.js?v=1"></script>
+    <script src="procedimentos.js?v=2"></script>
     <script src="personalizacao.js?v=4"></script>
     <script src="flows.js?v=25"></script>
 

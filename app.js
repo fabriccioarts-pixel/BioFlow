@@ -4380,6 +4380,7 @@ function switchTab(tabId) {
         contatos: 'Contatos',
         fluxos: 'Fluxos',
         midias: 'Mídias',
+        procedimentos: 'Procedimentos',
         cerebro: 'Segundo Cérebro',
         historico: 'Financeiro',
     };
@@ -4440,6 +4441,8 @@ function switchTab(tabId) {
     if(midiasView) midiasView.style.display = 'none';
     const cerebroView = document.getElementById('view-cerebro');
     if(cerebroView) cerebroView.style.display = 'none';
+    const procedimentosView = document.getElementById('view-procedimentos');
+    if(procedimentosView) procedimentosView.style.display = 'none';
 
     // Para polling do chat ao sair da aba
     if (tabId !== 'chat' && window.chatPollingInterval) {
@@ -4547,6 +4550,12 @@ function switchTab(tabId) {
         if (view) {
             view.style.display = 'flex';
             if (typeof loadMidias === 'function') loadMidias(null);
+        }
+    } else if (tabId === 'procedimentos') {
+        const view = document.getElementById('view-procedimentos');
+        if (view) {
+            view.style.display = 'flex';
+            if (typeof loadProcedimentos === 'function') loadProcedimentos();
         }
     } else if (tabId === 'cerebro') {
         const view = document.getElementById('view-cerebro');
@@ -9213,157 +9222,6 @@ function readHorarioAtendimento() {
     return horario;
 }
 
-// ===== Tabela de preços da IA (ferramenta consultar_preco) =====
-// O Amigo não envia valores: os nomes vêm de lá (importação), o valor é digitado
-// aqui. A IA só fala o preço dos procedimentos com "Liberar" ligado.
-let aixPrecos = [];             // linhas em edição: { nome, valor, condicao, informar }
-let aixPrecosCarregado = false; // só salva se a lista foi carregada — nunca apaga a tabela por engano
-let aixPrecosMsg = '';          // aviso da última importação, mostrado junto do resumo
-
-function precoIaNorm(s) {
-    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
-}
-
-async function loadPrecosIa() {
-    aixPrecosCarregado = false;
-    aixPrecosMsg = '';
-    try {
-        const res = await fetch('/api/precos');
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Erro ao carregar a tabela de preços');
-        aixPrecos = (json.precos || []).map(p => ({
-            nome: p.nome, valor: p.valor === undefined ? null : p.valor, condicao: p.condicao || '', informar: !!p.informar
-        }));
-        aixPrecosCarregado = true;
-    } catch (e) {
-        console.error('Erro ao carregar a tabela de preços:', e);
-        aixPrecos = [];
-        aixPrecosMsg = 'Não consegui carregar a tabela de preços (' + e.message + '). Ela não será alterada ao salvar.';
-    }
-    const filtro = document.getElementById('precos-filtro');
-    if (filtro) filtro.value = '';
-    renderPrecosIa();
-}
-
-function atualizarResumoPrecosIa() {
-    const el = document.getElementById('precos-resumo');
-    if (!el) return;
-    const total = aixPrecos.length;
-    const comValor = aixPrecos.filter(p => p.valor !== null && p.valor !== undefined).length;
-    const liberados = aixPrecos.filter(p => p.informar).length;
-    const contagem = total
-        ? `${total} ${total === 1 ? 'procedimento' : 'procedimentos'} · ${comValor} com valor · ${liberados} ${liberados === 1 ? 'liberado' : 'liberados'} para a IA.`
-        : '';
-    el.textContent = [aixPrecosMsg, contagem].filter(Boolean).join(' ');
-}
-
-function renderPrecosIa() {
-    const wrap = document.getElementById('aix-precos');
-    if (!wrap) return;
-    const termo = precoIaNorm((document.getElementById('precos-filtro') || {}).value);
-    const linhas = aixPrecos.map((p, i) => ({ p, i })).filter(({ p }) => !termo || precoIaNorm(p.nome).includes(termo));
-    if (!aixPrecos.length) {
-        wrap.innerHTML = '<div class="aix-precos-vazio">Nenhum procedimento ainda. Use "Importar do Amigo" ou "Adicionar".</div>';
-    } else if (!linhas.length) {
-        wrap.innerHTML = '<div class="aix-precos-vazio">Nenhum procedimento encontrado.</div>';
-    } else {
-        wrap.innerHTML = '<div class="aix-precos-head" role="row"><span>Procedimento</span><span>Valor (R$)</span><span>Condição</span><span>Liberar</span><span></span></div>'
-            + linhas.map(({ p, i }) => {
-                const temValor = p.valor !== null && p.valor !== undefined;
-                return `
-        <div class="aix-precos-row" role="row" data-i="${i}">
-            <input class="aix-input" maxlength="120" value="${escapeHtml(p.nome)}" aria-label="Procedimento"
-                oninput="setPrecoIaCampo(${i}, 'nome', this.value)">
-            <input class="aix-input" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="—"
-                value="${temValor ? p.valor : ''}" aria-label="Valor em reais"
-                oninput="setPrecoIaCampo(${i}, 'valor', this.value)">
-            <input class="aix-input" maxlength="80" placeholder="ex.: por sessão" value="${escapeHtml(p.condicao)}" aria-label="Condição"
-                oninput="setPrecoIaCampo(${i}, 'condicao', this.value)">
-            <label class="ui-switch" title="${temValor ? 'A IA pode informar este valor' : 'Digite um valor para poder liberar'}">
-                <input type="checkbox" class="aix-preco-informar" ${p.informar ? 'checked' : ''} ${temValor ? '' : 'disabled'}
-                    aria-label="A IA pode informar este valor" onchange="setPrecoIaCampo(${i}, 'informar', this.checked)">
-                <span class="ui-switch-track"></span>
-            </label>
-            <button type="button" class="aix-preco-del" onclick="removePrecoIaLinha(${i})" title="Remover"
-                aria-label="Remover ${escapeHtml(p.nome || 'linha em branco')}"><i class="fa-solid fa-trash"></i></button>
-        </div>`;
-            }).join('');
-    }
-    atualizarResumoPrecosIa();
-}
-
-// Edita a linha sem redesenhar a lista (não perde o foco de quem está digitando).
-function setPrecoIaCampo(i, campo, v) {
-    const p = aixPrecos[i];
-    if (!p) return;
-    if (campo === 'valor') {
-        const t = String(v).trim();
-        const n = Number(t);
-        p.valor = t === '' || !Number.isFinite(n) ? null : n;
-        const sw = document.querySelector(`#aix-precos .aix-precos-row[data-i="${i}"] .aix-preco-informar`);
-        if (sw) {
-            sw.disabled = p.valor === null;
-            if (p.valor === null) { sw.checked = false; p.informar = false; }
-            if (sw.parentElement) sw.parentElement.title = p.valor === null ? 'Digite um valor para poder liberar' : 'A IA pode informar este valor';
-        }
-    } else if (campo === 'informar') {
-        p.informar = !!v && p.valor !== null;
-    } else {
-        p[campo] = String(v);
-    }
-    atualizarResumoPrecosIa();
-}
-
-function addPrecoIaLinha() {
-    aixPrecos.unshift({ nome: '', valor: null, condicao: '', informar: false });
-    const filtro = document.getElementById('precos-filtro');
-    if (filtro) filtro.value = '';
-    renderPrecosIa();
-    const primeiro = document.querySelector('#aix-precos .aix-precos-row input');
-    if (primeiro) primeiro.focus();
-}
-
-function removePrecoIaLinha(i) {
-    aixPrecos.splice(i, 1);
-    renderPrecosIa();
-}
-
-async function importarProcedimentosAmigo(btn) {
-    if (btn) btn.disabled = true;
-    try {
-        const res = await fetch('/api/precos/amigo');
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Erro ao consultar o Amigo');
-        const existentes = new Set(aixPrecos.map(p => precoIaNorm(p.nome)));
-        let novos = 0;
-        for (const nome of json.nomes || []) {
-            const chave = precoIaNorm(nome);
-            if (existentes.has(chave)) continue;
-            existentes.add(chave);
-            aixPrecos.push({ nome, valor: null, condicao: '', informar: false });
-            novos++;
-        }
-        aixPrecos.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-        aixPrecosMsg = novos
-            ? `${novos} ${novos === 1 ? 'procedimento importado' : 'procedimentos importados'} do Amigo — preencha os valores e clique em Salvar.`
-            : 'Nada novo: a tabela já tem todos os procedimentos do Amigo.';
-        const filtro = document.getElementById('precos-filtro');
-        if (filtro) filtro.value = '';
-        renderPrecosIa();
-    } catch (e) {
-        aixPrecosMsg = 'Não consegui importar do Amigo: ' + e.message;
-        atualizarResumoPrecosIa();
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-}
-
-function readPrecosIa() {
-    return aixPrecos
-        .filter(p => String(p.nome || '').trim())
-        .map(p => ({ nome: p.nome, valor: p.valor, condicao: p.condicao, informar: !!p.informar }));
-}
-
 // Select do template de retomada: lista os templates da Meta com o status ao
 // lado, e mantém o salvo na lista mesmo se a Meta não devolver (ex.: excluído).
 async function renderRetomadaTemplateSelect(selected, selectId = 'retomada-template') {
@@ -9432,8 +9290,6 @@ async function openWhatsappAiSettingsModal() {
             document.getElementById('retomada-instrucoes').value = rc.instrucoes || '';
             renderRetomadaTemplateSelect(rc.template_name || '');
         } catch (e) { console.error('Erro ao buscar horário/retomada:', e); }
-
-        await loadPrecosIa();
     } catch (e) {
         console.error('Erro ao buscar configuração da IA:', e);
     }
@@ -9461,7 +9317,7 @@ async function saveWhatsappAiSettings() {
         instrucoes: (document.getElementById('retomada-instrucoes') || {}).value || ''
     };
     try {
-        const [toggleRes, contextRes, oppsRes, horarioRes, retomadaRes, precosRes] = await Promise.all([
+        const [toggleRes, contextRes, oppsRes, horarioRes, retomadaRes] = await Promise.all([
             fetch('/api/settings/whatsapp-ai', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -9486,19 +9342,10 @@ async function saveWhatsappAiSettings() {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(retomada)
-            }),
-            // Só envia a tabela de preços se ela foi carregada (senão apagaria a que está salva).
-            aixPrecosCarregado
-                ? fetch('/api/precos', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ precos: readPrecosIa() })
-                })
-                : Promise.resolve(null)
+            })
         ]);
         const toggleJson = await toggleRes.json();
         const contextJson = await contextRes.json();
-        if (precosRes && !precosRes.ok) { const pj = await precosRes.json().catch(() => ({})); throw new Error(pj.error || 'Erro ao salvar a tabela de preços'); }
         if (!toggleRes.ok) throw new Error(toggleJson.error || 'Erro ao salvar interruptor da IA');
         if (!contextRes.ok) throw new Error(contextJson.error || 'Erro ao salvar contexto da IA');
         if (!oppsRes.ok) { const oj = await oppsRes.json().catch(() => ({})); throw new Error(oj.error || 'Erro ao salvar detector de oportunidades'); }

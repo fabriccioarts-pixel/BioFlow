@@ -9073,51 +9073,6 @@ body:has(#login-overlay.active) header { display: none; }
 }
 #modalWhatsappAiSettings .aix-note i { color: var(--accent-warning); margin-top: 0.12rem; }
 
-/* Tabela de preços da IA */
-#modalWhatsappAiSettings .aix-precos-tools { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-#modalWhatsappAiSettings .aix-precos-tools .aix-input { flex: 1 1 11rem; width: auto; }
-#modalWhatsappAiSettings .aix-precos {
-    display: flex;
-    flex-direction: column;
-    max-height: 340px;
-    overflow: auto;
-    border: 1px solid var(--agx-line-soft);
-    border-radius: 10px;
-    background: var(--agx-surface);
-}
-#modalWhatsappAiSettings .aix-precos-head,
-#modalWhatsappAiSettings .aix-precos-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) 6.5rem minmax(0, 1fr) 3.2rem 2rem;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.45rem 0.75rem;
-}
-#modalWhatsappAiSettings .aix-precos-head {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--agx-surface);
-    border-bottom: 1px solid var(--agx-line-soft);
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: var(--text-muted);
-}
-#modalWhatsappAiSettings .aix-precos-head span:nth-child(4) { text-align: center; }
-#modalWhatsappAiSettings .aix-precos-row + .aix-precos-row { border-top: 1px solid var(--agx-line-soft); }
-#modalWhatsappAiSettings .aix-precos-row .aix-input { padding: 0.35rem 0.5rem; font-size: 0.8rem; }
-#modalWhatsappAiSettings .aix-precos-row .ui-switch { justify-self: center; }
-#modalWhatsappAiSettings .aix-preco-del {
-    width: 1.8rem;
-    height: 1.8rem;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-}
-#modalWhatsappAiSettings .aix-preco-del:hover { color: var(--accent-danger); background: var(--accent-danger-tint); }
-#modalWhatsappAiSettings .aix-precos-vazio { padding: 1rem; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
 
 /* Rodapé */
 #modalWhatsappAiSettings .modal-actions.aix-footer {
