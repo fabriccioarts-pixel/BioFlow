@@ -1,5 +1,19 @@
 # Changelog - CRM Natuclinic
 
+## 2026-11-11 — Página "Procedimentos" no menu
+
+### Adicionado
+* **Página própria "Procedimentos" no menu lateral**, com a lista dos procedimentos da clínica e o valor de cada um. Ela substitui o bloco "Tabela de preços" que ficava dentro da configuração do Agente de IA.
+  * **Ativo** é o procedimento cujo valor a IA pode informar quando o paciente pergunta quanto custa. Os inativos continuam com "o valor é definido na avaliação". Só dá para ativar procedimento com valor.
+  * **Seleção em lote:** checkbox em cada linha, "Selecionar todos" (da lista filtrada) e Shift + clique para marcar um intervalo.
+  * **Ativar e desativar em massa:** os botões valem para os selecionados; sem seleção, valem para todos os procedimentos da lista filtrada (o texto do botão diz quantos, por exemplo "Ativar 13 filtrados"). Ao ativar, os sem valor ficam inativos e o aviso diz quantos foram.
+  * **Busca** por nome e filtros **Todos / Ativos / Inativos / Sem valor**, cada um com a contagem.
+  * **As mudanças só valem ao clicar em "Salvar alterações".** A tela mostra quantas alterações estão pendentes, tem "Descartar" e avisa ao recarregar a página com alteração não salva. Se o salvamento falhar (por exemplo, nome repetido), o que foi digitado continua na tela.
+  * Quem não é administrador só consulta: a tela esconde seleção, edição, importar e salvar.
+
+### Alterado
+* No modal do Agente de IA, o bloco "Tabela de preços" virou um atalho "Abrir Procedimentos". Os dados e as rotas (`/api/precos`) são os mesmos, então nada do que já foi gravado se perde.
+
 ## 2026-11-11 — Tabela de preços para a IA responder "quanto custa"
 
 ### Adicionado
