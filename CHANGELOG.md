@@ -1,5 +1,16 @@
 # Changelog - CRM Natuclinic
 
+## 2026-11-11 — A IA acha o preço pelo nome que o paciente fala
+
+### Corrigido
+* **A IA respondia "não tenho esse valor" para procedimentos que estavam ativos na tabela.** No primeiro teste em produção, "Quanto tá o 4 life infantil" e "E do cart 2?" não acharam nada, apesar de "4Life Transfer Factor - Infantil" e "Cart 2 Gold" estarem ativos. Eram dois defeitos da busca por nome:
+  * O paciente escreve "4 life" e o cadastro tem "4Life" (junto). Agora as duas formas casam.
+  * Os nomes do Amigo são longos ("Cart 2 Gold- (Colágeno tipo 2, Magnésio, Vitamina c...) 590mg."), e a busca exigia que metade do nome aparecesse no pedido. Agora conta quanto do **pedido** aparece no nome: "cart 2" acha o item.
+* Palavras como "valor" e "quanto custa" no pedido deixam de atrapalhar a busca.
+* Letras soltas passam a distinguir itens: "vitamina a" não pode mais cair em "Vitamina E" (preço errado), e o nome exato vence o parecido ("lavieen" não vira "Lavieen Retorno").
+* Quando o pedido serve para vários itens ("botox", "hipro", "4 life"), a IA continua perguntando qual é, em vez de escolher um e informar o valor errado.
+* Conferido contra a tabela real de produção: os 435 itens são achados pelo próprio nome (435 de 435), e nenhum pedido curto (as duas primeiras palavras do nome) fica sem resposta: 277 acham o item certo e 147 viram pergunta de "qual deles?".
+
 ## 2026-11-11 — Página "Procedimentos" no menu
 
 ### Adicionado

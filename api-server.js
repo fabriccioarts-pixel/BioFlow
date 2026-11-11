@@ -2093,41 +2093,69 @@ function formatarValorPreco(v) {
     return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ');
 }
 
-// Acha o procedimento da tabela que o paciente pediu. Palavras de região/pele
-// ("pele", "testa") não bastam sozinhas para casar (senão "limpeza de pele"
-// achava "peeling de pele"), mas desempatam: "botox" prefere "Botox" a "Botox
-// Testa", e "botox testa" prefere o contrário. Empate real = ambíguo, e a IA
-// pergunta qual é em vez de chutar um valor.
+// Palavras que o paciente (ou o modelo) coloca junto do nome e que não fazem parte dele.
+const PRECO_PALAVRAS_SOLTAS = new Set(['valor', 'valores', 'preco', 'precos', 'custa', 'custo', 'custos', 'quanto', 'quantos', 'reais', 'real']);
+
+// Acha o procedimento da tabela que o paciente pediu.
+// O que conta é quanto do PEDIDO aparece no nome, não o contrário: os nomes do Amigo são longos
+// ("Cart 2 Gold- (Colágeno tipo 2, Magnésio...) 590mg."), e a paciente diz só "cart 2".
+// - "4 life" (pedido) casa com "4Life" (nome), e vice-versa;
+// - palavras de região/pele ("pele", "testa") não bastam sozinhas (senão "limpeza de pele" achava
+//   "peeling de pele"), mas desempatam: "botox testa" prefere o nome que tem "testa";
+// - mais palavras do pedido casadas ganha; empate real = ambíguo, e a IA pergunta qual é em vez
+//   de chutar um valor.
 function buscarPrecoNaTabela(tabela, pedido) {
-    const pedidoTokens = new Set(tokenizeProcText(pedido));
-    if (!pedidoTokens.size) return { tipo: 'nenhum' };
+    const pedidoTokens = tokenizeProcText(pedido).filter(t => !PRECO_PALAVRAS_SOLTAS.has(t));
+    if (!pedidoTokens.length) return { tipo: 'nenhum' };
     const pedidoNorm = normalizeProcText(pedido).replace(/\s+/g, ' ');
+    const regiaoDoPedido = pedidoTokens.filter(t => MEDIA_MATCH_REGION_WORDS.has(t));
+    const fortesDoPedido = pedidoTokens.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
+    const alvo = fortesDoPedido.length ? fortesDoPedido : pedidoTokens; // o que precisa casar
+    const minimo = Math.max(1, Math.ceil(alvo.length * 0.6));
+    const letrasSoltas = (s) => normalizeProcText(s).split(/[^a-z0-9]+/).filter(t => t.length === 1 && 'aeo'.includes(t)).sort().join('');
+    const letrasDoPedido = letrasSoltas(pedido);
+
     const pontuados = [];
     for (const row of tabela) {
-        const todos = tokenizeProcText(row.nome);
-        if (!todos.length) continue;
-        const fortes = todos.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
-        const regiao = todos.filter(t => MEDIA_MATCH_REGION_WORDS.has(t));
-        const base = fortes.length ? fortes : todos;
-        const hits = base.filter(t => pedidoTokens.has(t)).length;
-        if (!hits) continue;
-        const cobertura = hits / base.length;
-        if (cobertura < 0.5) continue;
-        const regiaoCasada = fortes.length ? regiao.filter(t => pedidoTokens.has(t)).length : 0;
-        const regiaoSobrando = fortes.length ? regiao.length - regiaoCasada : 0;
+        const nomeTokens = tokenizeProcText(row.nome);
+        if (!nomeTokens.length) continue;
+        const nomeSet = new Set(nomeTokens);
+        const nomeFusoes = new Set(nomeTokens.slice(1).map((t, i) => nomeTokens[i] + t)); // "4"+"life" -> "4life"
+        const casados = new Set();
+        alvo.forEach((t, i) => {
+            if (nomeSet.has(t)) casados.add(i);
+            else if (i + 1 < alvo.length && nomeSet.has(t + alvo[i + 1])) { casados.add(i); casados.add(i + 1); }
+            else if (i > 0 && nomeSet.has(alvo[i - 1] + t)) { casados.add(i - 1); casados.add(i); }
+            else if (nomeFusoes.has(t)) casados.add(i);
+        });
+        if (casados.size < minimo) continue;
+        const regiaoNome = nomeTokens.filter(t => MEDIA_MATCH_REGION_WORDS.has(t));
+        const regiaoCasada = regiaoDoPedido.filter(t => nomeSet.has(t)).length;
+        const regiaoSobrando = regiaoNome.filter(t => !regiaoDoPedido.includes(t)).length;
         const exato = normalizeProcText(row.nome).replace(/\s+/g, ' ') === pedidoNorm ? 1 : 0;
-        pontuados.push({ row, exato, hits, cobertura, regiaoCasada, regiaoSobrando });
+        // "genérico": o nome É o pedido (só as palavras fortes do pedido, nenhuma região a mais)
+        const fortesNome = nomeTokens.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
+        // Letras soltas (a, e, o) caem como "palavra de ligação", mas em "Vitamina A" / "Vitamina E" são
+        // o que distingue os itens: só é genérico se as letras soltas também forem as mesmas.
+        const generico = regiaoSobrando === 0 && fortesNome.length === alvo.length && fortesNome.every(t => alvo.includes(t))
+            && letrasSoltas(row.nome) === letrasDoPedido;
+        pontuados.push({ row, exato, casados: casados.size, regiaoCasada, generico, tamanho: nomeTokens.length });
     }
     if (!pontuados.length) return { tipo: 'nenhum' };
-    const chaves = ['exato', 'hits', 'cobertura', 'regiaoCasada'];
+
+    const chaves = ['exato', 'casados', 'regiaoCasada'];
     pontuados.sort((a, b) => {
         for (const k of chaves) if (b[k] !== a[k]) return b[k] - a[k];
-        return a.regiaoSobrando - b.regiaoSobrando;
+        return 0;
     });
-    const m = pontuados[0];
-    const empatados = pontuados.filter(p => chaves.every(k => p[k] === m[k]) && p.regiaoSobrando === m.regiaoSobrando);
-    if (empatados.length > 1) return { tipo: 'ambiguo', opcoes: empatados.slice(0, 6).map(p => p.row.nome) };
-    return { tipo: 'achou', row: m.row };
+    const topo = pontuados.filter(p => chaves.every(k => p[k] === pontuados[0][k]));
+    if (topo.length === 1) return { tipo: 'achou', row: topo[0].row };
+    // Empate: desempata só se UM candidato é o nome genérico do pedido ("botox" prefere "Botox"
+    // a "Botox Testa"); senão é ambíguo de verdade ("hipro" tem vários, a IA pergunta qual).
+    const genericos = topo.filter(p => p.generico);
+    if (genericos.length === 1) return { tipo: 'achou', row: genericos[0].row };
+    topo.sort((a, b) => a.tamanho - b.tamanho);
+    return { tipo: 'ambiguo', opcoes: topo.slice(0, 6).map(p => p.row.nome) };
 }
 
 // O que a ferramenta devolve ao modelo. Valor SÓ aparece quando liberado.
