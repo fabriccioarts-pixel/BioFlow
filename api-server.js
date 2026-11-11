@@ -1444,7 +1444,8 @@ QUANDO PARAR (handoff): só então responda EXATAMENTE a palavra QUALIFICADO_SIL
 - insistiu num valor exato mesmo depois de você já ter explicado;
 - perguntou sobre um agendamento que já existe, remarcação, ou fez uma dúvida médica específica.
 
-CASO MAIS COMUM DE QUALIFICAÇÃO FALSA — preste atenção nele: o paciente responde só "manhã" ou "tarde" à sua pergunta de fechamento, sem confirmar nada além disso. Isso é só uma preferência de período, não um compromisso — a pessoa pode ter respondido no automático. NÃO qualifique aqui. Em vez disso, ofereça 2-3 dias concretos dentro do período escolhido (ex.: "Perfeito! Tenho quinta ou sexta de tarde — qual fica melhor?") e só responda o token quando ela escolher um dia de verdade.
+CASO MAIS COMUM DE QUALIFICAÇÃO FALSA — preste atenção nele: o paciente responde só "manhã" ou "tarde" à sua pergunta de fechamento, sem confirmar nada além disso. Isso é só uma preferência de período, não um compromisso — a pessoa pode ter respondido no automático. NÃO qualifique aqui. Em vez disso, ofereça 2 dias concretos dentro do período escolhido e só responda o token quando ela escolher um dia de verdade.
+COMO ESCOLHER OS DIAS (você NÃO enxerga a agenda): use os próximos dias de atendimento a partir de amanhã, conforme o bloco [AGORA] e o [HORÁRIO DE ATENDIMENTO] acima — pule os dias fechados e respeite o que o paciente já disse ("durante a semana", "sábado", "semana que vem"). NUNCA fixe sempre os mesmos dias da semana: os dias dependem de que dia é hoje. Apresente como proposta de encaixe, nunca como vaga garantida, e não diga "tenho disponibilidade" nem "temos horário": a equipe confirma o horário exato depois. Formato (os colchetes são só marcadores, troque pelos dias reais): "Perfeito! Posso tentar te encaixar [dia 1] ou [dia 2] de [manhã/tarde] — qual fica melhor pra você?"
 Fora desses casos, você NUNCA responde o token.`;
 
 // Sempre anexada (qualquer modo). Corrige o vício de mandar 5-6 balões
@@ -1469,7 +1470,8 @@ Você tem a ferramenta buscar_imagem_resultado, que busca uma foto de exemplo/re
 - Ao usar, em "procedimento" vai SÓ o nome do procedimento que está sendo conversado (ex.: "limpeza de pele") e em "detalhes" a região/queixa que o paciente deu (ex.: "queixo, cravos") — os detalhes ajudam a escolher a imagem certa entre várias do mesmo procedimento.
 - A imagem tem que ser DO MESMO procedimento da conversa. Nunca busque nem mande foto de outro procedimento só porque a região do corpo é parecida (ex.: cravos no queixo é limpeza de pele, não perfiloplastia).
 - Se a busca não encontrar nada (encontrada: false), NÃO invente nem diga que vai mandar uma imagem — só continue a conversa normalmente, sem mencionar a tentativa.
-- Nunca use mais de uma vez na mesma conversa a não ser que o paciente pergunte por outro procedimento diferente.
+- Se a busca devolver ja_enviada: true, o paciente já recebeu todas as fotos que existem desse procedimento: NÃO prometa outra foto nem "outro resultado". Siga o aviso que ela devolve.
+- Não use a ferramenta de novo para o mesmo procedimento por iniciativa sua. Só use de novo se o paciente pedir outro exemplo, ou se ele perguntar por outro procedimento diferente.
 - Não descreva a imagem em texto nem coloque um placeholder tipo "[imagem]" na sua resposta — o sistema anexa a foto de verdade logo depois da sua mensagem. Só fale naturalmente que vai mandar um exemplo.`;
 
 async function getWhatsappAiContext() {
@@ -1948,7 +1950,12 @@ const MEDIA_MATCH_REGION_WORDS = new Set([
 //    mais específica em vez da genérica.
 // `detalhes` é opcional; chamada antiga com tudo junto em `procedimentoPedido`
 // continua funcionando, porque as palavras de região são separadas aqui.
-async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
+// `nomesJaEnviados` (Set de nomes de arquivo, opcional): fotos que a IA já mandou
+// a esse paciente. Entre as que casam, prefere uma que ainda NÃO foi enviada —
+// senão a busca devolvia sempre a mesma foto e a IA prometia "outro resultado"
+// mandando a repetida. Se todas as que casam já foram, devolve a melhor com
+// jaEnviada: true pra quem chama avisar o modelo (e não mandar de novo).
+async function matchMediaForProcedure(procedimentoPedido, detalhes = '', nomesJaEnviados = null) {
     const rows = await queryD1('SELECT id, nome, tipo, mime, thumb_base64, legenda_padrao FROM crm_media');
     const pedidoTokens = tokenizeProcText(procedimentoPedido);
     const nomeTokens = pedidoTokens.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
@@ -1958,15 +1965,22 @@ async function matchMediaForProcedure(procedimentoPedido, detalhes = '') {
 
     const candidatos = (rows || []).filter(m => m.tipo === 'image');
     let melhor = null, melhorScore = 0;
+    let melhorNova = null, melhorNovaScore = 0;
     for (const m of candidatos) {
         const refTokens = new Set(tokenizeProcText(`${m.nome || ''} ${m.legenda_padrao || ''}`));
         const nomeHits = nomeTokens.filter(t => refTokens.has(t)).length;
         if (nomeHits < minimoNome) continue;
         const score = nomeHits * 100 + detalheTokens.filter(t => refTokens.has(t)).length;
         if (score > melhorScore) { melhor = m; melhorScore = score; }
+        const jaFoi = !!(nomesJaEnviados && nomesJaEnviados.has(m.nome));
+        if (!jaFoi && score > melhorNovaScore) { melhorNova = m; melhorNovaScore = score; }
     }
     if (!melhor) return null;
-    return { id: melhor.id, nome: melhor.nome, mime: melhor.mime, thumb_base64: melhor.thumb_base64 || null };
+    const escolhida = melhorNova || melhor;
+    return {
+        id: escolhida.id, nome: escolhida.nome, mime: escolhida.mime, thumb_base64: escolhida.thumb_base64 || null,
+        jaEnviada: !melhorNova
+    };
 }
 
 // Sempre disponível pra IA do WhatsApp (ver aiAgendarRetorno). Sem ela a IA
@@ -2209,20 +2223,34 @@ async function callGeminiForWhatsappReply(phone) {
         return { text: normalizeAiReply(texto), mediaId: null };
     }
 
+    // Prefere uma foto que o paciente ainda não recebeu. Se só existir a que ele
+    // já recebeu, o modelo é AVISADO (ja_enviada) em vez de ouvir "encontrada" —
+    // era isso que o fazia prometer "outro resultado" e repetir a mesma foto.
     let midia = null;
-    try { midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes); } catch (e) { /* segue sem mídia */ }
+    try {
+        midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes, await aiSentMediaNames(phone));
+    } catch (e) { /* segue sem mídia */ }
+    const jaEnviada = !!(midia && midia.jaEnviada);
+
+    let respostaFerramenta = { encontrada: false };
+    if (midia && jaEnviada) {
+        respostaFerramenta = {
+            encontrada: false,
+            ja_enviada: true,
+            aviso: 'Todas as fotos desse procedimento que a clínica tem já foram enviadas a este paciente nesta conversa. NÃO diga que vai mandar outra foto ou outro resultado. Se ele pediu mais exemplos, explique com naturalidade que esse é o exemplo que você tem por aqui e que a profissional mostra mais casos parecidos com o dele na avaliação presencial.'
+        };
+    } else if (midia) {
+        respostaFerramenta = { encontrada: true, nome: midia.nome };
+    }
 
     const contentsWithFnResult = [
         ...history,
         { role: 'model', parts: [fnCallPart] },
-        { role: 'user', parts: [{ functionResponse: {
-            name: 'buscar_imagem_resultado',
-            response: midia ? { encontrada: true, nome: midia.nome } : { encontrada: false }
-        } }] }
+        { role: 'user', parts: [{ functionResponse: { name: 'buscar_imagem_resultado', response: respostaFerramenta } }] }
     ];
     const second = await call({ ...body, contents: contentsWithFnResult });
     const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-    return { text: normalizeAiReply(text2), mediaId: midia ? midia.id : null };
+    return { text: normalizeAiReply(text2), mediaId: midia && !jaEnviada ? midia.id : null };
 }
 
 // Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
@@ -2936,9 +2964,13 @@ async function aiStillOnForPhone(phone) {
 // pausas de ritmo humano que já existem aqui como janela de "assentamento" da
 // rajada, em vez de somar mais um atraso novo (a soma já é limitada por
 // max_total pra não estourar o timeout do webhook da Meta).
+// Devolve true se mandou TODOS os balões; false se desistiu no meio (rajada
+// superada, IA desligada). Quem chama usa isso pra não mandar a foto de
+// exemplo de uma resposta que foi cancelada — senão a foto saía sozinha e a
+// invocação que assumiu a resposta mandava a mesma foto de novo.
 async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0, supersededCheck = null) {
     let parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
-    if (!parts.length) return;
+    if (!parts.length) return true;
     // Trava dura: nunca mais que 3 balões por resposta (o modelo às vezes cospe
     // 5-6). O excedente é juntado na última mensagem.
     const AI_MAX_CHUNKS = 3;
@@ -2958,14 +2990,14 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     if (!cfg.human) {
         if (floorSec > 0) {
             await new Promise(r => setTimeout(r, floorSec * 1000));
-            if (!(await stillGood())) return;
+            if (!(await stillGood())) return false;
         }
         for (let i = 0; i < parts.length; i++) {
-            if (!(await stillGood())) return;
+            if (!(await stillGood())) return false;
             await sendWhatsappTextInternal(phone, parts[i]);
             if (i < parts.length - 1) await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
         }
-        return;
+        return true;
     }
 
     const rand = (a, b) => a + Math.random() * (b - a);
@@ -2981,10 +3013,10 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     let readMs = Math.max(jit(rand(cfg.readMinMs, cfg.readMaxMs)), floorSec * 1000);
     if (cfg.typing) await sendTypingIndicator(incomingWamid);
     await sleep(readMs);
-    if (!(await stillGood())) return;
+    if (!(await stillGood())) return false;
 
     for (let i = 0; i < parts.length; i++) {
-        if (!(await stillGood())) return;
+        if (!(await stillGood())) return false;
 
         let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
         if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
@@ -2993,6 +3025,7 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
         await sleep(wait);
         await sendWhatsappTextInternal(phone, parts[i]);
     }
+    return true;
 }
 
 // Anti-duplicidade da IA: quando o lead manda uma rajada de mensagens, a Meta
@@ -3039,6 +3072,42 @@ async function aiReplySupersededBy(phone, incomingWamid, triggerTs) {
     }
     if (await hasOutboundSince(phone, triggerTs)) return true;
     return false;
+}
+
+// Nomes das fotos da Biblioteca de Mídia que a IA já mandou a esse número nos
+// últimos dias. Casa pelo nome do arquivo gravado na mensagem ([FILE:nome]/api/...)
+// porque cada envio faz upload novo e o media_id da Meta muda toda vez. Serve a
+// duas coisas: a busca escolher uma foto que o paciente ainda não viu, e a trava
+// final contra foto repetida (duas respostas seguidas escolhendo a mesma).
+const AI_MEDIA_REPEAT_WINDOW_DAYS = 7;
+async function aiSentMediaNames(phone) {
+    const nomes = new Set();
+    try {
+        const v = phoneVariants(phone);
+        const rows = await queryD1(
+            `SELECT message FROM wa_messages WHERE phone IN (${v.map(() => '?').join(',')}) AND direction = 'out' AND sent_by = 'ia'
+               AND substr(message, 1, 6) = '[FILE:' AND timestamp >= datetime('now', ?)`,
+            [...v, `-${AI_MEDIA_REPEAT_WINDOW_DAYS} days`]
+        );
+        for (const r of rows || []) {
+            const m = String(r.message || '').match(/^\[FILE:(.*?)\]\/api\/whatsapp\/media\//);
+            if (m) nomes.add(m[1]);
+        }
+    } catch (e) { /* sem histórico: trata como "nada enviado" */ }
+    return nomes;
+}
+
+// Trava final, no momento do envio: se a foto escolhida já foi mandada a esse
+// número (corrida entre duas respostas, reentrega), não manda de novo.
+async function aiRecentlySentMedia(phone, mediaLibId) {
+    try {
+        const rows = await queryD1('SELECT nome FROM crm_media WHERE id = ?', [mediaLibId]);
+        const nome = rows && rows[0] && rows[0].nome;
+        if (!nome) return false;
+        return (await aiSentMediaNames(phone)).has(nome);
+    } catch (e) {
+        return false; // na dúvida, deixa mandar: perder a foto é pior que um raro repeteco
+    }
 }
 
 async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs = null) {
@@ -3136,16 +3205,25 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         // vira o mínimo da pausa inicial. Aborta se a IA do lead for desligada no meio.
         // Não se aplica ao handoff de qualificação acima.
         const replyDelay = await getWhatsappAiReplyDelay();
-        await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
+        const textoCompleto = await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
             () => aiReplySupersededBy(phone, incomingWamid, triggerTs));
 
         // Imagem de exemplo (se a ferramenta achou uma) vai DEPOIS do texto — a
         // resposta já fala naturalmente que vai mandar um exemplo, a foto chega
         // logo em seguida completando a promessa. Falha aqui não derruba nada:
         // o paciente já recebeu a resposta de texto de qualquer forma.
+        // Só manda se o texto saiu inteiro: se a resposta foi cancelada (chegou
+        // mensagem nova e outra execução assumiu), a foto vai junto com a resposta
+        // de quem assumiu — mandar aqui também era o que duplicava a imagem.
         if (mediaId) {
-            try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
-            catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
+            if (!textoCompleto) {
+                console.log('IA: resposta cancelada no meio, foto de exemplo não enviada (a execução que assumiu cuida).');
+            } else if (await aiRecentlySentMedia(phone, mediaId)) {
+                console.log('IA: essa foto já foi enviada a este paciente, não repetindo.');
+            } else {
+                try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
+                catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
+            }
         }
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
