@@ -1,5 +1,21 @@
 # Changelog - CRM Natuclinic
 
+## 2026-11-11 — Tabela de preços para a IA responder "quanto custa"
+
+### Adicionado
+* **Tabela de preços na tela do Agente de IA.** A API do Amigo não envia valores (ela devolve só o nome dos procedimentos, sem nenhum campo de preço), então os valores ficam no CRM. O botão "Importar do Amigo" traz os nomes dos procedimentos e o valor é digitado uma vez, com uma condição opcional (por exemplo "por sessão") e o interruptor **Liberar**. A tabela tem busca, adicionar e remover linha, e fica salva em `crm_settings.precos_ia`.
+* **A IA passa a consultar o preço de verdade.** Nova ferramenta `consultar_preco`: quando o paciente pergunta quanto custa um procedimento, a IA consulta a tabela e informa o valor e a condição exatamente como estão cadastrados.
+  * Procedimento com **Liberar** desligado, sem valor ou fora da tabela: a IA não cita valor e segue a regra de antes (no modo Vendas, o valor é definido na avaliação; no modo Qualificação, passa a conversa).
+  * Procedimentos parecidos ("preenchimento", que existe como labial e malar): a IA pergunta qual é antes de falar de valor. A busca ignora acento e caixa, e palavras como "pele" não bastam sozinhas (limpeza de pele não vira peeling de pele).
+  * O valor de um procedimento não liberado nunca é enviado ao Gemini: a ferramenta só devolve o que está liberado.
+  * A ferramenta e a regra só entram no prompt quando há ao menos um valor liberado. Sem tabela, a IA se comporta como antes.
+* A tabela aceita até 1.000 procedimentos. O catálogo da Natuclinic no Amigo tem 436 itens (serviços, produtos e protocolos), bem mais que os 145 da agenda.
+* `scripts/seed-precos-ia.mjs` carrega a tabela de um arquivo JSON (por exemplo, o extraído da tela "Consultar valor dos procedimentos" do Amigo). Por padrão só confere o arquivo; para gravar no D1 exige `--aplicar`, e recusa sobrescrever uma tabela já salva sem `--sobrescrever`. Os valores vêm com **Liberar** desligado.
+* Rotas novas: `GET /api/precos` (qualquer usuário logado), `PUT /api/precos` e `GET /api/precos/amigo` (só admin; o segundo consulta o Amigo de todas as unidades ativas). A leitura da tabela pela IA tem cache de 1 minuto por instância.
+
+### Observação
+* O bloco "PREÇOS AUTORIZADOS" do Contexto da IA continua valendo para os procedimentos que não estão na tabela. Para os que estão, a tabela manda.
+
 ## 2026-11-09 — Mensagens enviadas presas em um tique só
 
 ### Corrigido

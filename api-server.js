@@ -2022,6 +2022,172 @@ const MEDIA_TOOL_DECLARATION = {
     }
 };
 
+// ==========================================
+// TABELA DE PREÇOS AUTORIZADA (ferramenta consultar_preco da IA)
+// ==========================================
+// A API do Amigo não devolve valores (só os nomes dos procedimentos), então a
+// clínica mantém aqui os preços que PODEM ser informados por WhatsApp. Fica em
+// crm_settings ('precos_ia') como JSON: [{ nome, valor, condicao, informar }].
+// Só procedimentos com informar = true têm o valor devolvido à IA: o que ela
+// não recebe, ela não tem como vazar. Os nomes podem ser importados do Amigo
+// pela tela do Agente de IA (/api/precos/amigo); o valor é digitado uma vez.
+const PRECOS_IA_KEY = 'precos_ia';
+const PRECOS_IA_MAX = 1000;
+const PRECOS_IA_CACHE_MS = 60 * 1000;
+let _precosIaCache = null; // por instância da função; PUT limpa só a da própria instância (até 1 min de atraso nas outras)
+
+// Valida e normaliza a lista vinda da tela. { ok: true, lista } ou { ok: false, erro }.
+function limparPrecosIa(entrada) {
+    if (!Array.isArray(entrada)) return { ok: false, erro: 'Envie a lista de preços.' };
+    if (entrada.length > PRECOS_IA_MAX) return { ok: false, erro: `No máximo ${PRECOS_IA_MAX} procedimentos.` };
+    const vistos = new Set();
+    const lista = [];
+    for (const r of entrada) {
+        const nome = String((r && r.nome) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (!nome) continue; // linha em branco
+        const chave = normalizeProcText(nome).replace(/\s+/g, ' ');
+        if (vistos.has(chave)) return { ok: false, erro: `Procedimento repetido na tabela: ${nome}.` };
+        vistos.add(chave);
+
+        let valor = null;
+        const bruto = r.valor;
+        if (bruto !== null && bruto !== undefined && String(bruto).trim() !== '') {
+            const s = String(bruto).trim();
+            // "1.234,50" (formato BR) e "1234.5" (número) viram o mesmo número
+            valor = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s);
+            if (!Number.isFinite(valor) || valor < 0 || valor > 1000000) return { ok: false, erro: `Valor inválido em "${nome}".` };
+            valor = Math.round(valor * 100) / 100;
+        }
+        lista.push({
+            nome,
+            valor,
+            condicao: String(r.condicao || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+            informar: !!r.informar && valor !== null // sem valor não há o que liberar
+        });
+    }
+    return { ok: true, lista };
+}
+
+async function lerPrecosIaDoBanco() {
+    const rows = await queryD1('SELECT value FROM crm_settings WHERE key = ?', [PRECOS_IA_KEY]);
+    const salvo = rows && rows[0] && rows[0].value ? JSON.parse(rows[0].value) : [];
+    const r = limparPrecosIa(salvo);
+    return r.ok ? r.lista : [];
+}
+
+async function getPrecosIa() {
+    if (_precosIaCache && Date.now() - _precosIaCache.at < PRECOS_IA_CACHE_MS) return _precosIaCache.lista;
+    let lista = [];
+    try { lista = await lerPrecosIaDoBanco(); } catch (e) { /* sem tabela salva: a IA segue sem a ferramenta */ }
+    _precosIaCache = { at: Date.now(), lista };
+    return lista;
+}
+
+// A ferramenta e a regra de preço só entram no prompt se houver ao menos um valor liberado.
+async function precoToolAtiva() {
+    return (await getPrecosIa()).some(p => p.informar && p.valor !== null);
+}
+
+function formatarValorPreco(v) {
+    if (v === 0) return 'gratuito';
+    return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ');
+}
+
+// Acha o procedimento da tabela que o paciente pediu. Palavras de região/pele
+// ("pele", "testa") não bastam sozinhas para casar (senão "limpeza de pele"
+// achava "peeling de pele"), mas desempatam: "botox" prefere "Botox" a "Botox
+// Testa", e "botox testa" prefere o contrário. Empate real = ambíguo, e a IA
+// pergunta qual é em vez de chutar um valor.
+function buscarPrecoNaTabela(tabela, pedido) {
+    const pedidoTokens = new Set(tokenizeProcText(pedido));
+    if (!pedidoTokens.size) return { tipo: 'nenhum' };
+    const pedidoNorm = normalizeProcText(pedido).replace(/\s+/g, ' ');
+    const pontuados = [];
+    for (const row of tabela) {
+        const todos = tokenizeProcText(row.nome);
+        if (!todos.length) continue;
+        const fortes = todos.filter(t => !MEDIA_MATCH_REGION_WORDS.has(t));
+        const regiao = todos.filter(t => MEDIA_MATCH_REGION_WORDS.has(t));
+        const base = fortes.length ? fortes : todos;
+        const hits = base.filter(t => pedidoTokens.has(t)).length;
+        if (!hits) continue;
+        const cobertura = hits / base.length;
+        if (cobertura < 0.5) continue;
+        const regiaoCasada = fortes.length ? regiao.filter(t => pedidoTokens.has(t)).length : 0;
+        const regiaoSobrando = fortes.length ? regiao.length - regiaoCasada : 0;
+        const exato = normalizeProcText(row.nome).replace(/\s+/g, ' ') === pedidoNorm ? 1 : 0;
+        pontuados.push({ row, exato, hits, cobertura, regiaoCasada, regiaoSobrando });
+    }
+    if (!pontuados.length) return { tipo: 'nenhum' };
+    const chaves = ['exato', 'hits', 'cobertura', 'regiaoCasada'];
+    pontuados.sort((a, b) => {
+        for (const k of chaves) if (b[k] !== a[k]) return b[k] - a[k];
+        return a.regiaoSobrando - b.regiaoSobrando;
+    });
+    const m = pontuados[0];
+    const empatados = pontuados.filter(p => chaves.every(k => p[k] === m[k]) && p.regiaoSobrando === m.regiaoSobrando);
+    if (empatados.length > 1) return { tipo: 'ambiguo', opcoes: empatados.slice(0, 6).map(p => p.row.nome) };
+    return { tipo: 'achou', row: m.row };
+}
+
+// O que a ferramenta devolve ao modelo. Valor SÓ aparece quando liberado.
+async function consultarPrecoParaIa(procedimento) {
+    const r = buscarPrecoNaTabela(await getPrecosIa(), procedimento);
+    if (r.tipo === 'achou') {
+        const p = r.row;
+        if (p.informar && p.valor !== null) {
+            return {
+                encontrado: true,
+                procedimento: p.nome,
+                valor: formatarValorPreco(p.valor),
+                condicao: p.condicao || null,
+                instrucao: `Informe exatamente este valor${p.condicao ? ' e esta condição' : ''}, sem arredondar nem inventar desconto, parcelamento ou promoção.`
+            };
+        }
+        return {
+            encontrado: true,
+            procedimento: p.nome,
+            valor_autorizado: false,
+            aviso: 'O valor deste procedimento NÃO está autorizado para divulgação por WhatsApp. NÃO cite nem estime nenhum valor.'
+        };
+    }
+    if (r.tipo === 'ambiguo') {
+        return {
+            encontrado: false,
+            ambiguo: true,
+            opcoes: r.opcoes,
+            aviso: 'Há mais de um procedimento parecido. Pergunte ao paciente qual deles ele quer, sem citar valores ainda.'
+        };
+    }
+    return {
+        encontrado: false,
+        aviso: 'Esse procedimento não está na tabela de preços. NÃO invente nem estime valor.'
+    };
+}
+
+const PRECO_TOOL_DECLARATION = {
+    name: 'consultar_preco',
+    description: 'Consulta, na tabela de preços que a clínica autorizou divulgar por WhatsApp, o valor de UM procedimento. Use somente quando o paciente perguntar quanto custa / qual o valor / preço de um procedimento específico.',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            procedimento: { type: 'STRING', description: 'Nome do procedimento de que o paciente quer saber o valor, como na lista de serviços — pode incluir a região se ele disse (ex.: "botox testa", "limpeza de pele"). Só o nome, sem frases.' }
+        },
+        required: ['procedimento']
+    }
+};
+
+const WHATSAPP_AI_PRECO_RULE = `
+
+REGRA DE PREÇO — TABELA AUTORIZADA:
+Você tem a ferramenta consultar_preco, que consulta a tabela de preços que a clínica autorizou divulgar por WhatsApp. Ela conta como a "tabela de preços autorizada" citada na regra de modo acima.
+- Use quando o paciente perguntar quanto custa / valor / preço de um procedimento específico, passando só o nome dele em "procedimento". Se ele perguntou preço sem dizer qual procedimento, pergunte qual antes; não adivinhe.
+- Se a ferramenta devolver "valor", informe EXATAMENTE esse valor e a condição, sem arredondar e sem inventar desconto, parcelamento ou promoção, e em seguida convide para a avaliação/conversa com a equipe. Para os procedimentos que estão na tabela, ela vale mais que qualquer preço escrito no contexto acima.
+- Se devolver valor_autorizado: false, NÃO cite nem estime nenhum valor, e responda como a regra de modo acima manda para pergunta de preço sem tabela autorizada.
+- Se devolver ambiguo: true, pergunte ao paciente qual das opções ele quer, sem citar valores ainda.
+- Se devolver encontrado: false (sem ambiguidade), o procedimento não está na tabela: só use algum preço que o contexto acima documente como autorizado para ele; senão, trate como preço sem tabela autorizada.
+- Só use a ferramenta quando o paciente perguntar preço. Nunca ofereça valores por conta própria.`;
+
 // Mesmo ciclo de function calling da agenda (ver callGeminiWithAgendaTool),
 // só que com a ferramenta de busca de imagem em vez da de agenda.
 async function callGeminiWithMediaTool(systemPrompt, contents) {
@@ -2177,16 +2343,23 @@ async function callGeminiForWhatsappReply(phone) {
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
     const mediaEnabled = await getWhatsappAiMediaEnabled();
     const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
+    // Tabela de preços: só entra (ferramenta + regra) se a clínica liberou ao menos um valor.
+    const precoAtivo = await precoToolAtiva();
+    const precoRule = precoAtivo ? WHATSAPP_AI_PRECO_RULE : '';
     // O texto do anúncio entra na busca: "quero saber mais" sozinho não acha nada.
     const brainRule = whatsappBrainRule(await getBrainContext(brainConsultaDoHistorico(history, adContext), 'whatsapp'));
-    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: history
     };
     // agendar_retorno sempre; busca de imagem só com o opt-in.
-    body.tools = [{ functionDeclarations: mediaEnabled ? [RETORNO_TOOL_DECLARATION, MEDIA_TOOL_DECLARATION] : [RETORNO_TOOL_DECLARATION] }];
+    body.tools = [{ functionDeclarations: [
+        RETORNO_TOOL_DECLARATION,
+        ...(mediaEnabled ? [MEDIA_TOOL_DECLARATION] : []),
+        ...(precoAtivo ? [PRECO_TOOL_DECLARATION] : [])
+    ] }];
 
     const call = async (b) => {
         const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent', {
@@ -2217,6 +2390,20 @@ async function callGeminiForWhatsappReply(phone) {
             ...history,
             { role: 'model', parts: [fnCallPart] },
             { role: 'user', parts: [{ functionResponse: { name: 'agendar_retorno', response: resultado } }] }
+        ];
+        const seguinte = await call({ ...body, contents: comResultado });
+        const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
+        return { text: normalizeAiReply(texto), mediaId: null };
+    }
+
+    if (fnCall.name === 'consultar_preco') {
+        let resultado;
+        try { resultado = await consultarPrecoParaIa(fnCall.args && fnCall.args.procedimento); }
+        catch (e) { resultado = { encontrado: false, aviso: 'Não foi possível consultar a tabela agora. NÃO invente nem estime valor.' }; }
+        const comResultado = [
+            ...history,
+            { role: 'model', parts: [fnCallPart] },
+            { role: 'user', parts: [{ functionResponse: { name: 'consultar_preco', response: resultado } }] }
         ];
         const seguinte = await call({ ...body, contents: comResultado });
         const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
@@ -5675,6 +5862,72 @@ app.put('/api/settings/horario-atendimento', async (req, res) => {
         await queryD1("INSERT INTO crm_settings (key, value) VALUES ('horario_atendimento', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(clean)]);
         res.json({ success: true, horario: clean });
     } catch (e) { console.error('Erro ao salvar horário de atendimento:', e); res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// Tabela de preços autorizada da IA (ver consultar_preco). Qualquer usuário logado
+// lê; só admin altera.
+app.get('/api/precos', async (req, res) => {
+    try {
+        res.json({ precos: await lerPrecosIaDoBanco() });
+    } catch (e) {
+        console.error('Erro ao buscar a tabela de preços:', e);
+        res.status(500).json({ error: 'Erro interno ao buscar a tabela de preços.' });
+    }
+});
+
+app.put('/api/precos', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const r = limparPrecosIa(req.body && req.body.precos);
+        if (!r.ok) return res.status(400).json({ error: r.erro });
+        await queryD1(
+            'INSERT INTO crm_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            [PRECOS_IA_KEY, JSON.stringify(r.lista)]
+        );
+        _precosIaCache = null;
+        res.json({ success: true, precos: r.lista });
+    } catch (e) {
+        console.error('Erro ao salvar a tabela de preços:', e);
+        res.status(500).json({ error: 'Erro interno ao salvar a tabela de preços.' });
+    }
+});
+
+// Nomes dos procedimentos cadastrados no Amigo (união de todas as unidades ativas).
+// A API do Amigo só devolve nomes — nenhum valor —, então isto serve para a tela
+// listar os procedimentos sem digitar um por um. Admin: faz chamadas ao Amigo.
+app.get('/api/precos/amigo', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+    try {
+        const rows = await queryD1('SELECT amigo_api_token FROM crm_unidades WHERE ativo = 1');
+        const tokens = [...new Set([...(rows || []).map(r => r.amigo_api_token), process.env.AMIGO_API_TOKEN].filter(Boolean))];
+        if (!tokens.length) return res.status(500).json({ error: 'Token do Amigo não configurado.' });
+
+        const resultados = await Promise.all(tokens.map(async (token) => {
+            try {
+                const r = await fetch('https://amigobot-api.amigoapp.com.br/events', {
+                    headers: { Authorization: `Bearer ${token}` },
+                    signal: AbortSignal.timeout(15000)
+                });
+                if (!r.ok) return { ok: false };
+                const j = await r.json();
+                return { ok: true, nomes: (j.data || []).map(e => String((e && e.name) || '').replace(/\s+/g, ' ').trim()).filter(Boolean) };
+            } catch (e) { return { ok: false }; }
+        }));
+        if (!resultados.some(r => r.ok)) return res.status(502).json({ error: 'Não consegui consultar o Amigo agora. Tente de novo em instantes.' });
+
+        const porChave = new Map();
+        for (const r of resultados) {
+            for (const nome of r.nomes || []) {
+                const chave = normalizeProcText(nome).replace(/\s+/g, ' ');
+                if (!porChave.has(chave)) porChave.set(chave, nome);
+            }
+        }
+        const nomes = [...porChave.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+        res.json({ nomes, unidades_consultadas: resultados.filter(r => r.ok).length, unidades_com_falha: resultados.filter(r => !r.ok).length });
+    } catch (e) {
+        console.error('Erro ao importar procedimentos do Amigo:', e);
+        res.status(500).json({ error: 'Erro interno ao consultar o Amigo.' });
+    }
 });
 
 // Retomada após a janela de 24h (ver handleTemplateButtonClick).
