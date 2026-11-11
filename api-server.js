@@ -2936,9 +2936,13 @@ async function aiStillOnForPhone(phone) {
 // pausas de ritmo humano que já existem aqui como janela de "assentamento" da
 // rajada, em vez de somar mais um atraso novo (a soma já é limitada por
 // max_total pra não estourar o timeout do webhook da Meta).
+// Devolve true se mandou TODOS os balões; false se desistiu no meio (rajada
+// superada, IA desligada). Quem chama usa isso pra não mandar a foto de
+// exemplo de uma resposta que foi cancelada — senão a foto saía sozinha e a
+// invocação que assumiu a resposta mandava a mesma foto de novo.
 async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSec = 0, supersededCheck = null) {
     let parts = String(replyText || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
-    if (!parts.length) return;
+    if (!parts.length) return true;
     // Trava dura: nunca mais que 3 balões por resposta (o modelo às vezes cospe
     // 5-6). O excedente é juntado na última mensagem.
     const AI_MAX_CHUNKS = 3;
@@ -2958,14 +2962,14 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     if (!cfg.human) {
         if (floorSec > 0) {
             await new Promise(r => setTimeout(r, floorSec * 1000));
-            if (!(await stillGood())) return;
+            if (!(await stillGood())) return false;
         }
         for (let i = 0; i < parts.length; i++) {
-            if (!(await stillGood())) return;
+            if (!(await stillGood())) return false;
             await sendWhatsappTextInternal(phone, parts[i]);
             if (i < parts.length - 1) await new Promise(r => setTimeout(r, 700 + Math.floor(Math.random() * 500)));
         }
-        return;
+        return true;
     }
 
     const rand = (a, b) => a + Math.random() * (b - a);
@@ -2981,10 +2985,10 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     let readMs = Math.max(jit(rand(cfg.readMinMs, cfg.readMaxMs)), floorSec * 1000);
     if (cfg.typing) await sendTypingIndicator(incomingWamid);
     await sleep(readMs);
-    if (!(await stillGood())) return;
+    if (!(await stillGood())) return false;
 
     for (let i = 0; i < parts.length; i++) {
-        if (!(await stillGood())) return;
+        if (!(await stillGood())) return false;
 
         let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
         if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
@@ -2993,6 +2997,7 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
         await sleep(wait);
         await sendWhatsappTextInternal(phone, parts[i]);
     }
+    return true;
 }
 
 // Anti-duplicidade da IA: quando o lead manda uma rajada de mensagens, a Meta
@@ -3039,6 +3044,29 @@ async function aiReplySupersededBy(phone, incomingWamid, triggerTs) {
     }
     if (await hasOutboundSince(phone, triggerTs)) return true;
     return false;
+}
+
+// A IA já mandou ESSA foto da Biblioteca de Mídia pra esse número nos últimos
+// minutos? Segunda trava contra foto repetida: cobre o caso de duas respostas
+// seguidas (rajada de mensagens, reentrega) escolherem o mesmo exemplo. Casa
+// pelo nome do arquivo gravado na mensagem ([FILE:nome]...) porque cada envio
+// faz upload novo e o media_id da Meta muda toda vez.
+const AI_MEDIA_REPEAT_WINDOW_MIN = 10;
+async function aiRecentlySentMedia(phone, mediaLibId) {
+    try {
+        const rows = await queryD1('SELECT nome FROM crm_media WHERE id = ?', [mediaLibId]);
+        const nome = rows && rows[0] && rows[0].nome;
+        if (!nome) return false;
+        const v = phoneVariants(phone);
+        const sent = await queryD1(
+            `SELECT 1 FROM wa_messages WHERE phone IN (${v.map(() => '?').join(',')}) AND direction = 'out' AND sent_by = 'ia'
+               AND instr(message, ?) = 1 AND timestamp >= datetime('now', ?) LIMIT 1`,
+            [...v, `[FILE:${nome}]`, `-${AI_MEDIA_REPEAT_WINDOW_MIN} minutes`]
+        );
+        return !!(sent && sent[0]);
+    } catch (e) {
+        return false; // na dúvida, deixa mandar: perder a foto é pior que um raro repeteco
+    }
 }
 
 async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs = null) {
@@ -3136,16 +3164,25 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         // vira o mínimo da pausa inicial. Aborta se a IA do lead for desligada no meio.
         // Não se aplica ao handoff de qualificação acima.
         const replyDelay = await getWhatsappAiReplyDelay();
-        await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
+        const textoCompleto = await sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, replyDelay,
             () => aiReplySupersededBy(phone, incomingWamid, triggerTs));
 
         // Imagem de exemplo (se a ferramenta achou uma) vai DEPOIS do texto — a
         // resposta já fala naturalmente que vai mandar um exemplo, a foto chega
         // logo em seguida completando a promessa. Falha aqui não derruba nada:
         // o paciente já recebeu a resposta de texto de qualquer forma.
+        // Só manda se o texto saiu inteiro: se a resposta foi cancelada (chegou
+        // mensagem nova e outra execução assumiu), a foto vai junto com a resposta
+        // de quem assumiu — mandar aqui também era o que duplicava a imagem.
         if (mediaId) {
-            try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
-            catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
+            if (!textoCompleto) {
+                console.log('IA: resposta cancelada no meio, foto de exemplo não enviada (a execução que assumiu cuida).');
+            } else if (await aiRecentlySentMedia(phone, mediaId)) {
+                console.log('IA: mesma foto já enviada há poucos minutos, não repetindo.');
+            } else {
+                try { await sendWhatsappMediaLibraryInternal(phone, mediaId, null, 'ia'); }
+                catch (e) { console.error('IA: falha ao mandar imagem de exemplo:', e.message); }
+            }
         }
     } catch (e) {
         console.error('Erro no agente de IA do WhatsApp:', e);
