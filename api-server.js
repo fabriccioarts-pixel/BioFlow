@@ -14,6 +14,7 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import webpush from 'web-push';
+import { WHATSAPP_AI_NAO_REPETIR_RULE, perguntaPendenteRule } from './ia-anti-repeticao.js';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -1382,7 +1383,7 @@ SERVIÇOS OFERECIDOS:
 REGRAS DE TOM:
 - Tom consultivo e humano. Frases curtas e objetivas.
 - Nunca, em nenhuma hipótese, diga que é uma inteligência artificial, robô, assistente virtual ou sistema automatizado. Converse como uma pessoa da equipe.
-- Sempre termine sua resposta com uma pergunta aberta, pra entender melhor a necessidade do paciente (o que ele busca, há quanto tempo, o que já tentou, etc.).
+- Enquanto estiver entendendo a necessidade do paciente, termine com uma pergunta aberta (o que ele busca, há quanto tempo, o que já tentou, etc.). Se a sua última pergunta ainda está sem resposta e ele só pediu outra coisa, responda o pedido e não pergunte de novo.
 - Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.`;
 
 // Partes FIXAS de comportamento, nunca editáveis pela tela — é o que faz o
@@ -1552,12 +1553,18 @@ async function fetchMetaMediaBase64(mediaId, fallbackMime = 'image/jpeg') {
     }
 }
 
-async function getWhatsappAiHistory(phone, limit = 12) {
+// meta (opcional): objeto que recebe meta.rows = as linhas cruas em ordem
+// cronológica (com timestamp), pra quem precisa olhar a conversa além do
+// "contents" do Gemini (ex.: perguntaPendenteRule).
+async function getWhatsappAiHistory(phone, limit = 12, meta = null) {
+    // rowid desempata mensagens gravadas no mesmo segundo (balões da IA saem
+    // colados) — sem isso a ordem entre elas no histórico era arbitrária.
     const rows = await queryD1(
-        'SELECT direction, message FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC LIMIT ?',
+        'SELECT direction, message, timestamp FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?',
         [phone, limit]
     );
     const ordered = (rows || []).reverse();
+    if (meta) meta.rows = ordered;
 
     // Imagens recebidas mais recentes que o agente vai "ver" (base64 inline na chamada).
     const imgRe = /\/api\/whatsapp\/media\/(\d+)\.(jpe?g|png|webp)/i;
@@ -2363,7 +2370,8 @@ async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
 
-    const history = await getWhatsappAiHistory(phone);
+    const historyMeta = {};
+    const history = await getWhatsappAiHistory(phone, 12, historyMeta);
     const context = await getWhatsappAiContext();
     const nowContext = getNowContextForPrompt(await getHorarioAtendimento());
     const adContext = await getAdContextForPhone(phone);
@@ -2376,7 +2384,10 @@ async function callGeminiForWhatsappReply(phone) {
     const precoRule = precoAtivo ? WHATSAPP_AI_PRECO_RULE : '';
     // O texto do anúncio entra na busca: "quero saber mais" sozinho não acha nada.
     const brainRule = whatsappBrainRule(await getBrainContext(brainConsultaDoHistorico(history, adContext), 'whatsapp'));
-    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
+    // Anti-repetição por último, pra valer sobre "sempre termine com pergunta"
+    // (contexto editável) e "termine com o próximo passo" (modo vendas).
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE
+        + WHATSAPP_AI_NAO_REPETIR_RULE + perguntaPendenteRule(historyMeta.rows);
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -3231,13 +3242,17 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     if (!(await stillGood())) return false;
 
     for (let i = 0; i < parts.length; i++) {
-        if (!(await stillGood())) return false;
-
         let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
         if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
 
         if (cfg.typing) await sendTypingIndicator(incomingWamid);
         await sleep(wait);
+        // Checa DEPOIS da pausa de digitação, colado no envio. Antes a checagem
+        // vinha antes da pausa (que dura vários segundos): se o paciente
+        // mandasse outra mensagem nesse meio-tempo, este balão saía mesmo assim,
+        // e a resposta à mensagem nova já tinha sido gerada sem enxergá-lo — a
+        // IA refazia, um minuto depois, a pergunta que este balão acabou de fazer.
+        if (!(await stillGood())) return false;
         await sendWhatsappTextInternal(phone, parts[i]);
     }
     return true;
