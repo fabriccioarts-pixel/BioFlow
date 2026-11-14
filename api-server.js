@@ -2806,6 +2806,92 @@ app.post('/api/brain/assistant', async (req, res) => {
     }
 });
 
+// ---- Mapa do Segundo Cérebro (grafo do cerebro.html) ----
+// O mapa nasce de duas fontes: os nós escritos no cerebro.html e os que o próprio
+// painel tira das notas (cada nota vira um nó; cada ficha "## " de R_procedimentos
+// vira um procedimento). Aqui fica só o que alguém editou ou criou por cima disso —
+// antes ia pro localStorage e só aparecia no navegador de quem editou.
+//   crm_brain_graph_nodes: estado completo do nó (label, desc, type, detail) em JSON;
+//   crm_brain_graph_edges: ligações extras, guardadas com a < b pra não duplicar.
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_graph_nodes (
+    id TEXT PRIMARY KEY,
+    dados TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).catch(() => {});
+queryD1(`CREATE TABLE IF NOT EXISTS crm_brain_graph_edges (
+    a TEXT NOT NULL,
+    b TEXT NOT NULL,
+    updated_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (a, b)
+)`).catch(() => {});
+
+const BRAIN_GRAPH_TIPOS = new Set(['hub', 'file', 'proc', 'concept', 'person', 'loc', 'ad']);
+const brainGraphId = v => (typeof v === 'string' && /^[A-Za-z0-9_:.-]{1,80}$/.test(v)) ? v : null;
+
+function brainGraphNo(n) {
+    const id = brainGraphId(n && n.id);
+    const label = String((n && n.label) || '').trim().slice(0, 80);
+    if (!id || !label) return null;
+    const type = BRAIN_GRAPH_TIPOS.has(n.type) ? n.type : 'proc';
+    const detail = {};
+    if (n.detail && typeof n.detail === 'object' && !Array.isArray(n.detail)) {
+        for (const [k, v] of Object.entries(n.detail).slice(0, 30)) {
+            const chave = String(k).trim().slice(0, 60);
+            const valor = String(v == null ? '' : v).trim().slice(0, 2000);
+            if (chave && valor) detail[chave] = valor;
+        }
+    }
+    return { id, label, type, desc: String(n.desc || '').trim().slice(0, 300), detail };
+}
+
+// Carregado como <script> no cerebro.html, igual ao knowledge.js: o grafo é
+// montado de uma vez quando a página abre, então os dados precisam estar prontos.
+app.get('/api/brain/graph.js', async (req, res) => {
+    let nodes = [], edges = [];
+    try {
+        const [rn, re] = await Promise.all([
+            queryD1('SELECT id, dados FROM crm_brain_graph_nodes'),
+            queryD1('SELECT a, b FROM crm_brain_graph_edges'),
+        ]);
+        nodes = (rn || []).map(r => { try { return { ...JSON.parse(r.dados), id: r.id }; } catch (e) { return null; } }).filter(Boolean);
+        edges = (re || []).map(r => [r.a, r.b]);
+    } catch (e) {
+        console.error('brain graph.js:', e.message);
+    }
+    res.set('Content-Type', 'text/javascript; charset=utf-8');
+    res.set('Cache-Control', 'no-store');
+    res.send(`window.BRAIN_GRAPH = ${JSON.stringify({ nodes, edges }).replace(/</g, '\\u003c')};\n`);
+});
+
+// Grava nós (estado completo) e ligações de uma vez. Só admin: é a mesma regra
+// das notas, e o mapa alimenta o assistente do painel.
+app.put('/api/brain/graph', async (req, res) => {
+    if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o mapa do Segundo Cérebro.' });
+    try {
+        const nodes = (Array.isArray(req.body.nodes) ? req.body.nodes.slice(0, 60) : []).map(brainGraphNo).filter(Boolean);
+        const edges = (Array.isArray(req.body.edges) ? req.body.edges.slice(0, 200) : [])
+            .map(e => Array.isArray(e) ? [brainGraphId(e[0]), brainGraphId(e[1])] : [])
+            .filter(([a, b]) => a && b && a !== b)
+            .map(([a, b]) => a < b ? [a, b] : [b, a]);
+        if (!nodes.length && !edges.length) return res.status(400).json({ error: 'Nada para salvar.' });
+        for (const n of nodes) {
+            const { id, ...dados } = n;
+            await queryD1(`INSERT INTO crm_brain_graph_nodes (id, dados, updated_by) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET dados = excluded.dados, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`,
+                [id, JSON.stringify(dados), req.user.username]);
+        }
+        for (const [a, b] of edges) {
+            await queryD1('INSERT OR IGNORE INTO crm_brain_graph_edges (a, b, updated_by) VALUES (?, ?, ?)', [a, b, req.user.username]);
+        }
+        res.json({ ok: true, nodes: nodes.length, edges: edges.length });
+    } catch (e) {
+        console.error('brain graph save:', e.message);
+        res.status(500).json({ error: 'Erro ao salvar o mapa.' });
+    }
+});
+
 app.put('/api/brain/:id', async (req, res) => {
     if (!brainIsAdmin(req)) return res.status(403).json({ error: 'Só admin edita o Segundo Cérebro.' });
     try {
