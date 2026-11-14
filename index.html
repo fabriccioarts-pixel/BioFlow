@@ -1930,8 +1930,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
                 <div class="aix-block">
                     <div class="aix-block-label">Valores dos procedimentos</div>
-                    <p class="aix-block-help">Quais procedimentos a IA pode informar o valor, e quanto custam, ficam na página
-                        <strong>Procedimentos</strong> do menu lateral. Lá dá para ativar vários de uma vez.</p>
+                    <p class="aix-block-help">Os valores ficam na página <strong>Procedimentos</strong> do menu lateral. A IA informa o valor
+                        de procedimentos de até R$ 1.000 antes de convidar para agendar; acima disso (ou sem valor), fala da consulta de
+                        avaliação de R$ 150 com a consultora, abatida se fechar no mesmo dia. Marcar um procedimento como ativo libera o valor dele mesmo acima de R$ 1.000.</p>
                     <div>
                         <button type="button" class="btn-cancel" onclick="closeModals(); switchTab('procedimentos');">
                             <i class="fa-solid fa-tags"></i> Abrir Procedimentos</button>
@@ -2646,8 +2647,9 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
 
         <h2><i class="fa-solid fa-tags" style="color: var(--accent-primary)"></i> Procedimentos
             <span id="prc-count" class="prc-count">0</span></h2>
-        <p class="prc-sub">Os procedimentos da clínica e o valor de cada um. Os <strong>ativos</strong> são os que a IA pode informar
-            quando o paciente pergunta quanto custa; nos demais ela diz que o valor é definido na avaliação.
+        <p class="prc-sub">Os procedimentos da clínica e o valor de cada um. A IA informa ao paciente os valores de <strong>até R$ 1.000</strong>;
+            acima disso (ou sem valor) ela fala da consulta de avaliação de R$ 150, abatida se fechar no mesmo dia.
+            Marcar como <strong>ativo</strong> libera o valor de um procedimento mesmo acima de R$ 1.000.
             As mudanças só valem depois de <strong>Salvar alterações</strong>.</p>
 
         <div class="prc-toolbar">
