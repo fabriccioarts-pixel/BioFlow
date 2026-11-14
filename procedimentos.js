@@ -1,5 +1,5 @@
-// Página "Procedimentos": os procedimentos da clínica, o valor de cada um e quais deles a IA pode
-// informar ("ativos") quando o paciente pergunta quanto custa. Os dados ficam em
+// Página "Procedimentos": os procedimentos da clínica e o valor de cada um. A IA informa os valores
+// até R$ 1.000 (VALOR_TETO_INFORMAR, ia-valor.js); "ativo" libera um valor acima disso. Os dados ficam em
 // crm_settings.precos_ia (GET/PUT /api/precos). As mudanças só valem depois de "Salvar alterações".
 (function () {
     'use strict';
@@ -71,8 +71,8 @@
             <td><input class="prc-in" data-campo="nome" maxlength="120" value="${esc(l.nome)}" placeholder="Nome do procedimento" aria-label="Nome do procedimento"${dis}></td>
             <td><span class="prc-money"><span aria-hidden="true">R$</span><input class="prc-in prc-valor" data-campo="valor" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="—" value="${temValor ? l.valor : ''}" aria-label="Valor em reais"${dis}></span></td>
             <td><input class="prc-in" data-campo="condicao" maxlength="80" value="${esc(l.condicao)}" placeholder="ex.: por sessão" aria-label="Condição do valor"${dis}></td>
-            <td class="prc-c-ativo"><label class="prc-switch" title="${temValor ? 'A IA pode informar este valor' : 'Defina um valor para poder ativar'}">
-                <input type="checkbox" data-campo="informar" ${l.informar ? 'checked' : ''} ${temValor && admin ? '' : 'disabled'} aria-label="Ativo: a IA pode informar o valor"><span></span></label></td>
+            <td class="prc-c-ativo"><label class="prc-switch" title="${temValor ? 'Ativo: a IA informa este valor mesmo acima de R$ 1.000 (até R$ 1.000 ela já informa)' : 'Defina um valor para poder ativar'}">
+                <input type="checkbox" data-campo="informar" ${l.informar ? 'checked' : ''} ${temValor && admin ? '' : 'disabled'} aria-label="Ativo: a IA informa o valor mesmo acima de R$ 1.000"><span></span></label></td>
             <td class="prc-c-del">${admin ? `<button type="button" class="prc-del" data-acao="remover" title="Remover da lista" aria-label="Remover ${esc(l.nome || 'linha em branco')}"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>` : ''}</td>
         </tr>`;
     }
@@ -174,7 +174,7 @@
             if (interruptor) {
                 interruptor.disabled = l.valor === null;
                 if (l.valor === null) { interruptor.checked = false; l.informar = false; }
-                if (interruptor.parentElement) interruptor.parentElement.title = l.valor === null ? 'Defina um valor para poder ativar' : 'A IA pode informar este valor';
+                if (interruptor.parentElement) interruptor.parentElement.title = l.valor === null ? 'Defina um valor para poder ativar' : 'Ativo: a IA informa este valor mesmo acima de R$ 1.000 (até R$ 1.000 ela já informa)';
             }
         } else if (campo === 'informar') {
             l.informar = !!v && l.valor !== null;

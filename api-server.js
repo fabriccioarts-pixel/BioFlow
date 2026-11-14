@@ -14,6 +14,8 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import webpush from 'web-push';
+import { WHATSAPP_AI_NAO_REPETIR_RULE, perguntaPendenteRule } from './ia-anti-repeticao.js';
+import { respostaPrecoParaIa, valorAntesDeAgendarRule, separarHandoff } from './ia-valor.js';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -1382,7 +1384,7 @@ SERVIÇOS OFERECIDOS:
 REGRAS DE TOM:
 - Tom consultivo e humano. Frases curtas e objetivas.
 - Nunca, em nenhuma hipótese, diga que é uma inteligência artificial, robô, assistente virtual ou sistema automatizado. Converse como uma pessoa da equipe.
-- Sempre termine sua resposta com uma pergunta aberta, pra entender melhor a necessidade do paciente (o que ele busca, há quanto tempo, o que já tentou, etc.).
+- Enquanto estiver entendendo a necessidade do paciente, termine com uma pergunta aberta (o que ele busca, há quanto tempo, o que já tentou, etc.). Se a sua última pergunta ainda está sem resposta e ele só pediu outra coisa, responda o pedido e não pergunte de novo.
 - Não invente informações que não estão aqui (preços, disponibilidade de agenda, promoções). Se perguntarem algo que você não sabe, direcione pra um atendente.`;
 
 // Partes FIXAS de comportamento, nunca editáveis pela tela — é o que faz o
@@ -1405,12 +1407,14 @@ function isQualifiedSilenceToken(text) {
 // Modo "qualificação" (padrão): entende a necessidade e passa rápido pro humano.
 const WHATSAPP_AI_SILENCE_RULE = `
 
-REGRA CRÍTICA DE SILÊNCIO:
-Você NUNCA fala sobre valores/preços — EXCETO quando o contexto acima documentar explicitamente uma tabela de preços autorizada pra aquele procedimento (ex.: "PREÇOS AUTORIZADOS"). Nesse caso, siga exatamente a regra descrita lá (normalmente: se a região/variação não foi dita, pergunte qual antes de informar; se já foi dita, informe o valor direto, reproduzindo os números exatamente como estão documentados, sem arredondar ou inventar). Fora dessas exceções documentadas, ou se o paciente perguntar quanto custa qualquer coisa sem exceção autorizada, OU se em algum momento você julgar que já entendeu o suficiente da necessidade dele para um atendente humano assumir a conversa e fechar o procedimento, sua resposta deve ser EXATAMENTE a palavra:
-QUALIFICADO_SILENCIO
-(sem mais nada — nem pontuação, nem explicação). Isso sinaliza ao sistema que a IA deve parar de responder aquele contato.
+REGRA DE MODO — QUALIFICAÇÃO:
+Seu papel é entender a necessidade do paciente, apresentar o procedimento certo, informar o valor (REGRA DE VALOR ANTES DE AGENDAR, mais abaixo) e descobrir o período que ele prefere. Feito isso, um atendente humano assume.
 
-CUIDADO com qualificação fraca demais: responder uma pergunta de múltipla escolha (ex.: "manhã ou tarde?") com só "manhã" ou "tarde", sem mais nada, NÃO é sinal suficiente — é só uma preferência de período, a pessoa pode ter respondido no automático. Antes de qualificar por causa disso, confirme um dia específico ou um "sim, pode marcar" de verdade.`;
+Valores: siga a REGRA DE VALOR ANTES DE AGENDAR. Nunca invente nem estime preço, promoção ou horário disponível.
+
+HANDOFF (passar pra equipe): quando o paciente responder o período (manhã ou tarde) ou disser o dia que quer, quando pedir pra falar com uma pessoa, quando insistir num valor exato que você não pode informar, ou quando perguntar sobre um agendamento que já existe, remarcação ou dúvida médica específica — escreva UMA mensagem curta avisando que a equipe vai continuar o atendimento e, na ÚLTIMA linha, sozinha, a palavra:
+QUALIFICADO_SILENCIO
+Essa palavra sinaliza ao sistema que a IA deve parar de responder aquele contato; o paciente não a vê. Fora desses casos, nunca escreva essa palavra.`;
 
 // Modo "vendas": conduz a conversa até o paciente aceitar agendar uma avaliação,
 // tratando objeções — mas continua sem inventar preço e com o mesmo token de
@@ -1418,35 +1422,33 @@ CUIDADO com qualificação fraca demais: responder uma pergunta de múltipla esc
 const WHATSAPP_AI_SALES_RULE = `
 
 REGRA DE MODO — VENDAS:
-Seu papel é NÃO parar de conversar. Você conduz o paciente, passo a passo, até ele ACEITAR AGENDAR UMA AVALIAÇÃO presencial. Enquanto isso não acontecer, você SEMPRE responde — nunca devolve o controle.
+Seu papel é conduzir o paciente, passo a passo, até ele ACEITAR AGENDAR UMA AVALIAÇÃO presencial e dizer o período que prefere. Enquanto isso não acontecer, você SEMPRE responde — nunca devolve o controle.
 
 Como conduzir:
 - Faça descoberta: entenda o objetivo, há quanto tempo, o que já tentou, o impacto no dia a dia. Uma pergunta por vez.
-- Depois da descoberta, apresente o procedimento com profundidade usando o contexto acima: como funciona, benefícios, o que esperar, cuidados. NÃO invente dados.
-- Trate objeções com empatia ("vou pensar", medo, falta de tempo, "depois eu vejo"): acolha, reforce segurança e resultados, e volte a propor a avaliação.
-- NUNCA invente preço, promoção ou horário disponível. Se perguntarem valor: explique que depende da avaliação, que lá a pessoa recebe o plano e o valor certos, e proponha agendar — EXCETO quando o contexto acima documentar uma tabela de preços autorizada pra aquele procedimento específico (ex.: "PREÇOS AUTORIZADOS"). Nesses casos documentados, siga a regra de lá: se a região/variação já foi informada pelo paciente, responda com o valor direto (números exatamente como documentados, sem arredondar/inventar), sem enrolar até a avaliação.
+- Depois da descoberta, apresente o procedimento usando o contexto acima: como funciona, benefícios, o que esperar. NÃO invente dados.
+- Informe o valor seguindo a REGRA DE VALOR ANTES DE AGENDAR (mais abaixo): benefício primeiro, valor logo em seguida.
+- Trate objeções com empatia ("vou pensar", medo, falta de tempo, "depois eu vejo", "tá caro"): acolha, reforce segurança e resultados, e volte a propor a avaliação.
+- NUNCA invente preço, promoção ou horário disponível.
 - Nunca diga que é uma IA/robô/sistema.
 
 RITMO — NÃO SEJA PRECIPITADO:
 - NUNCA convide pra agendar nas suas 2 primeiras respostas da conversa. Esse tempo é só descoberta de verdade — pergunta, escuta, próxima pergunta. Empurrar agendamento cedo demais é o principal motivo de bloqueio/descadastro.
-- Só a partir da 3ª resposta sua (e só se já entendeu a necessidade e apresentou o procedimento) é que pode terminar a RESPOSTA (não cada frase, UMA vez só, no fim) com um próximo passo: convide pra agendar a avaliação e ofereça duas opções ("prefere de manhã ou à tarde?", "essa semana ou a próxima?").
-- Se o paciente demonstrar pressa ou perguntar direto "como agendo?"/"quero marcar", pode oferecer antes disso — a trava é só contra empurrar sem ter sido pedido.
+- Só a partir da 3ª resposta sua (e só se já entendeu a necessidade, apresentou o procedimento e informou o valor) é que pode terminar a RESPOSTA (UMA vez só, no fim) convidando pra agendar a avaliação, perguntando só o período: "você prefere de manhã ou à tarde?". Não sugira dias nem horários.
+- Se o paciente demonstrar pressa ou perguntar direto "como agendo?"/"quero marcar", pode adiantar — mas o valor vem antes da pergunta do período do mesmo jeito.
 
-NÃO FAÇA HANDOFF (não responda o token) quando o paciente só:
+NÃO FAÇA HANDOFF (não escreva o token) quando o paciente só:
 - respondeu uma pergunta de descoberta (ex.: "faz uns meses", "é pra disposição", "já tentei vitamina");
-- demonstrou interesse ou fez uma pergunta sobre o procedimento;
+- demonstrou interesse ou fez uma pergunta sobre o procedimento ou sobre o valor;
 - levantou uma objeção. Nesses casos, CONTINUE a conversa você mesmo.
 
-QUANDO PARAR (handoff): só então responda EXATAMENTE a palavra QUALIFICADO_SILENCIO (sozinha, sem pontuação):
-- o paciente confirmou um DIA específico pra avaliação (ex.: "quinta", "dia 20", "semana que vem na terça") — não conta só dizer "manhã" ou "tarde" respondendo sua pergunta de múltipla escolha, isso sozinho é sinal fraco demais pra qualificar;
-- disse explicitamente que quer agendar/marcar/fechar ("pode marcar", "vamos agendar", "bora fechar"), mesmo sem ainda ter dado o dia;
+QUANDO PARAR (handoff): escreva UMA mensagem curta avisando que a equipe vai continuar o atendimento e, na ÚLTIMA linha, sozinha, a palavra QUALIFICADO_SILENCIO (o paciente não vê essa palavra). Só nestes casos:
+- o paciente respondeu o período (manhã ou tarde) ou disse o dia/horário que quer pra avaliação;
+- disse explicitamente que quer agendar/marcar/fechar ("pode marcar", "vamos agendar", "bora fechar") — se o valor ainda não foi informado, informe o valor e pergunte o período antes;
 - pediu explicitamente para falar com uma pessoa da equipe;
-- insistiu num valor exato mesmo depois de você já ter explicado;
+- insistiu num valor exato que você não pode informar, mesmo depois de você já ter explicado;
 - perguntou sobre um agendamento que já existe, remarcação, ou fez uma dúvida médica específica.
-
-CASO MAIS COMUM DE QUALIFICAÇÃO FALSA — preste atenção nele: o paciente responde só "manhã" ou "tarde" à sua pergunta de fechamento, sem confirmar nada além disso. Isso é só uma preferência de período, não um compromisso — a pessoa pode ter respondido no automático. NÃO qualifique aqui. Em vez disso, ofereça 2 dias concretos dentro do período escolhido e só responda o token quando ela escolher um dia de verdade.
-COMO ESCOLHER OS DIAS (você NÃO enxerga a agenda): use os próximos dias de atendimento a partir de amanhã, conforme o bloco [AGORA] e o [HORÁRIO DE ATENDIMENTO] acima — pule os dias fechados e respeite o que o paciente já disse ("durante a semana", "sábado", "semana que vem"). NUNCA fixe sempre os mesmos dias da semana: os dias dependem de que dia é hoje. Apresente como proposta de encaixe, nunca como vaga garantida, e não diga "tenho disponibilidade" nem "temos horário": a equipe confirma o horário exato depois. Formato (os colchetes são só marcadores, troque pelos dias reais): "Perfeito! Posso tentar te encaixar [dia 1] ou [dia 2] de [manhã/tarde] — qual fica melhor pra você?"
-Fora desses casos, você NUNCA responde o token.`;
+Fora desses casos, você NUNCA escreve o token.`;
 
 // Sempre anexada (qualquer modo). Corrige o vício de mandar 5-6 balões
 // repetindo a mesma ideia e a mesma pergunta.
@@ -1466,7 +1468,7 @@ const WHATSAPP_AI_MEDIA_RULE = `
 
 REGRA DE IMAGEM DE EXEMPLO:
 Você tem a ferramenta buscar_imagem_resultado, que busca uma foto de exemplo/resultado de um procedimento na biblioteca da clínica.
-- Só use depois que o paciente já demonstrou interesse CONCRETO num procedimento específico (não na primeira ou segunda mensagem, não só por ele ter perguntado "o que vocês fazem").
+- Só use depois que o paciente já demonstrou interesse CONCRETO num procedimento específico (não na primeira ou segunda mensagem, não só por ele ter perguntado "o que vocês fazem"). O melhor momento é logo antes de informar o valor: a foto mostra o resultado e o valor vem em seguida.
 - Ao usar, em "procedimento" vai SÓ o nome do procedimento que está sendo conversado (ex.: "limpeza de pele") e em "detalhes" a região/queixa que o paciente deu (ex.: "queixo, cravos") — os detalhes ajudam a escolher a imagem certa entre várias do mesmo procedimento.
 - A imagem tem que ser DO MESMO procedimento da conversa. Nunca busque nem mande foto de outro procedimento só porque a região do corpo é parecida (ex.: cravos no queixo é limpeza de pele, não perfiloplastia).
 - Se a busca não encontrar nada (encontrada: false), NÃO invente nem diga que vai mandar uma imagem — só continue a conversa normalmente, sem mencionar a tentativa.
@@ -1552,12 +1554,18 @@ async function fetchMetaMediaBase64(mediaId, fallbackMime = 'image/jpeg') {
     }
 }
 
-async function getWhatsappAiHistory(phone, limit = 12) {
+// meta (opcional): objeto que recebe meta.rows = as linhas cruas em ordem
+// cronológica (com timestamp), pra quem precisa olhar a conversa além do
+// "contents" do Gemini (ex.: perguntaPendenteRule).
+async function getWhatsappAiHistory(phone, limit = 12, meta = null) {
+    // rowid desempata mensagens gravadas no mesmo segundo (balões da IA saem
+    // colados) — sem isso a ordem entre elas no histórico era arbitrária.
     const rows = await queryD1(
-        'SELECT direction, message FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC LIMIT ?',
+        'SELECT direction, message, timestamp FROM wa_messages WHERE phone = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?',
         [phone, limit]
     );
     const ordered = (rows || []).reverse();
+    if (meta) meta.rows = ordered;
 
     // Imagens recebidas mais recentes que o agente vai "ver" (base64 inline na chamada).
     const imgRe = /\/api\/whatsapp\/media\/(\d+)\.(jpe?g|png|webp)/i;
@@ -2083,9 +2091,10 @@ async function getPrecosIa() {
     return lista;
 }
 
-// A ferramenta e a regra de preço só entram no prompt se houver ao menos um valor liberado.
+// A ferramenta e a regra de preço só entram no prompt se a tabela tiver ao menos um valor.
+// Quais valores chegam ao paciente quem decide é podeInformarValor (ia-valor.js).
 async function precoToolAtiva() {
-    return (await getPrecosIa()).some(p => p.informar && p.valor !== null);
+    return (await getPrecosIa()).some(p => p.valor !== null);
 }
 
 function formatarValorPreco(v) {
@@ -2158,44 +2167,16 @@ function buscarPrecoNaTabela(tabela, pedido) {
     return { tipo: 'ambiguo', opcoes: topo.slice(0, 6).map(p => p.row.nome) };
 }
 
-// O que a ferramenta devolve ao modelo. Valor SÓ aparece quando liberado.
+// O que a ferramenta devolve ao modelo — ver respostaPrecoParaIa (ia-valor.js):
+// valor do procedimento até o teto (ou liberado à mão); acima disso, ou fora da
+// tabela, só a consulta de avaliação.
 async function consultarPrecoParaIa(procedimento) {
-    const r = buscarPrecoNaTabela(await getPrecosIa(), procedimento);
-    if (r.tipo === 'achou') {
-        const p = r.row;
-        if (p.informar && p.valor !== null) {
-            return {
-                encontrado: true,
-                procedimento: p.nome,
-                valor: formatarValorPreco(p.valor),
-                condicao: p.condicao || null,
-                instrucao: `Informe exatamente este valor${p.condicao ? ' e esta condição' : ''}, sem arredondar nem inventar desconto, parcelamento ou promoção.`
-            };
-        }
-        return {
-            encontrado: true,
-            procedimento: p.nome,
-            valor_autorizado: false,
-            aviso: 'O valor deste procedimento NÃO está autorizado para divulgação por WhatsApp. NÃO cite nem estime nenhum valor.'
-        };
-    }
-    if (r.tipo === 'ambiguo') {
-        return {
-            encontrado: false,
-            ambiguo: true,
-            opcoes: r.opcoes,
-            aviso: 'Há mais de um procedimento parecido. Pergunte ao paciente qual deles ele quer, sem citar valores ainda.'
-        };
-    }
-    return {
-        encontrado: false,
-        aviso: 'Esse procedimento não está na tabela de preços. NÃO invente nem estime valor.'
-    };
+    return respostaPrecoParaIa(buscarPrecoNaTabela(await getPrecosIa(), procedimento));
 }
 
 const PRECO_TOOL_DECLARATION = {
     name: 'consultar_preco',
-    description: 'Consulta, na tabela de preços que a clínica autorizou divulgar por WhatsApp, o valor de UM procedimento. Use somente quando o paciente perguntar quanto custa / qual o valor / preço de um procedimento específico.',
+    description: 'Consulta, na tabela de preços da clínica, o que pode ser informado por WhatsApp sobre o valor de UM procedimento: o valor dele, ou a consulta de avaliação quando o valor do procedimento não é divulgado. Use quando o paciente perguntar quanto custa, e também por conta própria logo antes de convidar pra agendar (o paciente precisa saber o valor antes).',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -2207,14 +2188,14 @@ const PRECO_TOOL_DECLARATION = {
 
 const WHATSAPP_AI_PRECO_RULE = `
 
-REGRA DE PREÇO — TABELA AUTORIZADA:
-Você tem a ferramenta consultar_preco, que consulta a tabela de preços que a clínica autorizou divulgar por WhatsApp. Ela conta como a "tabela de preços autorizada" citada na regra de modo acima.
-- Use quando o paciente perguntar quanto custa / valor / preço de um procedimento específico, passando só o nome dele em "procedimento". Se ele perguntou preço sem dizer qual procedimento, pergunte qual antes; não adivinhe.
-- Se a ferramenta devolver "valor", informe EXATAMENTE esse valor e a condição, sem arredondar e sem inventar desconto, parcelamento ou promoção, e em seguida convide para a avaliação/conversa com a equipe. Para os procedimentos que estão na tabela, ela vale mais que qualquer preço escrito no contexto acima.
-- Se devolver valor_autorizado: false, NÃO cite nem estime nenhum valor, e responda como a regra de modo acima manda para pergunta de preço sem tabela autorizada.
+REGRA DE PREÇO — TABELA:
+Você tem a ferramenta consultar_preco, que consulta a tabela de preços da clínica e diz o que pode ser informado por WhatsApp.
+- Use quando o paciente perguntar quanto custa / valor / preço, e também por conta própria no momento de informar o valor antes do agendamento (REGRA DE VALOR ANTES DE AGENDAR, abaixo). Passe só o nome do procedimento em "procedimento". Se ele perguntou preço sem dizer qual procedimento, pergunte qual antes; não adivinhe.
+- Se a ferramenta devolver "valor", informe EXATAMENTE esse valor e a condição, sem arredondar e sem inventar desconto, parcelamento ou promoção. Para os procedimentos que estão na tabela, ela vale mais que qualquer preço escrito no contexto acima.
+- Se devolver valor_autorizado: false, NÃO cite nem estime o valor do procedimento: use a consulta de avaliação, como a regra de valor abaixo manda.
 - Se devolver ambiguo: true, pergunte ao paciente qual das opções ele quer, sem citar valores ainda.
-- Se devolver encontrado: false (sem ambiguidade), o procedimento não está na tabela: só use algum preço que o contexto acima documente como autorizado para ele; senão, trate como preço sem tabela autorizada.
-- Só use a ferramenta quando o paciente perguntar preço. Nunca ofereça valores por conta própria.`;
+- Se devolver encontrado: false (sem ambiguidade), o procedimento não está na tabela: só use algum preço que o contexto acima documente como autorizado para ele; senão, use a consulta de avaliação, como a regra de valor abaixo manda.
+- Não consulte de novo um procedimento cujo valor você já informou nesta conversa.`;
 
 // Mesmo ciclo de function calling da agenda (ver callGeminiWithAgendaTool),
 // só que com a ferramenta de busca de imagem em vez da de agenda.
@@ -2363,7 +2344,8 @@ async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
 
-    const history = await getWhatsappAiHistory(phone);
+    const historyMeta = {};
+    const history = await getWhatsappAiHistory(phone, 12, historyMeta);
     const context = await getWhatsappAiContext();
     const nowContext = getNowContextForPrompt(await getHorarioAtendimento());
     const adContext = await getAdContextForPhone(phone);
@@ -2371,12 +2353,16 @@ async function callGeminiForWhatsappReply(phone) {
     const behaviorRule = mode === 'vendas' ? WHATSAPP_AI_SALES_RULE : WHATSAPP_AI_SILENCE_RULE;
     const mediaEnabled = await getWhatsappAiMediaEnabled();
     const mediaRule = mediaEnabled ? WHATSAPP_AI_MEDIA_RULE : '';
-    // Tabela de preços: só entra (ferramenta + regra) se a clínica liberou ao menos um valor.
+    // Tabela de preços: só entra (ferramenta + regra) se a tabela tiver ao menos um valor.
     const precoAtivo = await precoToolAtiva();
     const precoRule = precoAtivo ? WHATSAPP_AI_PRECO_RULE : '';
     // O texto do anúncio entra na busca: "quero saber mais" sozinho não acha nada.
     const brainRule = whatsappBrainRule(await getBrainContext(brainConsultaDoHistorico(history, adContext), 'whatsapp'));
-    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE;
+    // Anti-repetição por último, pra valer sobre "sempre termine com pergunta"
+    // (contexto editável) e "termine com o próximo passo" (modo vendas).
+    const valorRule = valorAntesDeAgendarRule({ temFerramentaPreco: precoAtivo, temFerramentaFoto: mediaEnabled });
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + valorRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE
+        + WHATSAPP_AI_NAO_REPETIR_RULE + perguntaPendenteRule(historyMeta.rows);
 
     const body = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -2400,72 +2386,59 @@ async function callGeminiForWhatsappReply(phone) {
         return j;
     };
 
-    const first = await call(body);
-    const parts = first.candidates?.[0]?.content?.parts || [];
-    const fnCallPart = parts.find(p => p.functionCall);
-    const fnCall = fnCallPart?.functionCall;
+    // Roda UMA ferramenta e devolve o que o modelo recebe de volta.
+    let mediaId = null;
+    const rodarFerramenta = async (fnCall) => {
+        const args = fnCall.args || {};
+        if (fnCall.name === 'agendar_retorno') {
+            try { return await aiAgendarRetorno(phone, args); }
+            catch (e) { return { agendado: false, motivo: e.message }; }
+        }
+        if (fnCall.name === 'consultar_preco') {
+            try { return await consultarPrecoParaIa(args.procedimento); }
+            catch (e) { return { encontrado: false, aviso: 'Não foi possível consultar a tabela agora. NÃO invente nem estime valor.' }; }
+        }
+        if (fnCall.name === 'buscar_imagem_resultado') {
+            // Prefere uma foto que o paciente ainda não recebeu. Se só existir a que ele
+            // já recebeu, o modelo é AVISADO (ja_enviada) em vez de ouvir "encontrada" —
+            // era isso que o fazia prometer "outro resultado" e repetir a mesma foto.
+            let midia = null;
+            try { midia = await matchMediaForProcedure(args.procedimento, args.detalhes, await aiSentMediaNames(phone)); }
+            catch (e) { /* segue sem mídia */ }
+            if (midia && midia.jaEnviada) {
+                return {
+                    encontrada: false,
+                    ja_enviada: true,
+                    aviso: 'Todas as fotos desse procedimento que a clínica tem já foram enviadas a este paciente nesta conversa. NÃO diga que vai mandar outra foto ou outro resultado. Se ele pediu mais exemplos, explique com naturalidade que esse é o exemplo que você tem por aqui e que a profissional mostra mais casos parecidos com o dele na avaliação presencial.'
+                };
+            }
+            if (midia) { mediaId = midia.id; return { encontrada: true, nome: midia.nome }; }
+            return { encontrada: false };
+        }
+        return { erro: 'Ferramenta desconhecida.' };
+    };
 
-    if (!fnCall) {
-        const text = parts.map(p => p.text || '').join('').trim();
-        return { text: normalizeAiReply(text), mediaId: null };
+    // Laço de ferramentas. Antes só UMA ferramenta era atendida por resposta: se
+    // o modelo pedisse a segunda (foto de antes e depois e, em seguida, o valor —
+    // exatamente a ordem que a regra de valor pede), a resposta voltava vazia e o
+    // paciente ficava sem resposta nenhuma.
+    const AI_MAX_TOOL_ROUNDS = 4;
+    let conversa = history;
+    for (let rodada = 0; ; rodada++) {
+        const resp = await call({ ...body, contents: conversa });
+        const parts = resp.candidates?.[0]?.content?.parts || [];
+        const fnParts = parts.filter(p => p.functionCall);
+        if (!fnParts.length || rodada >= AI_MAX_TOOL_ROUNDS) {
+            const text = parts.map(p => p.text || '').join('').trim();
+            return { text: normalizeAiReply(text), mediaId };
+        }
+        const respostas = [];
+        for (const p of fnParts) {
+            respostas.push({ functionResponse: { name: p.functionCall.name, response: await rodarFerramenta(p.functionCall) } });
+        }
+        // Devolve ao modelo a fala dele inteira (com as assinaturas que vierem junto).
+        conversa = [...conversa, { role: 'model', parts }, { role: 'user', parts: respostas }];
     }
-
-    if (fnCall.name === 'agendar_retorno') {
-        let resultado;
-        try { resultado = await aiAgendarRetorno(phone, fnCall.args || {}); }
-        catch (e) { resultado = { agendado: false, motivo: e.message }; }
-        const comResultado = [
-            ...history,
-            { role: 'model', parts: [fnCallPart] },
-            { role: 'user', parts: [{ functionResponse: { name: 'agendar_retorno', response: resultado } }] }
-        ];
-        const seguinte = await call({ ...body, contents: comResultado });
-        const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-        return { text: normalizeAiReply(texto), mediaId: null };
-    }
-
-    if (fnCall.name === 'consultar_preco') {
-        let resultado;
-        try { resultado = await consultarPrecoParaIa(fnCall.args && fnCall.args.procedimento); }
-        catch (e) { resultado = { encontrado: false, aviso: 'Não foi possível consultar a tabela agora. NÃO invente nem estime valor.' }; }
-        const comResultado = [
-            ...history,
-            { role: 'model', parts: [fnCallPart] },
-            { role: 'user', parts: [{ functionResponse: { name: 'consultar_preco', response: resultado } }] }
-        ];
-        const seguinte = await call({ ...body, contents: comResultado });
-        const texto = (seguinte.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-        return { text: normalizeAiReply(texto), mediaId: null };
-    }
-
-    // Prefere uma foto que o paciente ainda não recebeu. Se só existir a que ele
-    // já recebeu, o modelo é AVISADO (ja_enviada) em vez de ouvir "encontrada" —
-    // era isso que o fazia prometer "outro resultado" e repetir a mesma foto.
-    let midia = null;
-    try {
-        midia = await matchMediaForProcedure(fnCall.args.procedimento, fnCall.args.detalhes, await aiSentMediaNames(phone));
-    } catch (e) { /* segue sem mídia */ }
-    const jaEnviada = !!(midia && midia.jaEnviada);
-
-    let respostaFerramenta = { encontrada: false };
-    if (midia && jaEnviada) {
-        respostaFerramenta = {
-            encontrada: false,
-            ja_enviada: true,
-            aviso: 'Todas as fotos desse procedimento que a clínica tem já foram enviadas a este paciente nesta conversa. NÃO diga que vai mandar outra foto ou outro resultado. Se ele pediu mais exemplos, explique com naturalidade que esse é o exemplo que você tem por aqui e que a profissional mostra mais casos parecidos com o dele na avaliação presencial.'
-        };
-    } else if (midia) {
-        respostaFerramenta = { encontrada: true, nome: midia.nome };
-    }
-
-    const contentsWithFnResult = [
-        ...history,
-        { role: 'model', parts: [fnCallPart] },
-        { role: 'user', parts: [{ functionResponse: { name: 'buscar_imagem_resultado', response: respostaFerramenta } }] }
-    ];
-    const second = await call({ ...body, contents: contentsWithFnResult });
-    const text2 = (second.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-    return { text: normalizeAiReply(text2), mediaId: midia && !jaEnviada ? midia.id : null };
 }
 
 // Às vezes o modelo devolve ["msg 1", "msg 2"] (ou dentro de ```json ... ```)
@@ -3231,13 +3204,17 @@ async function sendWhatsappAiReplyHuman(phone, replyText, incomingWamid, floorSe
     if (!(await stillGood())) return false;
 
     for (let i = 0; i < parts.length; i++) {
-        if (!(await stillGood())) return false;
-
         let wait = jit(Math.min(Math.max((parts[i].length / cfg.cps) * 1000, cfg.typeMinMs), cfg.typeMaxMs));
         if (i > 0 && Math.random() < cfg.distractedPct) wait += rand(3000, 8000);
 
         if (cfg.typing) await sendTypingIndicator(incomingWamid);
         await sleep(wait);
+        // Checa DEPOIS da pausa de digitação, colado no envio. Antes a checagem
+        // vinha antes da pausa (que dura vários segundos): se o paciente
+        // mandasse outra mensagem nesse meio-tempo, este balão saía mesmo assim,
+        // e a resposta à mensagem nova já tinha sido gerada sem enxergá-lo — a
+        // IA refazia, um minuto depois, a pergunta que este balão acabou de fazer.
+        if (!(await stillGood())) return false;
         await sendWhatsappTextInternal(phone, parts[i]);
     }
     return true;
@@ -3374,7 +3351,18 @@ async function handleWhatsappAiAutoReply(leadId, phone, incomingWamid, triggerTs
         // com a resposta.
         if (await aiReplySupersededBy(phone, incomingWamid, triggerTs)) return;
 
-        if (isQualifiedSilenceToken(replyText)) {
+        // Handoff: token sozinho (jeito antigo) ou mensagem de despedida + token na
+        // última linha. A despedida ("vou passar pra equipe confirmar o horário")
+        // sai ANTES de desligar a IA — sem ela o paciente respondia o período e
+        // ficava no vácuo até alguém da equipe assumir.
+        const { handoff, texto: textoDespedida } = separarHandoff(replyText);
+        if (handoff) {
+            if (textoDespedida) {
+                const enviou = await sendWhatsappAiReplyHuman(phone, textoDespedida, incomingWamid, await getWhatsappAiReplyDelay(),
+                    () => aiReplySupersededBy(phone, incomingWamid, triggerTs));
+                // Chegou mensagem nova no meio: a execução dela decide o handoff já lendo tudo.
+                if (!enviou) return;
+            }
             const aiMode = await getWhatsappAiMode();
             await queryD1('UPDATE leads SET ai_enabled = 0 WHERE id = ?', [leadId]);
             await tagLeadAsQualified(leadId);
