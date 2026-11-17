@@ -610,6 +610,20 @@ async function flowSimulate() {
    ========================================================================== */
 let fuCfg = null;
 let fuTemplates = [];
+// Cadência em edição: 'padrao' (todos os leads sem perfil) ou o id de um perfil
+// (estética, Dr. Julimar...). Os lembretes e a ação final mostrados são os dela.
+let fuAlvo = 'padrao';
+function fuTarget() {
+    if (fuAlvo === 'padrao' || !fuCfg) return fuCfg;
+    return (fuCfg.perfis || []).find(p => p.id === fuAlvo) || fuCfg;
+}
+function fuSetAlvo(id) { fuAlvo = id; renderFollowupEditor(); }
+function fuSetPerfil(key, val) {
+    const t = fuTarget();
+    if (!t || t === fuCfg) return;
+    t[key] = key === 'ativo' ? !!val : val;
+    if (key === 'ativo') renderFollowupEditor();
+}
 const FU_DOW = [['1', 'Seg'], ['2', 'Ter'], ['3', 'Qua'], ['4', 'Qui'], ['5', 'Sex'], ['6', 'Sáb'], ['0', 'Dom']];
 
 async function flowOpenFollowup() {
@@ -626,6 +640,9 @@ async function flowOpenFollowup() {
     if (!Array.isArray(fuCfg.aplicar_colunas)) fuCfg.aplicar_colunas = [];
     if (!Array.isArray(fuCfg.parar_em_colunas)) fuCfg.parar_em_colunas = ['col-ganho'];
     if (!Array.isArray(fuCfg.dias_semana)) fuCfg.dias_semana = [1, 2, 3, 4, 5, 6];
+    if (!Array.isArray(fuCfg.perfis)) fuCfg.perfis = [];
+    fuCfg.perfis.forEach(p => { if (!Array.isArray(p.steps)) p.steps = []; });
+    fuAlvo = 'padrao';
     flowDraft = null;
     renderFlowList();
     renderFollowupEditor();
@@ -638,23 +655,25 @@ function fuMinToLabel(m) {
     return m + ' min';
 }
 function fuSetStep(i, key, val) {
-    if (!fuCfg.steps[i]) return;
+    const steps = fuTarget().steps;
+    if (!steps[i]) return;
     if (key === 'atraso_min') {
-        fuCfg.steps[i][key] = Math.max(1, parseInt(val, 10) || 1);
+        steps[i][key] = Math.max(1, parseInt(val, 10) || 1);
         const el = document.getElementById('fu-step-lbl-' + i);
-        if (el) el.textContent = fuMinToLabel(fuCfg.steps[i].atraso_min) + ' após a última mensagem';
+        if (el) el.textContent = fuMinToLabel(steps[i].atraso_min) + ' após a última mensagem';
     } else if (key === 'so_horario_comercial') {
-        fuCfg.steps[i][key] = !!val;
+        steps[i][key] = !!val;
     } else {
-        fuCfg.steps[i][key] = val;
+        steps[i][key] = val;
     }
 }
 function fuAddStep() {
-    const last = fuCfg.steps[fuCfg.steps.length - 1];
-    fuCfg.steps.push({ atraso_min: last ? last.atraso_min * 2 : 180, texto: '', template_name: '', so_horario_comercial: true });
+    const steps = fuTarget().steps;
+    const last = steps[steps.length - 1];
+    steps.push({ atraso_min: last ? last.atraso_min * 2 : 180, texto: '', template_name: '', so_horario_comercial: true });
     renderFollowupEditor();
 }
-function fuRemoveStep(i) { fuCfg.steps.splice(i, 1); renderFollowupEditor(); }
+function fuRemoveStep(i) { fuTarget().steps.splice(i, 1); renderFollowupEditor(); }
 function fuToggleCol(list, col, on) {
     const arr = fuCfg[list];
     const idx = arr.indexOf(col);
@@ -667,9 +686,48 @@ function renderFollowupEditor() {
     const box = document.getElementById('fx-editor');
     if (!box || !fuCfg) return;
     const c = fuCfg;
+    const t = fuTarget();
+    const ePerfil = t !== c;
     const cols = flowCols();
 
-    const stepsHtml = c.steps.map((s, i) => `
+    // Abas de cadência: padrão + uma por perfil, com bolinha de ligado/desligado.
+    const abas = [{ id: 'padrao', nome: 'Padrão', ativo: !!c.ativo }].concat((c.perfis || []).map(p => ({ id: p.id, nome: p.nome, ativo: !!p.ativo })));
+    const abaAtual = ePerfil ? t.id : 'padrao';
+    const abasHtml = `<div class="fu-tabs" role="tablist" aria-label="Cadência por tipo de lead">${abas.map(a => `
+        <button type="button" role="tab" class="fu-tab" aria-selected="${abaAtual === a.id}" onclick="fuSetAlvo('${escapeHtml(a.id)}')">
+            <span class="fu-dot${a.ativo ? ' on' : ''}" aria-hidden="true"></span>${escapeHtml(a.nome)}<span class="fu-sr">${a.ativo ? ' (ligado)' : ' (desligado)'}</span>
+        </button>`).join('')}</div>`;
+
+    const tagsDisp = (typeof getAvailableTags === 'function' ? getAvailableTags() : (window.availableTags || [])) || [];
+    const funis = (typeof pipelines !== 'undefined' && Array.isArray(pipelines)) ? pipelines : [];
+    const tagOpts = (tagsDisp.some(x => x.id === t.tag) || !t.tag) ? tagsDisp : tagsDisp.concat([{ id: t.tag, label: t.tag }]);
+    const perfilHtml = !ePerfil ? `
+        <div class="fx-mini" style="margin-bottom:0.7rem">Vale para todo lead que não se encaixa em nenhum perfil ligado. Liga e desliga no botão <b>Padrão ativo</b>, lá em cima.</div>` : `
+        <div class="fx-block">
+            <div class="fx-block-title"><i class="fa-solid fa-user-tag"></i> Quem recebe a cadência "${escapeHtml(t.nome)}"</div>
+            <label class="fx-switch" style="margin-bottom:0.6rem">
+                <span class="ui-switch"><input type="checkbox" ${t.ativo ? 'checked' : ''} onchange="fuSetPerfil('ativo', this.checked)"><span class="ui-switch-track"></span></span>
+                Perfil ligado
+            </label>
+            <div class="fx-mini" style="margin-bottom:0.6rem">Desligado, esses leads seguem a cadência padrão.</div>
+            <div class="fx-row">
+                <label>Lead com a etiqueta
+                    <select onchange="fuSetPerfil('tag', this.value)">
+                        <option value="">— nenhuma —</option>
+                        ${tagOpts.map(x => `<option value="${escapeHtml(x.id)}" ${x.id === t.tag ? 'selected' : ''}>${escapeHtml(x.label || x.id)}</option>`).join('')}
+                    </select>
+                </label>
+                <label>ou no funil
+                    <select onchange="fuSetPerfil('pipeline_id', this.value)">
+                        <option value="">— nenhum —</option>
+                        ${funis.map(f => `<option value="${escapeHtml(f.id)}" ${f.id === t.pipeline_id ? 'selected' : ''}>${escapeHtml(f.nome)}</option>`).join('')}
+                    </select>
+                </label>
+            </div>
+            <div class="fx-mini">A IA do WhatsApp coloca a etiqueta sozinha quando entende o que o paciente procura. Para corrigir, troque a etiqueta no card do lead.</div>
+        </div>`;
+
+    const stepsHtml = t.steps.map((s, i) => `
         <div class="fx-node" style="margin-bottom:0.6rem">
             <div class="fx-node-head" style="cursor:default">
                 <span class="fx-node-id" style="min-width:auto">Lembrete ${i + 1}</span>
@@ -700,6 +758,7 @@ function renderFollowupEditor() {
                 ${s.template_name && !fuTemplates.some(t => t.name === s.template_name) ? `<div class="fx-mini" style="color:var(--accent-warning)">Template "${escapeHtml(s.template_name)}" não está entre os aprovados da Meta.</div>` : ''}
             </div>
         </div>`).join('') || '<div class="fx-mini">Nenhum lembrete. Adicione o primeiro.</div>';
+    const acaoAlvo = ePerfil ? ` · ${escapeHtml(t.nome)}` : ' · padrão';
 
     const colChecks = (list) => Object.entries(cols).map(([k, v]) =>
         `<label style="display:flex;align-items:center;gap:0.3rem;font-weight:500;margin:0">
@@ -709,22 +768,24 @@ function renderFollowupEditor() {
         <div class="fx-editor-head">
             <div style="flex:1">
                 <b style="font-size:0.95rem"><i class="fa-solid fa-clock-rotate-left"></i> Follow-up automático</b>
-                <div class="fx-mini">Lembra o lead quando ele para de responder. Para na hora em que ele responde.</div>
+                <div class="fx-mini">Lembra o lead quando ele para de responder. Para na hora em que ele responde. Cada tipo de lead pode ter a sua cadência.</div>
             </div>
             <label class="fx-switch">
                 <span class="ui-switch">
                     <input type="checkbox" ${c.ativo ? 'checked' : ''} onchange="fuCfg.ativo = this.checked">
                     <span class="ui-switch-track"></span>
                 </span>
-                Ativo
+                Padrão ativo
             </label>
             <button class="btn-save" onclick="flowSaveFollowup()"><i class="fa-solid fa-floppy-disk"></i> Salvar</button>
         </div>
 
         <div class="fx-cols">
         <div class="fx-col-main">
+        ${abasHtml}
+        ${perfilHtml}
         <div class="fx-block">
-            <div class="fx-block-title"><i class="fa-solid fa-list-ol"></i> Lembretes (em cascata)</div>
+            <div class="fx-block-title"><i class="fa-solid fa-list-ol"></i> Lembretes (em cascata)${ePerfil ? ' · ' + escapeHtml(t.nome) : ''}</div>
             ${stepsHtml}
             <button class="fx-add-btn" onclick="fuAddStep()"><i class="fa-solid fa-plus"></i> Adicionar lembrete</button>
             <div class="fx-mini" style="margin-top:0.6rem">O tempo conta a partir da <b>última mensagem que você enviou</b>. Dentro da janela de 24h do WhatsApp vai a mensagem de texto; fora dela vai o template aprovado escolhido no lembrete (sem template escolhido, o lembrete é pulado). O nome do paciente preenche a variável do template, se houver uma.</div>
@@ -758,12 +819,12 @@ function renderFollowupEditor() {
         </div>
 
         <div class="fx-block">
-            <div class="fx-block-title"><i class="fa-solid fa-flag-checkered"></i> Ao esgotar os lembretes</div>
+            <div class="fx-block-title"><i class="fa-solid fa-flag-checkered"></i> Ao esgotar os lembretes${acaoAlvo}</div>
             <label>Ação final
-                <select onchange="fuCfg.acao_final = this.value">
-                    <option value="nada" ${c.acao_final === 'nada' ? 'selected' : ''}>Não fazer nada</option>
-                    <option value="mover:col-perdido" ${c.acao_final === 'mover:col-perdido' ? 'selected' : ''}>Mover o lead para "${escapeHtml((cols['col-perdido'] && cols['col-perdido'].label) || 'Perdido')}"</option>
-                    <option value="tag:sem-resposta" ${c.acao_final === 'tag:sem-resposta' ? 'selected' : ''}>Adicionar etiqueta "sem-resposta"</option>
+                <select onchange="fuTarget().acao_final = this.value">
+                    <option value="nada" ${t.acao_final === 'nada' ? 'selected' : ''}>Não fazer nada</option>
+                    <option value="mover:col-perdido" ${t.acao_final === 'mover:col-perdido' ? 'selected' : ''}>Mover o lead para "${escapeHtml((cols['col-perdido'] && cols['col-perdido'].label) || 'Perdido')}"</option>
+                    <option value="tag:sem-resposta" ${t.acao_final === 'tag:sem-resposta' ? 'selected' : ''}>Adicionar etiqueta "sem-resposta"</option>
                 </select>
             </label>
         </div>
@@ -781,6 +842,8 @@ async function flowSaveFollowup() {
         const j = await r.json();
         if (!r.ok) { showToast(j.error || 'Erro ao salvar.', 'danger'); return; }
         fuCfg = j.config;
+        if (!Array.isArray(fuCfg.perfis)) fuCfg.perfis = [];
+        renderFollowupEditor();
         showToast('Follow-up salvo.', 'success');
     } catch (e) { showToast('Erro ao salvar follow-up.', 'danger'); }
 }
