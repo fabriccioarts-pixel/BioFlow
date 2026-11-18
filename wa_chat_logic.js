@@ -910,6 +910,9 @@ function renderQuotedMessage(quotedMsg, quotedDirection, quotedId) {
         thumbnail = `<video src="${src}" style="width: 36px; height: 36px; object-fit: cover; border-radius: 4px; margin-left: 0.5rem; flex-shrink: 0;" muted></video>`;
     } else if (isDoc) {
         typeLabel = `📄 ${fileName || 'Documento'}`;
+    } else if (window.WaTemplateBubble && WaTemplateBubble.parseTemplateMessage(cleanText)) {
+        const t = WaTemplateBubble.templatePreviewText(WaTemplateBubble.parseTemplateMessage(cleanText));
+        typeLabel = escapeHtml(t.substring(0, 60) + (t.length > 60 ? '...' : ''));
     } else {
         // Mensagem de texto normal
         typeLabel = cleanText.substring(0, 50) + (cleanText.length > 50 ? '...' : '');
@@ -944,6 +947,50 @@ function renderQuotedMessage(quotedMsg, quotedDirection, quotedId) {
             ${thumbnail}
         </div>
     `;
+}
+
+// Definições dos templates da Meta (cabeçalho/rodapé/botões), buscadas uma vez
+// e reaproveitadas por todos os balões de template. Quando chegam, redesenha a
+// conversa aberta pra trocar o texto simples pelo balão completo.
+let waTemplateDefs = null;
+let waTemplateDefsAt = 0;
+let waTemplateDefsLoading = null;
+function ensureWaTemplateDefs() {
+    const fresh = waTemplateDefs && (Date.now() - waTemplateDefsAt) < 10 * 60 * 1000;
+    if (fresh || waTemplateDefsLoading) return;
+    waTemplateDefsLoading = fetch('/api/whatsapp/templates')
+        .then(r => r.json())
+        .then(json => {
+            if (!json || !Array.isArray(json.data)) throw new Error((json && json.error) || 'sem templates');
+            const antes = waTemplateDefs;
+            waTemplateDefs = WaTemplateBubble.indexTemplateDefs(json.data);
+            waTemplateDefsAt = Date.now();
+            if (!antes || !antes.size) rerenderOpenChatKeepingScroll();
+        })
+        .catch(e => {
+            console.warn('Templates da Meta indisponíveis pro balão:', (e && e.message) || e);
+            // Tenta de novo daqui a 1 min — até lá os balões mostram só o texto.
+            waTemplateDefs = waTemplateDefs || new Map();
+            waTemplateDefsAt = Date.now() - 9 * 60 * 1000;
+        })
+        .finally(() => { waTemplateDefsLoading = null; });
+}
+
+function rerenderOpenChatKeepingScroll() {
+    const box = document.getElementById('chat-active-messages');
+    if (!box || !window.currentActiveChat || !Array.isArray(window.activeChatMessages)) return;
+    if (!box.querySelector('.wa-tpl')) return;
+    if (Array.from(box.querySelectorAll('audio, video')).some(m => !m.paused && !m.ended)) return;
+    const fromBottom = box.scrollHeight - box.scrollTop;
+    box.innerHTML = buildChatMessagesHTML();
+    box.scrollTop = box.scrollHeight - fromBottom;
+}
+
+function renderTemplateMessageContent(parsed) {
+    ensureWaTemplateDefs();
+    const def = waTemplateDefs ? waTemplateDefs.get(parsed.name) : undefined;
+    const parts = WaTemplateBubble.splitTemplateParts(parsed, def);
+    return WaTemplateBubble.renderTemplateBubbleHTML(parts, formatWhatsAppFormatting, escapeHtml);
 }
 
 function renderChatMessageContent(msgText) {
@@ -1147,6 +1194,8 @@ function renderStatusIcon(status) {
 
 function getMessagePreviewText(msgText) {
     if (!msgText) return '';
+    const tpl = window.WaTemplateBubble && WaTemplateBubble.parseTemplateMessage(msgText);
+    if (tpl) return WaTemplateBubble.templatePreviewText(tpl);
     let customFileName = '';
     if (msgText.includes('[FILE:')) {
         const match = msgText.match(/\[FILE:(.*?)\]/);
@@ -5190,7 +5239,11 @@ function buildChatMessagesHTML() {
             `;
         }
 
-        const isOut = msg.direction === 'out';
+        // Template da Meta (follow-up, lembrete, retomada…) vira balão do WhatsApp.
+        // Só o servidor grava esse formato, e só pra mensagem que a clínica
+        // enviou — então fica sempre do lado direito.
+        const tplParsed = window.WaTemplateBubble ? WaTemplateBubble.parseTemplateMessage(msg.message) : null;
+        const isOut = msg.direction === 'out' || !!tplParsed;
         const bg = isOut
             ? 'var(--nc-bubble-out)'
             : 'var(--bg-card)';
@@ -5231,7 +5284,7 @@ function buildChatMessagesHTML() {
         const isDeleted = msg.message === '🚫 Esta mensagem foi apagada';
         const htmlMsg = isDeleted
             ? `<span style="font-style: italic; opacity: 0.65; display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted);"><i class="fa-solid fa-ban" style="font-size: 0.85rem;"></i> Esta mensagem foi apagada</span>`
-            : renderChatMessageContent(msg.message);
+            : (tplParsed ? renderTemplateMessageContent(tplParsed) : renderChatMessageContent(msg.message));
 
         let quotedHTML = '';
         if (msg.quoted_message) {
@@ -5260,7 +5313,7 @@ function buildChatMessagesHTML() {
 
         html += `
             <div class="msg-bubble-container" style="display: flex; flex-direction: column; align-items: ${align}; margin-bottom: 0.85rem; position: relative;">
-                <div id="msg-bubble-${msg.id}" style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: none; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
+                <div id="msg-bubble-${msg.id}"${tplParsed ? ' class="msg-bubble-template"' : ''} style="position: relative; background: ${bg}; color: ${color}; padding: 0.65rem 1rem; border-radius: ${borderRadius}; max-width: 75%; border: ${border}; box-shadow: none; font-size: 0.9rem; line-height: 1.5; transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;">
                     <!-- Botão Dropdown de Ações -->
                     ${isDeleted ? '' : `
                     <button class="msg-dropdown-trigger" onclick="toggleMsgDropdown(event, '${msg.id}')" style="
