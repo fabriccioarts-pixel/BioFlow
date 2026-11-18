@@ -11149,3 +11149,20 @@ header { border-right: 1px solid hsl(16 28% 14%); }
 
 /* A tela de UTMs rola por inteiro: nenhum bloco encolhe (a barra de abas achatava). */
 #view-origem-leads > * { flex-shrink: 0; }
+
+/* Balão de template do WhatsApp (follow-up, lembrete, retomada…): cabeçalho,
+   corpo, rodapé e botões, no formato do app. Largura fixa como no WhatsApp,
+   pra não esticar a conversa toda (wa-template-bubble.js monta o HTML). */
+#chat-active-messages .msg-bubble-container > div.msg-bubble-template { width: min(360px, 100%); max-width: 86% !important; box-sizing: border-box; }
+.wa-tpl { display: flex; flex-direction: column; gap: 0.35rem; }
+.wa-tpl-media { display: flex; align-items: center; justify-content: center; gap: 0.45rem; min-height: 96px; margin: 0 0 0.2rem; border-radius: 8px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 0.78rem; opacity: 0.8; }
+.wa-tpl-media i { font-size: 1.1rem; }
+.wa-tpl-header { font-weight: 700; }
+.wa-tpl-body { overflow-wrap: anywhere; }
+.wa-tpl-footer { font-size: 0.74rem; opacity: 0.62; }
+.wa-tpl-buttons { display: flex; flex-direction: column; margin: 0.35rem -1rem -0.65rem; }
+.wa-tpl-btn { display: flex; align-items: center; justify-content: center; gap: 0.45rem; padding: 0.55rem 0.75rem; border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent); color: inherit; font-size: 0.84rem; font-weight: 600; text-align: center; text-decoration: none; cursor: default; }
+.wa-tpl-btn i { font-size: 0.78rem; opacity: 0.75; }
+a.wa-tpl-btn { cursor: pointer; }
+a.wa-tpl-btn:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
+.wa-tpl-btn:last-child { border-radius: 0 0 16px 16px; }
