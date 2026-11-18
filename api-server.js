@@ -16,6 +16,7 @@ import { Readable } from 'stream';
 import webpush from 'web-push';
 import { WHATSAPP_AI_NAO_REPETIR_RULE, perguntaPendenteRule } from './ia-anti-repeticao.js';
 import { respostaPrecoParaIa, valorAntesDeAgendarRule, separarHandoff } from './ia-valor.js';
+import { FOLLOWUP_PERFIS_PADRAO, PERFIL_TAGS, sanitizeFollowupStep, sanitizeFollowupPerfis, perfilDoLead, origemDoPerfil, cadenciaDoRun, menorPrimeiroAtraso, aplicarTagDePerfil, leadJaClassificado, CLASSIFICAR_LEAD_TOOL_DECLARATION, CLASSIFICAR_LEAD_RULE, PERIODO_TAGS, UNIDADE_TAG_PREFIX, aplicarTagExclusiva, periodoDoLead, unidadeCorrespondente, tagDaUnidade, nomeCurtoUnidade, atualizarNotaInteresse, foraDoPeriodo } from './followup-perfis.js';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -2340,6 +2341,77 @@ async function getHorarioAtendimento() {
 // WHATSAPP_AI_MEDIA_RULE e getWhatsappAiMediaEnabled). handleWhatsappAiAutoReply
 // manda o texto pelo caminho humanizado de sempre e, se tiver mediaId, a foto
 // logo em seguida.
+// Etiquetas de perfil (Estética / Dr. Julimar) na lista compartilhada — sem isso
+// o badge não aparece no card (mesmo motivo do ensureQualifiedTagExists).
+// Também as de período (Manhã / Tarde) e, quando a IA registra, a da unidade.
+async function ensurePerfilTagsExist(extras = []) {
+    const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
+    let tags = [];
+    if (rows && rows[0] && rows[0].value) { try { tags = JSON.parse(rows[0].value); } catch (e) {} }
+    if (!Array.isArray(tags) || tags.length === 0) tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
+    const defs = [...Object.values(PERFIL_TAGS), ...Object.values(PERIODO_TAGS), ...extras];
+    const faltam = defs.filter(d => !tags.some(t => t.id === d.id));
+    if (!faltam.length) return;
+    tags.push(...faltam.map(d => ({ ...d })));
+    await queryD1("INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(tags)]);
+}
+
+async function aiLeadDoTelefone(phone) {
+    const v = phoneVariants(phone);
+    const rows = await queryD1(`SELECT id, tags, notas FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, v);
+    return (rows && rows[0]) || null;
+}
+
+// Ferramenta classificar_lead: registra o que a IA descobriu na conversa.
+// - tipo -> etiqueta Estética / Dr. Julimar (escolhe a cadência de follow-up).
+//   Só na primeira vez: depois que o lead tem tipo, quem corrige é a equipe.
+// - periodo -> etiqueta Manhã / Tarde (e o horário dos lembretes).
+// - unidade -> etiqueta da unidade cadastrada que o paciente citou.
+// - procedimento/periodo/unidade -> linha "🎯 Interesse: ..." nas notas.
+async function aiClassificarLead(leadId, args = {}) {
+    const { tipo, periodo, procedimento, unidade } = args;
+    const rows = await queryD1('SELECT tags, notas FROM leads WHERE id = ?', [leadId]);
+    if (!rows || !rows[0]) return { ok: false };
+    const tagsAntes = (rows[0].tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    let tags = [...tagsAntes];
+    const registrado = [];
+    const novasTagsDef = [];
+
+    if (PERFIL_TAGS[tipo] && !leadJaClassificado(tags)) {
+        const n = aplicarTagDePerfil(tags, tipo);
+        if (n) { tags = n; registrado.push(PERFIL_TAGS[tipo].label); }
+    }
+    if (PERIODO_TAGS[periodo]) {
+        const n = aplicarTagExclusiva(tags, PERIODO_TAGS[periodo].id, t => t.startsWith('periodo-'));
+        if (n) { tags = n; registrado.push(PERIODO_TAGS[periodo].label); }
+    }
+    let unidadeNome = '';
+    if (unidade) {
+        let unidades = [];
+        try { unidades = (await queryD1('SELECT id, nome FROM crm_unidades WHERE ativo = 1')) || []; } catch (e) {}
+        const u = unidadeCorrespondente(unidade, unidades);
+        unidadeNome = u ? nomeCurtoUnidade(u.nome) : String(unidade);
+        if (u) {
+            const def = tagDaUnidade(u);
+            const n = aplicarTagExclusiva(tags, def.id, t => t.startsWith(UNIDADE_TAG_PREFIX));
+            if (n) { tags = n; novasTagsDef.push(def); registrado.push(def.label); }
+        }
+    }
+    const notas = atualizarNotaInteresse(rows[0].notas, { procedimento, periodo, unidade: unidadeNome });
+    if (procedimento && notas) registrado.push('Interesse: ' + String(procedimento).slice(0, 60));
+
+    const tagsMudaram = tags.join(',') !== tagsAntes.join(',');
+    if (!tagsMudaram && !notas) return { ok: true };
+    if (tagsMudaram) await ensurePerfilTagsExist(novasTagsDef);
+    const sets = [], vals = [];
+    if (tagsMudaram) { sets.push('tags = ?'); vals.push(tags.join(',')); }
+    if (notas) { sets.push('notas = ?'); vals.push(notas); }
+    await queryD1(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, [...vals, leadId]);
+    if (registrado.length) logLeadEvent(leadId, 'lead_classificado', 'ia', registrado.join(' · '));
+    broadcastLeadsUpdate('updated', leadId);
+    return { ok: true };
+}
+
 async function callGeminiForWhatsappReply(phone) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no .env.');
@@ -2361,7 +2433,13 @@ async function callGeminiForWhatsappReply(phone) {
     // Anti-repetição por último, pra valer sobre "sempre termine com pergunta"
     // (contexto editável) e "termine com o próximo passo" (modo vendas).
     const valorRule = valorAntesDeAgendarRule({ temFerramentaPreco: precoAtivo, temFerramentaFoto: mediaEnabled });
-    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + valorRule + WHATSAPP_AI_RETORNO_RULE + WHATSAPP_AI_FORMAT_RULE
+    // Registro do lead (tipo, procedimento, período, unidade): oferecido sempre que
+    // o lead existe. O tipo só é gravado na 1ª vez (aiClassificarLead).
+    let leadAtual = null;
+    try { leadAtual = await aiLeadDoTelefone(phone); } catch (e) {}
+    const classificarAtivo = !!leadAtual;
+    const classificarRule = classificarAtivo ? CLASSIFICAR_LEAD_RULE : '';
+    const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + valorRule + WHATSAPP_AI_RETORNO_RULE + classificarRule + WHATSAPP_AI_FORMAT_RULE
         + WHATSAPP_AI_NAO_REPETIR_RULE + perguntaPendenteRule(historyMeta.rows);
 
     const body = {
@@ -2372,7 +2450,8 @@ async function callGeminiForWhatsappReply(phone) {
     body.tools = [{ functionDeclarations: [
         RETORNO_TOOL_DECLARATION,
         ...(mediaEnabled ? [MEDIA_TOOL_DECLARATION] : []),
-        ...(precoAtivo ? [PRECO_TOOL_DECLARATION] : [])
+        ...(precoAtivo ? [PRECO_TOOL_DECLARATION] : []),
+        ...(classificarAtivo ? [CLASSIFICAR_LEAD_TOOL_DECLARATION] : [])
     ] }];
 
     const call = async (b) => {
@@ -2393,6 +2472,11 @@ async function callGeminiForWhatsappReply(phone) {
         if (fnCall.name === 'agendar_retorno') {
             try { return await aiAgendarRetorno(phone, args); }
             catch (e) { return { agendado: false, motivo: e.message }; }
+        }
+        if (fnCall.name === 'classificar_lead') {
+            if (!leadAtual) return { ok: false };
+            try { return await aiClassificarLead(leadAtual.id, args); }
+            catch (e) { return { ok: false }; }
         }
         if (fnCall.name === 'consultar_preco') {
             try { return await consultarPrecoParaIa(args.procedimento); }
@@ -5972,8 +6056,12 @@ app.put('/api/settings/retomada', async (req, res) => {
 // só no localStorage do navegador de quem criava, então um lead marcado com
 // uma etiqueta custom não mostrava nada pra quem abrisse o CRM em outro
 // dispositivo (a etiqueta simplesmente não existia lá).
+let _perfilTagsOk = false;
 app.get('/api/settings/whatsapp-tags', async (req, res) => {
     try {
+        // Etiquetas Estética / Dr. Julimar à mão da equipe desde o início, antes
+        // mesmo de a IA classificar o primeiro lead (uma vez por instância).
+        if (!_perfilTagsOk) { _perfilTagsOk = true; await ensurePerfilTagsExist().catch(() => {}); }
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
         let tags = [];
         if (rows && rows[0] && rows[0].value) {
@@ -12085,6 +12173,9 @@ const FOLLOWUP_DEFAULT = {
     // no CRM ou se a IA lê no fim da conversa que ela já foi concluída
     // (horário confirmado, despedida, desistência...). Ver followupConversaEncerrada.
     checar_encerramento: true,
+    // Cadências por tipo de lead (estética, Dr. Julimar...) — ver followup-perfis.js.
+    // Quem não cai em nenhum perfil ligado segue os steps acima.
+    perfis: FOLLOWUP_PERFIS_PADRAO,
 };
 
 // Agendamento futuro registrado pelo CRM pra esse lead (agendamentos_financeiro).
@@ -12145,9 +12236,13 @@ ${conversa}`;
 async function followupGetConfig() {
     try {
         const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'followup_config'");
-        if (rows && rows[0] && rows[0].value) return Object.assign({}, FOLLOWUP_DEFAULT, JSON.parse(rows[0].value));
+        if (rows && rows[0] && rows[0].value) {
+            const cfg = Object.assign({}, FOLLOWUP_DEFAULT, JSON.parse(rows[0].value));
+            cfg.perfis = sanitizeFollowupPerfis(cfg.perfis);
+            return cfg;
+        }
     } catch (e) {}
-    return Object.assign({}, FOLLOWUP_DEFAULT);
+    return Object.assign({}, FOLLOWUP_DEFAULT, { perfis: sanitizeFollowupPerfis(null) });
 }
 
 function followupParseTs(ts) {
@@ -12172,6 +12267,37 @@ function followupNextAllowed(cfg, fromDate) {
     let d = new Date(fromDate.getTime());
     for (let i = 0; i < 8 * 48; i++) {
         if (!followupInBlockedTime(cfg, d)) return d;
+        d = new Date(d.getTime() + 30 * 60000);
+    }
+    return d;
+}
+// Igual ao horário bloqueado do follow-up, mais a janela do período preferido do
+// lead. Se a janela do período nunca cabe no horário permitido (ex.: silêncio a
+// tarde toda), o período é ignorado em vez de travar o lembrete pra sempre.
+function followupMinutoSP(cfg, date) {
+    let sp;
+    try { sp = new Date(date.toLocaleString('en-US', { timeZone: cfg.timezone || 'America/Sao_Paulo' })); }
+    catch (e) { sp = date; }
+    return sp.getHours() * 60 + sp.getMinutes();
+}
+function followupPeriodoViavel(cfg, periodo, fromDate) {
+    let d = new Date(fromDate.getTime());
+    for (let i = 0; i < 8 * 48; i++) {
+        if (!followupInBlockedTime(cfg, d) && !foraDoPeriodo(periodo, followupMinutoSP(cfg, d))) return true;
+        d = new Date(d.getTime() + 30 * 60000);
+    }
+    return false;
+}
+function followupBloqueadoParaLead(cfg, periodo, date) {
+    if (followupInBlockedTime(cfg, date)) return true;
+    if (!periodo || !foraDoPeriodo(periodo, followupMinutoSP(cfg, date))) return false;
+    return followupPeriodoViavel(cfg, periodo, date);
+}
+function followupNextAllowedLead(cfg, periodo, fromDate) {
+    if (periodo && !followupPeriodoViavel(cfg, periodo, fromDate)) periodo = null;
+    let d = new Date(fromDate.getTime());
+    for (let i = 0; i < 8 * 48; i++) {
+        if (!followupInBlockedTime(cfg, d) && !(periodo && foraDoPeriodo(periodo, followupMinutoSP(cfg, d)))) return d;
         d = new Date(d.getTime() + 30 * 60000);
     }
     return d;
@@ -12403,7 +12529,7 @@ async function followupApplyFinal(cfg, lead) {
 async function followupTick() {
     const cfg = await followupGetConfig();
     let opened = 0, processed = 0;
-    const dbg = { ativo: !!cfg.ativo, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, ja_concluiu_antes: 0, mesma_ancora: 0, flow_esperando: 0 };
+    const dbg = { ativo: !!cfg.ativo, perfis_ativos: (cfg.perfis || []).filter(p => p.ativo).map(p => p.id), sem_cadencia: 0, cedo_pro_perfil: 0, janela: 0, ja_terminado: 0, fora_das_colunas: 0, humano_desligado: 0, ja_tem_run: 0, ja_concluiu_antes: 0, mesma_ancora: 0, flow_esperando: 0 };
     // 'col-ganho' (lead fechado) e 'col-agendado' (já marcou horário) sempre param; o resto é escolha do admin.
     const termCols = (cfg.parar_em_colunas || []).concat(['col-ganho', 'col-agendado']);
 
@@ -12412,8 +12538,9 @@ async function followupTick() {
     // ~800 consultas por tick, quase todas só pra descartar o lead que já tinha
     // run). Agora: filtro barato em memória + 3 consultas por bloco de 15 leads
     // (bloco pequeno pro nº de parâmetros ligados não passar do limite do D1).
-    if (cfg.ativo && Array.isArray(cfg.steps) && cfg.steps.length) {
-        const firstDelay = cfg.steps[0].atraso_min || 60;
+    const firstDelay = menorPrimeiroAtraso(cfg); // null = padrão e todos os perfis desligados
+    if (firstDelay) {
+        await ensurePipelines(); // garante leads.pipeline_id (perfil por funil)
         const cutoffDelay = flowDbTime(-firstDelay * 60000);
         const cutoffOld = flowDbTime(-30 * 86400000);
         // ORDER BY last_msg_at DESC: sem isso o D1 devolvia sempre a mesma fatia
@@ -12424,7 +12551,7 @@ async function followupTick() {
         // prioriza quem ficou quieto por último (mais relevante agora) e evita
         // travar a fila nos mesmos leads antigos pra sempre.
         const cand = await queryD1(
-            `SELECT id, nome, telefone, tags, column_id, ai_enabled, last_msg_at
+            `SELECT id, nome, telefone, tags, column_id, pipeline_id, ai_enabled, last_msg_at
              FROM leads
              WHERE last_msg_direction = 'out' AND last_msg_at IS NOT NULL
                AND last_msg_at <= ? AND last_msg_at >= ?
@@ -12435,6 +12562,14 @@ async function followupTick() {
 
         // Filtros que não precisam de banco — descarta antes de qualquer consulta.
         const elegiveis = (cand || []).filter(lead => {
+            // Cadência desse lead: perfil (etiqueta/funil) ou padrão. Cada uma tem o
+            // seu 1º atraso — a busca acima usou o menor deles.
+            const perfil = perfilDoLead(lead, cfg.perfis);
+            const cad = cadenciaDoRun(origemDoPerfil(perfil), cfg);
+            if (!cad.ativo || !cad.steps.length) { dbg.sem_cadencia++; return false; }
+            const quieto = followupParseTs(lead.last_msg_at);
+            if (quieto && Date.now() - quieto.getTime() < (cad.steps[0].atraso_min || 60) * 60000) { dbg.cedo_pro_perfil++; return false; }
+            lead._origem = origemDoPerfil(perfil);
             if (termCols.includes(lead.column_id)) { dbg.ja_terminado++; return false; }
             if (cfg.aplicar_colunas.length && !cfg.aplicar_colunas.includes(lead.column_id)) { dbg.fora_das_colunas++; return false; }
             if (!cfg.aplicar_com_humano && Number(lead.ai_enabled) === 0) { dbg.humano_desligado++; return false; }
@@ -12502,7 +12637,7 @@ async function followupTick() {
                     const runId = 'fu-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
                     await queryD1(
                         'INSERT INTO crm_followup_runs (id, lead_id, phone, origem, step_idx, status, anchor_out_ts, last_inbound_ts, next_send_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
-                        [runId, lead.id, lead.telefone || '', 'global', 'agendado', lead.last_msg_at, lastInTs, flowDbTime()]);
+                        [runId, lead.id, lead.telefone || '', lead._origem || 'global', 'agendado', lead.last_msg_at, lastInTs, flowDbTime()]);
                     opened++;
                 } catch (e) { console.error('follow-up: abertura falhou:', e.message); }
             }
@@ -12536,18 +12671,25 @@ async function followupTick() {
             const inAfter = await queryD1(`SELECT timestamp FROM wa_messages WHERE direction = 'in' AND phone IN (${vp}) AND timestamp > ? LIMIT 1`, [...vph, run.anchor_out_ts]);
             if (inAfter && inAfter[0]) { await queryD1("UPDATE crm_followup_runs SET status = 'respondido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
             if (Number(lead.campaign_opt_out) === 1) { await queryD1("UPDATE crm_followup_runs SET status = 'opt_out', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
-            if (termCols.includes(lead.column_id) || (run.origem === 'global' && !cfg.ativo)) { await queryD1("UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
+            // Cadência do run: a do perfil com que ele abriu, ou a padrão. Perfil
+            // desligado/apagado (ou padrão desligada) para o run.
+            const cad = cadenciaDoRun(run.origem, cfg);
+            if (termCols.includes(lead.column_id) || !cad.ativo) { await queryD1("UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]); processed++; continue; }
 
-            const steps = Array.isArray(cfg.steps) ? cfg.steps : [];
+            const steps = cad.steps;
+            const fimCfg = { acao_final: cad.acao_final };
+            const rotulo = cad.nome !== 'Padrão' ? ` · ${cad.nome}` : '';
             if (run.step_idx >= steps.length) {
-                await followupApplyFinal(cfg, lead);
+                await followupApplyFinal(fimCfg, lead);
                 await queryD1("UPDATE crm_followup_runs SET status = 'concluido', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]);
                 processed++; continue;
             }
             const step = steps[run.step_idx];
 
-            if (step.so_horario_comercial && followupInBlockedTime(cfg, new Date())) {
-                const nv = followupNextAllowed(cfg, new Date());
+            // Período preferido do lead (etiqueta Manhã/Tarde) estreita a janela de envio.
+            const periodoLead = step.so_horario_comercial ? periodoDoLead(lead.tags) : null;
+            if (step.so_horario_comercial && followupBloqueadoParaLead(cfg, periodoLead, new Date())) {
+                const nv = followupNextAllowedLead(cfg, periodoLead, new Date());
                 await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [followupAtSql(nv), run.id]);
                 continue;
             }
@@ -12600,7 +12742,7 @@ async function followupTick() {
             if (within24 && texto.trim()) {
                 try {
                     await sendWhatsappTextInternal(lead.telefone, texto, 'followup');
-                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length}`);
+                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length}${rotulo}`);
                 }
                 catch (e) { console.error('follow-up: envio falhou:', e.message); }
             } else if (stepTemplate) {
@@ -12609,13 +12751,13 @@ async function followupTick() {
                 // vai como única variável de corpo, se o template tiver uma.
                 try {
                     await sendWhatsappTemplateInternal(lead.telefone, stepTemplate, { nome: safeLeadFirstName(lead.nome) || 'Cliente', sentBy: 'followup' });
-                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length} (template)`);
+                    logLeadEvent(lead.id, 'follow_up_automatico', 'sistema', `passo ${run.step_idx + 1}/${steps.length} (template)${rotulo}`);
                 }
                 catch (e) { console.error('follow-up: template falhou:', e.message); }
             }
             // senão (fora da janela e sem template configurado): passo pulado.
 
-            if (isLast) await followupApplyFinal(cfg, lead);
+            if (isLast) await followupApplyFinal(fimCfg, lead);
             processed++;
 
             // Pequena folga entre envios: não é rate-limit da Meta (o limite é bem
@@ -12639,12 +12781,9 @@ app.put('/api/followup/config', async (req, res) => {
         const b = req.body || {};
         const clean = {
             ativo: !!b.ativo,
-            steps: (Array.isArray(b.steps) ? b.steps : []).slice(0, 10).map(s => ({
-                atraso_min: Math.max(1, parseInt(s.atraso_min, 10) || 60),
-                texto: String(s.texto || '').slice(0, 2000),
-                template_name: String(s.template_name || '').trim().slice(0, 120),
-                so_horario_comercial: !!s.so_horario_comercial,
-            })),
+            steps: (Array.isArray(b.steps) ? b.steps : []).slice(0, 10).map(sanitizeFollowupStep),
+            // Tela antiga (cache) manda sem perfis: mantém os salvos em vez de voltar aos rascunhos.
+            perfis: b.perfis !== undefined ? sanitizeFollowupPerfis(b.perfis) : (await followupGetConfig()).perfis,
             aplicar_colunas: Array.isArray(b.aplicar_colunas) ? b.aplicar_colunas.map(String) : [],
             parar_em_colunas: Array.isArray(b.parar_em_colunas) ? b.parar_em_colunas.map(String) : ['col-ganho'],
             quiet_start: String(b.quiet_start || '20:00').slice(0, 5),
