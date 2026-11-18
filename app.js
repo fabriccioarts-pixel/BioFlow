@@ -857,7 +857,7 @@ function populateSelects() {
 
 // === RENDERIZAÇÃO DO KANBAN ===
 function clearKanbanFilters() {
-    const ids = ['filter-search', 'filter-owner', 'filter-origem', 'filter-date-start', 'filter-date-end'];
+    const ids = ['filter-search', 'filter-owner', 'filter-origem', 'filter-tag', 'filter-date-start', 'filter-date-end'];
     ids.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
@@ -920,8 +920,16 @@ async function saveCurrentFiltersAsAudience() {
         date_end: document.getElementById('filter-date-end')?.value || '',
         has_schedule: document.getElementById('filter-has-schedule')?.checked ? 1 : 0
     };
+    // Etiqueta não tem campo antigo: vai em "filters" (mesmo formato da Base de
+    // Contatos), junto com responsável e origem, pra valer completo no disparo.
+    const tagVal = document.getElementById('filter-tag')?.value || '';
+    if (tagVal) {
+        payload.filters = { tag: tagVal };
+        if (payload.owner_id) payload.filters.owner = payload.owner_id;
+        if (payload.origem) payload.filters.origem = payload.origem;
+    }
 
-    if (!payload.owner_id && !payload.origem && !payload.date_start && !payload.date_end && !payload.has_schedule) {
+    if (!payload.owner_id && !payload.origem && !tagVal && !payload.date_start && !payload.date_end && !payload.has_schedule) {
         if (!confirm('Nenhum filtro está ativo agora — esse público vai representar TODOS os leads. Continuar?')) return;
     }
 
@@ -957,12 +965,19 @@ function applyAudienceToKanbanFilters(audienceId) {
     if (dateEndEl) dateEndEl.value = audience.date_end || '';
     if (scheduleEl) scheduleEl.checked = Number(audience.has_schedule) === 1;
 
+    const extra = parseAudienceFilters(audience);
+    const tagEl = document.getElementById('filter-tag');
+    if (tagEl) {
+        const t = (extra && extra.tag) || '';
+        if (t && ![...tagEl.options].some(o => o.value === t)) tagEl.add(new Option(t, t));
+        tagEl.value = t;
+    }
+
     renderBoard();
 
-    const extra = parseAudienceFilters(audience);
-    const soNaBase = extra && ['etapa', 'tag', 'campaign', 'last', 'status'].some(k => extra[k]);
+    const soNaBase = extra && ['etapa', 'campaign', 'last', 'status'].some(k => extra[k]);
     if (soNaBase && typeof showToast === 'function') {
-        showToast('Este público tem filtros que o Kanban não mostra (etapa, campanha, etiqueta…). Na Base de Contatos e no disparo ele vale completo.', 'warning', 6000);
+        showToast('Este público tem filtros que o Kanban não mostra (etapa, campanha…). Na Base de Contatos e no disparo ele vale completo.', 'warning', 6000);
     }
 }
 
@@ -1963,6 +1978,27 @@ origemSelect.value = currentOrigemVal;
 }
 }
 
+// Filtro de etiqueta: só as que existem em algum lead (Estética, Dr. Julimar,
+// Manhã/Tarde, unidade… que a IA registra), com o nome e a contagem.
+const tagSelect = document.getElementById('filter-tag');
+if (tagSelect) {
+const currentTagVal = tagSelect.value;
+const tagCount = new Map();
+leads.forEach(l => parseLeadTags(l.tags).forEach(t => tagCount.set(t, (tagCount.get(t) || 0) + 1)));
+const tagDefs = (typeof getAvailableTags === 'function' ? getAvailableTags() : []) || [];
+const labelOf = (id) => (tagDefs.find(t => t.id === id) || {}).label || id;
+const tagIds = [...tagCount.keys()].sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+if (currentTagVal && !tagCount.has(currentTagVal)) tagIds.unshift(currentTagVal);
+let tagOptionsHTML = '<option value="">🏷️ Todas as Etiquetas</option>';
+tagIds.forEach(id => {
+tagOptionsHTML += `<option value="${escapeHtml(id)}">${escapeHtml(labelOf(id))} (${tagCount.get(id) || 0})</option>`;
+});
+if (tagSelect.innerHTML !== tagOptionsHTML) {
+tagSelect.innerHTML = tagOptionsHTML;
+tagSelect.value = currentTagVal;
+}
+}
+
 // Inicializa a aba na primeira vez que o renderBoard roda
 if (!_kanbanTabInitialized && typeof loggedUser !== 'undefined' && loggedUser) {
     _kanbanTabInitialized = true;
@@ -1996,6 +2032,7 @@ if (ownerSelect) {
 const searchVal = (document.getElementById('filter-search')?.value || '').toLowerCase();
 const ownerVal = document.getElementById('filter-owner')?.value || '';
 const origemVal = document.getElementById('filter-origem')?.value || '';
+const tagVal = document.getElementById('filter-tag')?.value || '';
 const dateStart = document.getElementById('filter-date-start')?.value || '';
 const dateEnd = document.getElementById('filter-date-end')?.value || '';
 const hasSchedule = document.getElementById('filter-has-schedule')?.checked || false;
@@ -2017,6 +2054,8 @@ if (origemVal) {
     const o = (lead.origem || '').toLowerCase();
     if (!o.startsWith(origemVal.toLowerCase())) return false;
 }
+// Etiqueta
+if (tagVal && !parseLeadTags(lead.tags).includes(tagVal)) return false;
 // Apenas Agendados (checa se está na coluna Agendado ou tem agendamento)
 if (hasSchedule && lead.column !== 'col-agendado' && !lead.agendamento) return false;
 // Filtro de data (data de criação do lead)

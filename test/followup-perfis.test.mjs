@@ -117,3 +117,54 @@ test('config salva sem perfis ganha os rascunhos; lixo é descartado', () => {
     assert.equal(r[0].steps[0].atraso_min, 1); // mesma regra de antes: mínimo 1 min
     assert.equal(r[0].ativo, false);
 });
+
+// ---- Segmentação: período, unidade e interesse ---------------------------------
+import {
+    PERIODO_TAGS, aplicarTagExclusiva, periodoDoLead, unidadeCorrespondente, tagDaUnidade,
+    atualizarNotaInteresse, foraDoPeriodo, CLASSIFICAR_LEAD_TOOL_DECLARATION
+} from '../followup-perfis.js';
+
+test('período vira etiqueta exclusiva e decide a janela dos lembretes', () => {
+    const ehPeriodo = t => t.startsWith('periodo-');
+    assert.deepEqual(aplicarTagExclusiva('vip', PERIODO_TAGS.manha.id, ehPeriodo), ['vip', 'periodo-manha']);
+    assert.deepEqual(aplicarTagExclusiva('vip,periodo-manha', PERIODO_TAGS.tarde.id, ehPeriodo), ['vip', 'periodo-tarde']);
+    assert.equal(aplicarTagExclusiva('periodo-tarde', PERIODO_TAGS.tarde.id, ehPeriodo), null);
+    assert.equal(periodoDoLead('perfil-estetica,periodo-tarde'), 'tarde');
+    assert.equal(periodoDoLead('vip'), null);
+    // manhã 8h-12h, tarde 13h-18h
+    assert.equal(foraDoPeriodo('manha', 9 * 60), false);
+    assert.equal(foraDoPeriodo('manha', 14 * 60), true);
+    assert.equal(foraDoPeriodo('tarde', 14 * 60), false);
+    assert.equal(foraDoPeriodo('tarde', 10 * 60), true);
+    assert.equal(foraDoPeriodo(null, 3 * 60), false); // sem período: só o horário comercial vale
+});
+
+test('unidade: só vira etiqueta se bater com uma unidade cadastrada', () => {
+    const unidades = [{ id: 'unidade-taguatinga', nome: 'Natuclinic Taguatinga' }, { id: 'unidade-17', nome: 'Natuclinic Águas Claras' }];
+    assert.equal(unidadeCorrespondente('taguatinga', unidades).id, 'unidade-taguatinga');
+    assert.equal(unidadeCorrespondente('aguas claras', unidades).id, 'unidade-17');
+    assert.equal(unidadeCorrespondente('Planaltina', unidades), null);
+    assert.deepEqual(
+        { id: tagDaUnidade(unidades[0]).id, label: tagDaUnidade(unidades[0]).label },
+        { id: 'unidade-taguatinga', label: '📍 Taguatinga' });
+});
+
+test('interesse: uma linha só nas notas, atualizada aos poucos', () => {
+    let n = atualizarNotaInteresse('Paciente veio do Instagram', { procedimento: 'limpeza de pele' });
+    assert.equal(n, '🎯 Interesse: limpeza de pele\nPaciente veio do Instagram');
+    n = atualizarNotaInteresse(n, { periodo: 'manha', unidade: 'Taguatinga' });
+    assert.equal(n, '🎯 Interesse: limpeza de pele · Período: manhã · Unidade: Taguatinga\nPaciente veio do Instagram');
+    assert.equal(atualizarNotaInteresse(n, { periodo: 'manha' }), null); // nada novo
+    n = atualizarNotaInteresse(n, { periodo: 'tarde' });
+    assert.match(n, /Período: tarde/);
+    assert.equal((n.match(/🎯/g) || []).length, 1);
+    assert.equal(atualizarNotaInteresse('', {}), null);
+    console.log('\n--- Nota do lead ---\n' + n);
+});
+
+test('ferramenta da IA aceita período, unidade e procedimento (nenhum obrigatório)', () => {
+    const p = CLASSIFICAR_LEAD_TOOL_DECLARATION.parameters;
+    assert.deepEqual(Object.keys(p.properties).sort(), ['periodo', 'procedimento', 'tipo', 'unidade']);
+    assert.deepEqual(p.properties.periodo.enum, ['manha', 'tarde']);
+    assert.equal(p.required, undefined);
+});

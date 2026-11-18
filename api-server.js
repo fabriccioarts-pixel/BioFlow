@@ -16,7 +16,7 @@ import { Readable } from 'stream';
 import webpush from 'web-push';
 import { WHATSAPP_AI_NAO_REPETIR_RULE, perguntaPendenteRule } from './ia-anti-repeticao.js';
 import { respostaPrecoParaIa, valorAntesDeAgendarRule, separarHandoff } from './ia-valor.js';
-import { FOLLOWUP_PERFIS_PADRAO, PERFIL_TAGS, sanitizeFollowupStep, sanitizeFollowupPerfis, perfilDoLead, origemDoPerfil, cadenciaDoRun, menorPrimeiroAtraso, aplicarTagDePerfil, leadJaClassificado, CLASSIFICAR_LEAD_TOOL_DECLARATION, CLASSIFICAR_LEAD_RULE } from './followup-perfis.js';
+import { FOLLOWUP_PERFIS_PADRAO, PERFIL_TAGS, sanitizeFollowupStep, sanitizeFollowupPerfis, perfilDoLead, origemDoPerfil, cadenciaDoRun, menorPrimeiroAtraso, aplicarTagDePerfil, leadJaClassificado, CLASSIFICAR_LEAD_TOOL_DECLARATION, CLASSIFICAR_LEAD_RULE, PERIODO_TAGS, UNIDADE_TAG_PREFIX, aplicarTagExclusiva, periodoDoLead, unidadeCorrespondente, tagDaUnidade, nomeCurtoUnidade, atualizarNotaInteresse, foraDoPeriodo } from './followup-perfis.js';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -2343,12 +2343,14 @@ async function getHorarioAtendimento() {
 // logo em seguida.
 // Etiquetas de perfil (Estética / Dr. Julimar) na lista compartilhada — sem isso
 // o badge não aparece no card (mesmo motivo do ensureQualifiedTagExists).
-async function ensurePerfilTagsExist() {
+// Também as de período (Manhã / Tarde) e, quando a IA registra, a da unidade.
+async function ensurePerfilTagsExist(extras = []) {
     const rows = await queryD1("SELECT value FROM crm_settings WHERE key = 'whatsapp_custom_tags'");
     let tags = [];
     if (rows && rows[0] && rows[0].value) { try { tags = JSON.parse(rows[0].value); } catch (e) {} }
     if (!Array.isArray(tags) || tags.length === 0) tags = [...WHATSAPP_DEFAULT_TAGS_SEED];
-    const faltam = Object.values(PERFIL_TAGS).filter(d => !tags.some(t => t.id === d.id));
+    const defs = [...Object.values(PERFIL_TAGS), ...Object.values(PERIODO_TAGS), ...extras];
+    const faltam = defs.filter(d => !tags.some(t => t.id === d.id));
     if (!faltam.length) return;
     tags.push(...faltam.map(d => ({ ...d })));
     await queryD1("INSERT INTO crm_settings (key, value) VALUES ('whatsapp_custom_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(tags)]);
@@ -2356,20 +2358,56 @@ async function ensurePerfilTagsExist() {
 
 async function aiLeadDoTelefone(phone) {
     const v = phoneVariants(phone);
-    const rows = await queryD1(`SELECT id, tags FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, v);
+    const rows = await queryD1(`SELECT id, tags, notas FROM leads WHERE telefone IN (${v.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, v);
     return (rows && rows[0]) || null;
 }
 
-// Ferramenta classificar_lead: põe a etiqueta do tipo de lead (troca a outra, se
-// houver). É ela que escolhe a cadência de follow-up do lead (followup-perfis.js).
-async function aiClassificarLead(leadId, tipo) {
-    if (!PERFIL_TAGS[tipo]) return { ok: false, motivo: 'tipo inválido' };
-    const rows = await queryD1('SELECT tags FROM leads WHERE id = ?', [leadId]);
-    const nova = aplicarTagDePerfil((rows && rows[0] && rows[0].tags) || '', tipo);
-    if (!nova) return { ok: true };
-    await ensurePerfilTagsExist();
-    await queryD1('UPDATE leads SET tags = ? WHERE id = ?', [nova.join(','), leadId]);
-    logLeadEvent(leadId, 'lead_classificado', 'ia', PERFIL_TAGS[tipo].label);
+// Ferramenta classificar_lead: registra o que a IA descobriu na conversa.
+// - tipo -> etiqueta Estética / Dr. Julimar (escolhe a cadência de follow-up).
+//   Só na primeira vez: depois que o lead tem tipo, quem corrige é a equipe.
+// - periodo -> etiqueta Manhã / Tarde (e o horário dos lembretes).
+// - unidade -> etiqueta da unidade cadastrada que o paciente citou.
+// - procedimento/periodo/unidade -> linha "🎯 Interesse: ..." nas notas.
+async function aiClassificarLead(leadId, args = {}) {
+    const { tipo, periodo, procedimento, unidade } = args;
+    const rows = await queryD1('SELECT tags, notas FROM leads WHERE id = ?', [leadId]);
+    if (!rows || !rows[0]) return { ok: false };
+    const tagsAntes = (rows[0].tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    let tags = [...tagsAntes];
+    const registrado = [];
+    const novasTagsDef = [];
+
+    if (PERFIL_TAGS[tipo] && !leadJaClassificado(tags)) {
+        const n = aplicarTagDePerfil(tags, tipo);
+        if (n) { tags = n; registrado.push(PERFIL_TAGS[tipo].label); }
+    }
+    if (PERIODO_TAGS[periodo]) {
+        const n = aplicarTagExclusiva(tags, PERIODO_TAGS[periodo].id, t => t.startsWith('periodo-'));
+        if (n) { tags = n; registrado.push(PERIODO_TAGS[periodo].label); }
+    }
+    let unidadeNome = '';
+    if (unidade) {
+        let unidades = [];
+        try { unidades = (await queryD1('SELECT id, nome FROM crm_unidades WHERE ativo = 1')) || []; } catch (e) {}
+        const u = unidadeCorrespondente(unidade, unidades);
+        unidadeNome = u ? nomeCurtoUnidade(u.nome) : String(unidade);
+        if (u) {
+            const def = tagDaUnidade(u);
+            const n = aplicarTagExclusiva(tags, def.id, t => t.startsWith(UNIDADE_TAG_PREFIX));
+            if (n) { tags = n; novasTagsDef.push(def); registrado.push(def.label); }
+        }
+    }
+    const notas = atualizarNotaInteresse(rows[0].notas, { procedimento, periodo, unidade: unidadeNome });
+    if (procedimento && notas) registrado.push('Interesse: ' + String(procedimento).slice(0, 60));
+
+    const tagsMudaram = tags.join(',') !== tagsAntes.join(',');
+    if (!tagsMudaram && !notas) return { ok: true };
+    if (tagsMudaram) await ensurePerfilTagsExist(novasTagsDef);
+    const sets = [], vals = [];
+    if (tagsMudaram) { sets.push('tags = ?'); vals.push(tags.join(',')); }
+    if (notas) { sets.push('notas = ?'); vals.push(notas); }
+    await queryD1(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, [...vals, leadId]);
+    if (registrado.length) logLeadEvent(leadId, 'lead_classificado', 'ia', registrado.join(' · '));
     broadcastLeadsUpdate('updated', leadId);
     return { ok: true };
 }
@@ -2395,11 +2433,11 @@ async function callGeminiForWhatsappReply(phone) {
     // Anti-repetição por último, pra valer sobre "sempre termine com pergunta"
     // (contexto editável) e "termine com o próximo passo" (modo vendas).
     const valorRule = valorAntesDeAgendarRule({ temFerramentaPreco: precoAtivo, temFerramentaFoto: mediaEnabled });
-    // Classificação estética x Dr. Julimar: só oferece a ferramenta enquanto o lead
-    // não tem etiqueta de perfil — depois disso quem corrige é a equipe.
+    // Registro do lead (tipo, procedimento, período, unidade): oferecido sempre que
+    // o lead existe. O tipo só é gravado na 1ª vez (aiClassificarLead).
     let leadAtual = null;
     try { leadAtual = await aiLeadDoTelefone(phone); } catch (e) {}
-    const classificarAtivo = !!leadAtual && !leadJaClassificado(leadAtual.tags);
+    const classificarAtivo = !!leadAtual;
     const classificarRule = classificarAtivo ? CLASSIFICAR_LEAD_RULE : '';
     const systemPrompt = context + nowContext + adContext + brainRule + behaviorRule + mediaRule + precoRule + valorRule + WHATSAPP_AI_RETORNO_RULE + classificarRule + WHATSAPP_AI_FORMAT_RULE
         + WHATSAPP_AI_NAO_REPETIR_RULE + perguntaPendenteRule(historyMeta.rows);
@@ -2437,7 +2475,7 @@ async function callGeminiForWhatsappReply(phone) {
         }
         if (fnCall.name === 'classificar_lead') {
             if (!leadAtual) return { ok: false };
-            try { return await aiClassificarLead(leadAtual.id, args.tipo); }
+            try { return await aiClassificarLead(leadAtual.id, args); }
             catch (e) { return { ok: false }; }
         }
         if (fnCall.name === 'consultar_preco') {
@@ -12233,6 +12271,37 @@ function followupNextAllowed(cfg, fromDate) {
     }
     return d;
 }
+// Igual ao horário bloqueado do follow-up, mais a janela do período preferido do
+// lead. Se a janela do período nunca cabe no horário permitido (ex.: silêncio a
+// tarde toda), o período é ignorado em vez de travar o lembrete pra sempre.
+function followupMinutoSP(cfg, date) {
+    let sp;
+    try { sp = new Date(date.toLocaleString('en-US', { timeZone: cfg.timezone || 'America/Sao_Paulo' })); }
+    catch (e) { sp = date; }
+    return sp.getHours() * 60 + sp.getMinutes();
+}
+function followupPeriodoViavel(cfg, periodo, fromDate) {
+    let d = new Date(fromDate.getTime());
+    for (let i = 0; i < 8 * 48; i++) {
+        if (!followupInBlockedTime(cfg, d) && !foraDoPeriodo(periodo, followupMinutoSP(cfg, d))) return true;
+        d = new Date(d.getTime() + 30 * 60000);
+    }
+    return false;
+}
+function followupBloqueadoParaLead(cfg, periodo, date) {
+    if (followupInBlockedTime(cfg, date)) return true;
+    if (!periodo || !foraDoPeriodo(periodo, followupMinutoSP(cfg, date))) return false;
+    return followupPeriodoViavel(cfg, periodo, date);
+}
+function followupNextAllowedLead(cfg, periodo, fromDate) {
+    if (periodo && !followupPeriodoViavel(cfg, periodo, fromDate)) periodo = null;
+    let d = new Date(fromDate.getTime());
+    for (let i = 0; i < 8 * 48; i++) {
+        if (!followupInBlockedTime(cfg, d) && !(periodo && foraDoPeriodo(periodo, followupMinutoSP(cfg, d)))) return d;
+        d = new Date(d.getTime() + 30 * 60000);
+    }
+    return d;
+}
 function followupAtSql(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
 // ============================================================================
@@ -12617,8 +12686,10 @@ async function followupTick() {
             }
             const step = steps[run.step_idx];
 
-            if (step.so_horario_comercial && followupInBlockedTime(cfg, new Date())) {
-                const nv = followupNextAllowed(cfg, new Date());
+            // Período preferido do lead (etiqueta Manhã/Tarde) estreita a janela de envio.
+            const periodoLead = step.so_horario_comercial ? periodoDoLead(lead.tags) : null;
+            if (step.so_horario_comercial && followupBloqueadoParaLead(cfg, periodoLead, new Date())) {
+                const nv = followupNextAllowedLead(cfg, periodoLead, new Date());
                 await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [followupAtSql(nv), run.id]);
                 continue;
             }

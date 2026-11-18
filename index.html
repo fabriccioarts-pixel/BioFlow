@@ -58,6 +58,7 @@
             .kanban-filters > #kf-toggle { display: inline-flex !important; flex-shrink: 0; }
             .kanban-filters.kf-open > #filter-owner,
             .kanban-filters.kf-open > #filter-origem,
+            .kanban-filters.kf-open > #filter-tag,
             .kanban-filters.kf-open > #kanban-sort { display: block !important; width: 100% !important; }
             .kanban-filters.kf-open > .kf-daterange,
             .kanban-filters.kf-open > label,
@@ -818,6 +819,11 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                 <option value="Meta Ads">Meta Ads</option>
                 <option value="Google Meu Negócio">Google Meu Negócio</option>
                 <option value="Indicação">Indicação</option>
+            </select>
+
+            <select id="filter-tag" onchange="renderBoard()" aria-label="Filtrar por etiqueta"
+                style="background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 6px; outline: none; font-size: 0.85rem; width: auto;">
+                <option value="">🏷️ Todas as Etiquetas</option>
             </select>
 
             <select id="kanban-sort" title="Ordenar cards" onchange="localStorage.setItem('kanban-sort', this.value); renderBoard();"
@@ -5527,7 +5533,7 @@ fetch('https://SEU_DOMINIO_DO_CRM/api/leads', {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/air-datepicker@3/air-datepicker.min.js"></script>
     <script src="wa_chat_logic.js?v=34"></script>
-    <script src="app.js?v=40"></script>
+    <script src="app.js?v=41"></script>
     <script src="hoje.js?v=1"></script>
     <script src="procedimentos.js?v=2"></script>
     <script src="personalizacao.js?v=4"></script>
