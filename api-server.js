@@ -16,6 +16,7 @@ import { Readable } from 'stream';
 import webpush from 'web-push';
 import { WHATSAPP_AI_NAO_REPETIR_RULE, perguntaPendenteRule } from './ia-anti-repeticao.js';
 import { respostaPrecoParaIa, valorAntesDeAgendarRule, separarHandoff } from './ia-valor.js';
+import { ehConfirmacaoDeAgendamento, interpretarChecagemFollowup } from './agendamento-confirmado.js';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -1058,6 +1059,13 @@ app.post('/api/whatsapp/send', async (req, res) => {
                 await queryD1(`UPDATE leads SET ai_enabled = 0, last_msg_at = CURRENT_TIMESTAMP, last_msg_direction = 'out' WHERE telefone IN (${placeholders})`, variants);
                 // Envio manual do atendente também interrompe follow-up automático em andamento.
                 await queryD1(`UPDATE crm_followup_runs SET status = 'parado', updated_at = CURRENT_TIMESTAMP WHERE status IN ('agendado','enviando') AND phone IN (${placeholders})`, variants);
+
+                // "Agendamento confirmado!" (ou "Te agendei pro dia 21", "Ficou agendado
+                // pro sábado"...) escrito pela equipe: o card vai pra Agendado sozinho.
+                if (!isTemplate && !isMedia && !isReaction && ehConfirmacaoDeAgendamento(db_message_body)) {
+                    await moverParaAgendadoPorConfirmacao(variants, actorEnvio, db_message_body)
+                        .catch(e => console.error('agendamento confirmado no chat: falhou ao mover o card:', e.message));
+                }
 
                 // Atendente respondeu manualmente: se o lead estava marcado como "quente"
                 // (badge de leads qualificados esperando), isso conta como atendido —
@@ -4483,6 +4491,8 @@ queryD1(`CREATE TABLE IF NOT EXISTS crm_followup_runs (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).catch(() => {});
+// Data até a qual o passo foi adiado (paciente combinou "só confirmo na segunda").
+queryD1("ALTER TABLE crm_followup_runs ADD COLUMN adiado_ate TEXT").catch(() => {});
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_at DATETIME").catch(() => {});
 queryD1("ALTER TABLE leads ADD COLUMN last_msg_direction TEXT").catch(() => {});
 
@@ -12103,26 +12113,34 @@ async function followupTemAgendamentoFuturo(leadId) {
 }
 
 // A IA lê o fim da conversa e diz se um "ainda tem interesse?" seria fora de
-// hora. Falha aberta (devolve null e o follow-up segue): melhor um follow-up a
-// mais do que a sequência inteira travada por um erro da API.
+// hora. Devolve { tipo: 'encerrada', motivo } | { tipo: 'adiar', data, motivo }
+// | null (segue normal). Falha aberta (null): melhor um follow-up a mais do que
+// a sequência inteira travada por um erro da API.
+// ADIAR existe porque "só confirmo na segunda" ficava como conversa ABERTA e o
+// paciente recebia "você chegou a ver minha mensagem?" no dia seguinte.
 async function followupConversaEncerrada(phones) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey || !phones.length) return null;
     try {
         const ph = phones.map(() => '?').join(', ');
         const rows = await queryD1(
-            `SELECT direction, message FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 12`, phones);
+            `SELECT direction, message, timestamp FROM wa_messages WHERE phone IN (${ph}) ORDER BY timestamp DESC LIMIT 12`, phones);
         if (!rows || !rows.length) return null;
         const conversa = rows.reverse().map(r => {
             const quem = r.direction === 'in' ? 'PACIENTE' : 'EQUIPE';
             const txt = String(r.message || '').startsWith('[FILE:') ? '[mídia]' : String(r.message || '').replace(/\s+/g, ' ').slice(0, 300);
-            return `${quem}: ${txt}`;
+            const quando = r.timestamp ? new Date(String(r.timestamp).replace(' ', 'T') + 'Z').toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit' }) : '';
+            return `[${quando}] ${quem}: ${txt}`;
         }).join('\n');
-        const prompt = `Você analisa o fim de uma conversa de WhatsApp entre uma clínica (EQUIPE) e um paciente (PACIENTE).
+        const hojeISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+        const hojeTxt = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+        const prompt = `Você analisa o fim de uma conversa de WhatsApp entre uma clínica (EQUIPE) e um paciente (PACIENTE). Hoje é ${hojeTxt} (${hojeISO}).
 A clínica está prestes a mandar uma mensagem automática de follow-up do tipo "você viu minha mensagem? ainda tem interesse?", porque a última mensagem foi da equipe e o paciente não respondeu.
-Decida se esse follow-up seria INADEQUADO porque a conversa já foi concluída. Conta como concluída: agendamento confirmado (dia/horário combinado), paciente já atendido ou já é paciente da clínica, paciente disse claramente que NÃO quer, atendimento encerrado com despedida/agradecimento sem nada pendente, ou a equipe disse que vai retornar depois.
-Continua ABERTA: a equipe fez uma pergunta ou proposta e ficou esperando resposta, ou o paciente disse que vai pensar / ver depois / falar com alguém (o follow-up serve justamente pra esse caso).
-Responda numa única linha, exatamente "ENCERRADA: <motivo em até 8 palavras>" ou "ABERTA".
+Decida entre três respostas:
+- ENCERRADA: o follow-up seria INADEQUADO porque a conversa já foi concluída: agendamento confirmado (dia/horário combinado), paciente já atendido ou já é paciente da clínica, paciente disse claramente que NÃO quer, atendimento encerrado com despedida/agradecimento sem nada pendente, ou a equipe disse que vai retornar depois.
+- ADIAR: o paciente disse que vai responder, confirmar ou decidir num DIA específico que ainda não chegou ("só confirmo na segunda", "semana que vem te falo", "dia 20 eu vejo") e a conversa parou aí. Calcule a data a partir das datas das mensagens. "Semana que vem" sem dia = a próxima segunda-feira.
+- ABERTA: a equipe fez uma pergunta ou proposta e ficou esperando resposta, ou o paciente disse que vai pensar / ver depois / falar com alguém SEM dizer quando (o follow-up serve justamente pra esse caso).
+Responda numa única linha, exatamente "ENCERRADA: <motivo em até 8 palavras>", "ADIAR: AAAA-MM-DD | <motivo em até 8 palavras>" ou "ABERTA".
 
 CONVERSA:
 ${conversa}`;
@@ -12134,8 +12152,8 @@ ${conversa}`;
         const j = await r.json();
         if (!r.ok) throw new Error(j.error ? j.error.message : 'Gemini');
         const out = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
-        const m = out.match(/^ENCERRADA\s*:?\s*(.*)$/im);
-        return m ? (m[1].trim() || 'conversa concluída').slice(0, 120) : null;
+        const res = interpretarChecagemFollowup(out, hojeISO);
+        return res.tipo === 'aberta' ? null : res;
     } catch (e) {
         console.error('follow-up: checagem de encerramento falhou:', e.message);
         return null;
@@ -12556,12 +12574,25 @@ async function followupTick() {
             // card fora de "Agendado"/"Ganho": cancela em vez de mandar "ainda tem interesse?".
             if (cfg.checar_encerramento !== false) {
                 const agendadoPara = await followupTemAgendamentoFuturo(lead.id);
-                const motivoFim = agendadoPara
-                    ? `agendamento marcado para ${String(agendadoPara).replace('T', ' ').slice(0, 16)}`
+                const checagem = agendadoPara
+                    ? { tipo: 'encerrada', motivo: `agendamento marcado para ${String(agendadoPara).replace('T', ' ').slice(0, 16)}` }
                     : await followupConversaEncerrada(vph);
-                if (motivoFim) {
+                if (checagem && checagem.tipo === 'encerrada') {
                     await queryD1("UPDATE crm_followup_runs SET status = 'encerrado', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [run.id]);
-                    logLeadEvent(lead.id, 'follow_up_cancelado', 'sistema', motivoFim);
+                    logLeadEvent(lead.id, 'follow_up_cancelado', 'sistema', checagem.motivo);
+                    processed++;
+                    continue;
+                }
+                // Paciente combinou um dia ("só confirmo na segunda"): este passo
+                // espera até esse dia (10h, respeitando o horário bloqueado) em vez
+                // de cobrar antes. Não avança o passo; se ele responder antes, o run
+                // para sozinho como 'respondido'. adiado_ate evita adiar duas vezes
+                // pelo mesmo combinado.
+                if (checagem && checagem.tipo === 'adiar' && run.adiado_ate !== checagem.data) {
+                    const alvo = followupNextAllowed(cfg, new Date(checagem.data + 'T13:00:00Z')); // 10h em Brasília
+                    await queryD1("UPDATE crm_followup_runs SET next_send_at = ?, adiado_ate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        [followupAtSql(alvo), checagem.data, run.id]);
+                    logLeadEvent(lead.id, 'follow_up_adiado', 'sistema', `${checagem.motivo} (até ${checagem.data.split('-').reverse().join('/')})`);
                     processed++;
                     continue;
                 }
@@ -13106,6 +13137,46 @@ async function apptReminderSync(cfg, { force = false } = {}) {
         cancelados++;
     }
     return { consultas, criados, remarcados, cancelados, deteccao };
+}
+
+// A equipe confirmou o agendamento no chat do CRM ("Agendamento confirmado!",
+// "Te agendei pro dia 21 às 9h"...). Antes o card ficava em Contatado — o
+// agendamento só existia na conversa — e o lead continuava recebendo follow-up
+// de "ainda tem interesse?" e não contava como agendado no painel. Mesma
+// decisão da detecção pela agenda do Amigo (abaixo): só move quem ainda não
+// chegou em Agendado no funil dele; Follow Up conta como "antes"; Ganho e
+// etapas depois de Agendado nunca são rebaixados.
+async function moverParaAgendadoPorConfirmacao(variants, actor, texto) {
+    if (!variants || !variants.length) return 0;
+    const leads = await queryD1(
+        `SELECT id, nome, telefone, column_id, pipeline_id FROM leads WHERE telefone IN (${variants.map(() => '?').join(', ')})`, variants);
+    if (!leads || !leads.length) return 0;
+
+    await ensurePipelines();
+    const funis = new Map(((await queryD1('SELECT * FROM crm_pipelines')) || []).map(r => { const p = parsePipelineRow(r); return [p.id, p.stages.map(st => st.id)]; }));
+    const ordemDoFunil = (lead) => funis.get(lead.pipeline_id || DEFAULT_PIPELINE_ID) || funis.get(DEFAULT_PIPELINE_ID) || PIPELINE_SYSTEM_STAGES.map(st => st.id);
+
+    let movidos = 0;
+    for (const lead of leads) {
+        const col = lead.column_id || 'col-entrada';
+        if (col === 'col-agendado' || col === 'col-ganho') continue;
+        if (col !== 'col-perdido') {
+            const ordem = ordemDoFunil(lead);
+            const iCol = ordem.indexOf(col), iAg = ordem.indexOf('col-agendado');
+            if (iCol >= 0 && iAg >= 0 && iCol > iAg) continue; // etapa posterior a Agendado
+        }
+        const upd = await queryD1Meta("UPDATE leads SET column_id = 'col-agendado', data_valor = ?, qualificado_em = NULL WHERE id = ? AND column_id IS ?",
+            [flowDbTime(), lead.id, lead.column_id]);
+        if (!upd || !upd.meta || !upd.meta.changes) continue; // alguém mexeu no card ao mesmo tempo
+        movidos++;
+        const trecho = String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+        logLeadEvent(lead.id, 'mudanca_coluna', actor || 'sistema', JSON.stringify({ de: col, para: 'col-agendado', regra: 'Equipe confirmou o agendamento no WhatsApp' }));
+        logLeadEvent(lead.id, 'agendamento_detectado', actor || 'sistema', `confirmado no WhatsApp: "${trecho}"`);
+        await fireCapiForLead(lead.id, 'Schedule').catch(e => console.error('CAPI Schedule (confirmação no chat):', e.message));
+        try { await syncLeadPagamento(lead.id, 'lead-update'); markLeadPagDirty(lead.id); } catch (e) {}
+    }
+    if (movidos) broadcastLeadsUpdate('updated');
+    return movidos;
 }
 
 // Cruza os pacientes da agenda com os leads pelo telefone. Cada atendimento é
