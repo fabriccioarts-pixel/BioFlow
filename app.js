@@ -10547,6 +10547,8 @@ const LPP_EVENT_META = {
     recontato:              { icon: 'fa-rotate-left',            texto: 'recontatou o lead' },
     follow_up_automatico:   { icon: 'fa-robot',                  texto: 'follow-up automático enviado' },
     follow_up_cancelado:    { icon: 'fa-hand',                   texto: 'follow-up cancelado: conversa já resolvida' },
+    follow_up_adiado:       { icon: 'fa-clock',                  texto: 'follow-up adiado até o dia combinado' },
+    agendamento_detectado:  { icon: 'fa-calendar-check',         texto: 'agendamento registrado' },
     lead_qualificado_ia:    { icon: 'fa-sparkles',               texto: 'a IA qualificou o lead' },
     lead_descartado:        { icon: 'fa-ban',                    texto: 'descartou o lead' },
     devolvido_para_ia:      { icon: 'fa-robot',                  texto: 'devolveu a conversa pra IA' },
